@@ -1,0 +1,600 @@
+#!/bin/bash
+#run only from terminal
+if [ ! -t 0 ]; then exit; fi
+shopt -s nocaseglob
+set -e
+
+if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
+	echo "Usage: "$(basename "$0")" <warpmarkers> <settings>"
+	echo
+	echo "The default inputs are .warpmarkers and .settings. If these do not exist, run "$(basename "$0")" with no arguments to create blank templates."
+	exit
+fi
+
+warpmarkers_file="${1:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
+settings_file="${2:-"$(ls .settings *.settings 2>/dev/null | head -n 1)"}"
+
+if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "$settings_file" ]]; then
+	warpmarkers_file=.warpmarkers
+	settings_file=.settings
+	echo "00:00.000|1.00" > "$warpmarkers_file"
+	echo >> "$warpmarkers_file"
+	echo title= > "$settings_file"
+	echo audio_input= >> "$settings_file"
+	echo url= >> "$settings_file"
+	echo scale=1 >> "$settings_file"
+	echo limit_test_output=true >> "$settings_file"
+	echo limit_final_output=true >> "$settings_file"
+	echo level_in=0 >> "$settings_file"
+	echo limit=-0.1 >> "$settings_file"
+	echo level_out=0 >> "$settings_file"
+	echo attack=10 >> "$settings_file"
+	echo release=20 >> "$settings_file"
+	echo fps=60 >> "$settings_file"
+	echo browser=firefox >> "$settings_file"
+	echo engine=fine >> "$settings_file"
+	echo >> "$settings_file"
+fi
+
+preliminary_errors=0
+
+if [[ ! -f "$warpmarkers_file" ]]; then
+	echo "Error: Warp markers file does not exist." && ((preliminary_errors++))
+fi
+
+if [[ ! -f "$settings_file" ]]; then
+	echo "Error: Settings file does not exist." && ((preliminary_errors++))
+fi
+
+if [[ $preliminary_errors -gt 0 ]]; then
+	exit 1
+fi
+
+. "$settings_file"
+
+validation_errors=0
+
+if [[ -z "$title" ]]; then
+	echo "Error: Title is required." && ((validation_errors++))
+fi
+
+if [[ -z "$audio_input" ]] && [[ -z "$url" ]]; then
+	echo "Error: Url is required if audio input is not provided." && ((validation_errors++))
+elif [[ ! -z "$audio_input" ]] && [[ ! -f "$audio_input" ]]; then
+	echo "Error: Audio input file does not exist." && ((validation_errors++))
+elif [[ ! -z "$audio_input" ]] && [[ -f "$audio_input" ]] && [[ "$(file --mime-type -b "$audio_input" | cut -d / -f 1)" != audio ]]; then
+	echo "Error: Audio input file is not a valid audio file." && ((validation_errors++))
+fi
+
+if [[ ! -z "$scale" ]] && [[ ! "$scale" =~ ^([0-9]*\.[0-9]+|[0-9]+\.?[0-9]*)$ ]]; then
+	echo "Error: Scale is not a valid decimal." && ((validation_errors++))
+elif [[ ! -z "$scale" ]]; then
+	scale=$(printf "%0.6f\n" "$scale")
+else
+	scale=$(printf "%0.6f\n" 1)
+fi
+
+if [[ ! -z "$limit_test_output" ]] && [[ "$limit_test_output" != true ]] && [[ "$limit_test_output" != false ]]; then
+	echo "Error: Limit test output must be true or false." && ((validation_errors++))
+elif [[ -z "$limit_test_output" ]]; then
+	limit_test_output=true
+fi
+
+if [[ ! -z "$limit_final_output" ]] && [[ "$limit_final_output" != true ]] && [[ "$limit_final_output" != false ]]; then
+	echo "Error: Limit final output must be true or false." && ((validation_errors++))
+elif [[ -z "$limit_final_output" ]]; then
+	limit_final_output=true
+fi
+
+if [[ ! -z "$level_in" ]] && [[ ! "$level_in" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
+	echo "Error: Level in is not a valid decimal." && ((validation_errors++))
+elif [[ ! -z "$level_in" ]]; then
+	level_in=$(printf "%0.1f\n" "$level_in")
+else
+	level_in=$(printf "%0.1f\n" 0)
+fi
+
+if [[ ! -z "$limit" ]] && [[ ! "$limit" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
+	echo "Error: Limit is not a valid decimal." && ((validation_errors++))
+elif [[ ! -z "$limit" ]]; then
+	limit=$(printf "%0.1f\n" "$limit")
+else
+	limit=$(printf "%0.1f\n" -0.1)
+fi
+
+if [[ ! -z "$level_out" ]] && [[ ! "$level_out" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
+	echo "Error: Level out is not a valid decimal." && ((validation_errors++))
+elif [[ ! -z "$level_out" ]]; then
+	level_out=$(printf "%0.1f\n" "$level_out")
+else
+	level_out=$(printf "%0.1f\n" 0)
+fi
+
+if [[ ! -z "$attack" ]] && [[ ! "$attack" =~ ^(0?\.[1-9][0-9]?|[1-9][0-9]?(\.[0-9]+)?|80(\.0+)?)$ ]]; then
+	echo "Error: Attack must be from 0.1 to 80." && ((validation_errors++))
+elif [[ ! -z "$attack" ]]; then
+	attack=$(printf "%0.1f\n" "$attack")
+else
+	attack=$(printf "%0.1f\n" 10)
+fi
+
+if [[ ! -z "$release" ]] && [[ ! "$release" =~ ^([1-9][0-9]{0,2}(\.[0-9]+)?|[1-7][0-9]{3}(\.[0-9]+)?|8000(\.0+)?)$
+ ]]; then
+	echo "Error: Release must be from 1 to 8000." && ((validation_errors++))
+elif [[ ! -z "$release" ]]; then
+	release=$(printf "%0.1f\n" "$release")
+else
+	release=$(printf "%0.1f\n" 20)
+fi
+
+if [[ ! -z "$fps" ]] && [[ ! "$fps" =~ ^([0-9]*\.[0-9]+|[0-9]+\.?[0-9]*)$ ]]; then
+	echo "Error: FPS is not a valid decimal." && ((validation_errors++))
+elif [[ ! -z "$fps" ]]; then
+	fps=$(printf "%0.2f\n" "$fps")
+else
+	fps=$(printf "%0.2f\n" 60)
+fi
+
+if [[ ! -z "$browser" ]]; then
+	supported_browsers=(brave chrome chromium edge firefox opera safari vivaldi whale none)
+	supported=false
+	for supported_browser in "${supported_browsers[@]}"; do
+		if [[ "$browser" == "$supported_browser"* ]]; then
+			supported=true
+			break
+		fi
+	done
+	if ! $supported; then
+		echo -e "Error: Browser is not supported by yt-dlp. Enter one of the following:\n${supported_browsers[@]}\nor enter \"none\" to disable the --cookies-from-browser option (login to YouTube Premium and enter a valid browser for best audio quality)." && ((validation_errors++))
+	fi
+else
+	browser=firefox
+fi
+
+if [[ ! -z "$engine" ]]; then
+	supported_engines=(fast fine)
+	supported=false
+	for supported_engine in "${supported_engines[@]}"; do
+		if [[ "$engine" == "$supported_engine" ]]; then
+			supported=true
+			break
+		fi
+	done
+	if ! $supported; then
+		echo -e "Error: Engine is not supported by rubberband. Enter one of the following:\n${supported_engines[@]}" && ((validation_errors++))
+	fi
+else
+	engine=fine
+fi
+
+if [[ $validation_errors -gt 0 ]]; then
+	exit 1
+fi
+
+requirements=(bc ffmpeg ffprobe jq metaflac rubberband sox yt-dlp)
+requirement_errors=0
+
+for requirement in "${requirements[@]}"; do
+	if ! type "$requirement" &> /dev/null; then
+		echo "Error: $requirement is not installed." && ((requirement_errors++))
+	fi
+done
+
+if [[ $requirement_errors -gt 0 ]]; then
+	echo "Requirements: ${requirements[*]}"
+	exit 1
+fi
+
+if [[ ! -f "$audio_input" ]]; then
+	if [[ "$browser" == none ]]; then
+		best_audio=$(yt-dlp -J "$url" | jq -r '
+			.formats 
+			| map(select(.vcodec == "none")) 
+			| sort_by(.abr // 0) 
+			| reverse 
+			| .[0]
+		')
+	else
+		best_audio=$(yt-dlp -J --cookies-from-browser $browser "$url" | jq -r '
+			.formats 
+			| map(select(.vcodec == "none")) 
+			| sort_by(.abr // 0) 
+			| reverse 
+			| .[0]
+		')
+	fi
+	format_id=$(echo "$best_audio" | jq -r '.format_id')
+	acodec=$(echo "$best_audio" | jq -r '.acodec')
+	case "$acodec" in
+		opus) ext="opus" ;;
+		vorbis) ext="ogg" ;;
+		mp4a*|aac) ext="m4a" ;;
+		mp3) ext="mp3" ;;
+		flac) ext="flac" ;;
+		alac) ext="m4a" ;;
+		*) ext="m4a" ;;
+	esac
+	if [[ "$browser" == none ]]; then
+		base_filename=$(yt-dlp --restrict-filenames -f "$format_id" --print filename -o "%(title)s-[%(id)s]" "$url")
+	else
+		base_filename=$(yt-dlp --restrict-filenames -f "$format_id" --print filename -o "%(title)s-[%(id)s]" --cookies-from-browser $browser "$url")
+	fi
+	filename="$base_filename.$ext"
+	if [[ "$audio_input" != "$filename" ]]; then
+		sed -i "s/audio_input=.*/audio_input=\"$filename\"/" "$settings_file"
+		audio_input="$filename"
+	fi
+
+	if [[ ! -f "$audio_input" ]]; then
+		if [[ "$browser" == none ]]; then
+			echo "Downloading source file..."
+			yt-dlp -f bestaudio --extract-audio --restrict-filenames "$url"
+		else
+			echo "Downloading source file... (login to YouTube Premium for best audio quality)"
+			yt-dlp -f bestaudio --extract-audio --restrict-filenames --cookies-from-browser $browser "$url"
+
+		fi
+		count=0
+		timeout=3600
+		while [[ ! -f "$audio_input" ]]; do
+			sleep 1
+			((count++))
+			if [[ $count -ge $timeout ]]; then
+				echo "Error: Download timed out ($timeout). Download file manually and set audio_input." && exit 1
+			fi
+		done
+	fi
+fi
+
+md5=$(md5sum "$audio_input" | cut -d ' ' -f 1)
+audio_output="$title.flac"
+mkdir -p "$(dirname "$audio_output")"
+log="$title.log"
+
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "${audio_output%.flac}-limit_final_output=false.wav" "$log"
+
+if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then 
+	echo >> "$warpmarkers_file"
+fi
+
+prev_tempo=1.00
+warpmarkers=()
+has_zero_time=false
+
+while IFS= read -r line; do
+	is_begin_time=false
+	is_end_time=false
+	if [[ "$line" == begin_time=* ]] || [[ "$line" == b=* ]]; then
+		line="${line#*=}"
+		is_begin_time=true
+	fi
+	
+	if [[ "$line" == end_time=* ]] || [[ "$line" == e=* ]]; then
+		line="${line#*=}"
+		is_end_time=true
+	fi
+	
+	if [[ "$line" != ??:??.???*\|?.??* ]] && [[ "$line" != ??:??.???*\|'""""'* ]]; then
+		continue
+	fi
+	
+	line="${line%% *}"
+	time="$(echo "$line" | cut -d \| -f 1)"
+	tempo="$(echo "$line" | cut -d \| -f 2)"
+	label="$(echo "$line" | cut -d \| -f 3)"
+	if [[ "$label" =~ ^#[a-z]\.[a-z0-9]{2}$ ]]; then
+		echo "${label:1}" >> .$md5-labels-disabled
+		continue
+	fi
+	
+	time_initial="${time:0:9}"
+	if [[ ! "$time_initial" =~ ^([0-5][0-9]):([0-5][0-9])\.[0-9]{3}$ ]]; then
+		echo "Error: Invalid time format - use MM:SS.mmm ($line)." && exit 1
+	fi
+	
+	if [[ "$time_initial" == 00:00.000 ]]; then
+		has_zero_time=true
+	fi
+	
+	if ! $has_zero_time; then
+		echo "Error: First time must be 00:00.000 ($line)." && exit 1
+	fi
+	
+	if [[ "$time" == ??:??.???+* ]] || [[ "$time" == ??:??.???-* ]]; then
+		sign="${time:9:1}"
+		time_offset="${time:10}"
+		
+		if [[ ! "$time_offset" =~ ^([0-9]{1,2}\.[0-9]{3})([+-][0-9]{1,2}\.[0-9]{3})*$ ]]; then
+			echo "Error: Invalid time offset format - use S.mmm(±S.mmm) or SS.mmm(±SS.mmm) ($line)." && exit 1
+		fi
+		
+		seconds_initial="$(echo "$time_initial" | awk -F: '{ print ($1 * 60) + $2 }')"
+		seconds_offset="$time_offset"
+		seconds_total="$(echo "${seconds_initial}${sign}${seconds_offset}" | bc -l)"
+		time=$(echo $(date -d@$(printf "%.3f\n" $seconds_total) -u +%M:%S.%N) | cut -c1-9)
+	fi
+	
+	if [[ "$tempo" == '""""' ]]; then
+		tempo=$prev_tempo
+	elif [[ "$tempo" == [0-9]* ]]; then
+		if [[ ! "$tempo" =~ ^([0-9]\.[0-9]{2}([+-][0-9]\.[0-9]{2})*)(\*[0-9]\.[0-9]{4})?$ ]]; then
+			echo "Error: Invalid tempo format - use 1.00(±0.01) or 1.00(±0.01)*1.0000, etc. Addition and subtraction will be performed before multiplication. Examples: 1.00, 1.00+0.01-0.02, 1.00*1.0000, 1.00+0.01-0.02*1.0000 ($line)." && exit 1
+		fi
+		if [[ "$tempo" == *\** ]]; then
+			tempo_initial="${tempo%\**}"
+			tempo_initial="$(printf "%.2f\n" "$(echo "$tempo_initial" | bc -l)")"
+			tempo_scale="${tempo#*\*}"
+			tempo="${tempo_initial}*${tempo_scale}"
+		else
+			tempo="$(printf "%.2f\n" "$(echo "$tempo" | bc -l)")"
+		fi
+	elif [[ "$tempo" != [0-9]* ]]; then
+		if [[ ! "$tempo" =~ ^[a-z]\.[a-z0-9]{2}$ ]]; then
+			echo "Error: Invalid label - use a.01, b.2b, etc. First character must be a lowercase letter, followed by a period, then any two lowercase letters or digits. Use a hash symbol before the declaration of the label (ie, when the label is declared after a tempo value) to disable all warp markers with that label ($line)." && exit 1
+		fi
+	fi
+	
+	warpmarker="$time|$tempo"
+	
+	if [[ ! -z "$label" ]]; then
+		if [[ ! "$label" =~ ^[a-z]\.[a-z0-9]{2}$ ]]; then
+			echo "Error: Invalid label - use a.01, b.2b, etc. First character must be a lowercase letter, followed by a period, then any two lowercase letters or digits. Use a hash symbol before the declaration of the label (ie, when the label is declared after a tempo value) to disable all warp markers with that label ($line)." && exit 1
+		fi
+		warpmarker="$warpmarker|$label"
+	elif [[ "$prev_tempo" == "$tempo" ]]; then
+		previous_warpmarker="${warpmarkers[-1]}"
+		previous_warpmarker_label="$(echo "$previous_warpmarker" | cut -d \| -f 3)"
+		if [[ -z "$previous_warpmarker_label" ]] && ! $is_begin_time && ! $is_end_time; then
+			continue
+		fi
+	fi
+	
+	if [[ "$tempo" == [0-9]* ]]; then
+		prev_tempo="$tempo"
+	fi
+	
+	warpmarkers+=("$warpmarker")
+	
+	if $is_begin_time; then
+		if [[ "$time" == "00:00.000" ]]; then
+			echo "Error: Begin time cannot be 00:00.000 ($line)." && exit 1
+		fi
+		begin_time=$time
+	fi
+	
+	if $is_end_time; then
+		end_time=$time
+	fi
+	
+	if [[ ! -z "$end_time" ]]; then
+		break
+	fi
+done < "$warpmarkers_file"
+
+if [[ -f .$md5-labels-disabled ]]; then
+	warpmarkers_tmp=()
+	for warpmarker in "${warpmarkers[@]}"; do
+		tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
+		if ! grep -Fxq "$tempo" .$md5-labels-disabled 2>/dev/null; then
+			warpmarkers_tmp+=("$warpmarker")
+		fi
+	done
+	warpmarkers=("${warpmarkers_tmp[@]}")
+	unset warpmarkers_tmp
+fi
+
+sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep sample_rate= | cut -d = -f 2)"
+total_frames="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration_ts= | cut -d = -f 2)"
+total_seconds="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration= | cut -d = -f 2)"
+total_time_ms=$(echo $(date -d@$(printf "%.3f\n" $total_seconds) -u +%M:%S.%N) | cut -c1-9)
+
+if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
+	begin_seconds="$(echo "$begin_time" | awk -F: '{ print ($1 * 60) + $2 }')"
+	end_seconds="$(echo "$end_time" | awk -F: '{ print ($1 * 60) + $2 }')"
+	sox "$audio_input" -b 32 .$md5-trimmed.wav trim "$begin_time" ="$end_time"
+	audio_input=.$md5-trimmed.wav
+	begin_frame="$(printf "%.0f\n" "$(echo "$begin_seconds*$sample_rate" | bc -l)")"
+	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate" | bc -l)")"
+fi
+
+previous_source_frame=0
+previous_target_frame=0
+
+for index in "${!warpmarkers[@]}"; do
+	warpmarker="${warpmarkers[index]}"
+	next_warpmarker="${warpmarkers[$((index+1))]}"
+	
+	warpmarker_time="$(echo "$warpmarker" | cut -d \| -f 1)"
+	
+	if [[ ! -z "$next_warpmarker" ]]; then
+		next_warpmarker_time="$(echo "$next_warpmarker" | cut -d \| -f 1)"
+		next_seconds="$(echo "$next_warpmarker_time" | awk -F: '{ print ($1 * 60) + $2 }')"
+		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate" | bc -l)")"
+		if [[ "$(echo "$total_frames-$source_frame < 1" | bc -l)" == 1 ]]; then
+			echo "Error: Invalid time - value greater than file length ($next_warpmarker)." && exit 1
+		fi
+	else
+		source_frame=$total_frames
+	fi
+	
+	if [[ "$(echo "$source_frame-$previous_source_frame < 1" | bc -l)" == 1 ]]; then
+		echo "Error: Invalid time - distance from previous value must be greater than zero ($warpmarker)." && exit 1
+	fi
+	
+	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
+	if [[ $tempo == [0-9]* ]]; then
+		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+	
+		label="$(echo "$warpmarker" | cut -d \| -f 3)"
+		if [[ ! -z $label ]]; then
+			if grep -q "^$label|" .$md5-labels 2>/dev/null; then
+				echo "Error: Label already exists ($warpmarker)." && exit 1
+			fi
+			label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
+			echo "$label|$tempo|$label_delta" >> .$md5-labels
+		fi
+	fi
+	
+	previous_source_frame=$source_frame
+	previous_target_frame=$target_frame
+done
+
+previous_source_frame=0
+previous_target_frame=0
+previous_target_time_ms=00:00.000
+previous_target_time_fps=00:00.00
+
+for index in "${!warpmarkers[@]}"; do
+	warpmarker="${warpmarkers[index]}"
+	next_warpmarker="${warpmarkers[$((index+1))]}"
+	warpmarker_time="$(echo "$warpmarker" | cut -d \| -f 1)"
+	
+	if [[ ! -z "$next_warpmarker" ]]; then
+		next_warpmarker_time="$(echo "$next_warpmarker" | cut -d \| -f 1)"
+		next_seconds="$(echo "$next_warpmarker_time" | awk -F: '{ print ($1 * 60) + $2 }')"
+		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate" | bc -l)")"
+	else
+		source_frame=$total_frames
+	fi
+	
+	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
+	if [[ $tempo == [0-9]* ]]; then
+		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+	
+		label="$(echo "$warpmarker" | cut -d \| -f 3)"
+		if [[ ! -z $label ]]; then
+			if ! grep -q "^$label|" .$md5-labels 2>/dev/null; then
+				echo "Error: Label does not exist ($warpmarker)." && exit 1
+			fi
+			label_delta="$(grep "^$label|" .$md5-labels | cut -d \| -f 3)"
+			if [[ $tempo == *\** ]]; then
+				padding=11
+			else
+				padding=18
+			fi
+			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+		else
+			if [[ $tempo == *\** ]]; then
+				padding=16
+			else
+				padding=23
+			fi
+			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+		fi
+	else
+		label="$tempo"
+		if ! grep -q "^$label|" .$md5-labels 2>/dev/null; then
+			echo "Error: Label does not exist ($warpmarker)." && exit 1
+		fi
+		label_tempo=$(grep "^$label|" .$md5-labels | cut -d \| -f 2)
+		label_delta=$(grep "^$label|" .$md5-labels | cut -d \| -f 3)
+		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+$label_delta" | bc -l)")"
+		unadjusted_target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/(($label_tempo)*$scale))" | bc -l)")"
+		label_tempo_multiplier="$(echo "($unadjusted_target_frame-$previous_target_frame)/($target_frame-$previous_target_frame)" | bc -l)"
+		if [[ "$label_tempo" == *\** ]]; then
+			label_tempo_base=$(echo "$label_tempo" | cut -d \* -f1)
+			label_tempo_scale=$(echo "$label_tempo" | cut -d \* -f2)
+			label_tempo_string="$label_tempo_base*$(printf "%06.4f\n" "$(echo "$label_tempo_scale*$label_tempo_multiplier" | bc -l)")"
+		else
+			label_tempo_string="$label_tempo*$(printf "%06.4f\n" "$label_tempo_multiplier")"
+		fi
+		
+		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+	fi
+	
+	echo "$line" >> "$log"
+	echo "$source_frame $target_frame" >> .$md5-timemap
+	
+	previous_source_frame=$source_frame
+	previous_target_frame=$target_frame
+	previous_target_time_s=$(echo "$previous_target_frame/$sample_rate" | bc -l)
+	previous_target_time_s_decimal=.$(echo "$previous_target_time_s" | cut -d . -f 2)
+	previous_target_time_ms=$(echo $(date -d@$(printf "%.3f\n" $previous_target_time_s) -u +%M:%S.%N) | cut -c1-9)
+	round_at=$(echo "(1000-(1000/$fps))/1000" | bc -l)
+	
+	if [[ $(echo "$previous_target_time_s_decimal < $round_at" | bc -l) == 1 ]]; then
+		previous_target_time_fps_2=$(printf "%02.0f\n" $(echo "$previous_target_time_s_decimal*$fps" | bc -l))
+		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $previous_target_time_s) -u +%M:%S)
+	elif [[ $(echo "$previous_target_time_s_decimal >= $round_at" | bc -l) == 1 ]]; then
+		previous_target_time_fps_2=00
+		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $(echo "$previous_target_time_s+1" | bc -l)) -u +%M:%S)
+	fi
+	previous_target_time_fps=$previous_target_time_fps_1.$previous_target_time_fps_2
+done
+
+if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
+	begin_target_frame=
+	while IFS= read -r line; do
+		source_frame=$(echo "$line" | cut -d ' ' -f 1)
+		target_frame=$(echo "$line" | cut -d ' ' -f 2)
+		if [[ $source_frame -ge $begin_frame ]] && [[ $source_frame -le $end_frame ]]; then
+			if [[ -z $begin_target_frame ]]; then
+				begin_target_frame=$target_frame
+			fi
+			if [[ $source_frame == $begin_frame ]]; then
+				continue
+			fi
+			echo "$(echo $source_frame-$begin_frame | bc -l) $(echo $target_frame-$begin_target_frame | bc -l)" >> .$md5-timemap-trimmed
+		fi
+	done < .$md5-timemap
+	mv .$md5-timemap-trimmed .$md5-timemap
+else
+	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps" >> "$log"
+fi
+
+rubberband -t 1 --timemap .$md5-timemap --$engine --ignore-clipping "$audio_input" .$md5-tmp.wav
+
+if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) || $limit_final_output; then
+	af="alimiter=latency=enabled:level=disabled:asc=disabled"
+	af+=":level_in=${level_in}dB"
+	af+=":limit=${limit}dB"
+	af+=":level_out=${level_out}dB"
+	af+=":attack=${attack}"
+	af+=":release=${release}"
+
+	ffmpeg -i .$md5-tmp.wav -c:a flac -af "$af" "$audio_output"
+	metaflac --set-tag="COMMENT=rubberband v$(rubberband -V 2>&1)" "$audio_output"
+else
+	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter or set "
+	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
+		clip_warning+="limit_test_output=true."
+	else
+		clip_warning+="limit_final_output=true."
+	fi
+	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="rubberband v$(rubberband -V 2>&1)" "${audio_output%.flac}-limit_final_output=false.wav"
+	echo
+	echo -e "$clip_warning"
+fi
+
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
