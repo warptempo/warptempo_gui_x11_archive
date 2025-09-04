@@ -5,7 +5,9 @@ shopt -s nocaseglob
 set -e
 
 if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
-	echo "Usage: "$(basename "$0")" <warpmarkers> <settings>"
+	echo "Warp tempo by applying warp markers."
+	echo
+	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings>"
 	echo
 	echo "The default inputs are .warpmarkers and .settings. If these do not exist, run "$(basename "$0")" with no arguments to create blank templates."
 	exit
