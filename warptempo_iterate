@@ -1,0 +1,164 @@
+#!/bin/bash
+#run only from terminal
+if [ ! -t 0 ]; then exit; fi
+shopt -s nocaseglob
+set -e
+
+if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
+	echo "Iterate over tempo variations. Use +A, -B, etc in the warp markers file to increment or decrement tempo, then define ranges to iterate over these variables."
+	echo
+	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> [range range ...]"
+	echo
+	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as the first two arguments. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in alternate_versions."
+	exit
+fi
+
+warpmarkers_file="$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"
+settings_file="$(ls .settings *.settings 2>/dev/null | head -n 1)"
+
+for arg in "$@"; do
+	if [[ "$arg" == *.warpmarkers ]]; then
+		warpmarkers_file="$arg"
+		shift
+	fi
+	if [[ "$arg" == *.settings ]]; then
+		settings_file="$arg"
+		shift
+	fi
+done
+
+validation_errors=0
+error_msg=
+
+# Function to generate range for a given argument
+generate_range() {
+    local key=$1
+    shift
+    local lower_int=$1
+    shift
+    local upper_int=$1
+    
+    # Generate range
+    for ((i=lower_int; i<=upper_int; i++)); do
+        # Format number back to decimal with two places
+        formatted=$(printf "%+.2f" $(echo "scale=2; $i/100" | bc))
+        # Handle -0.00 case
+        if [[ $formatted == "-0.00" ]]; then
+            formatted="0.00"
+        fi
+        echo "$key$formatted"
+    done
+}
+
+# Store all ranges, preserving order of arguments
+declare -a keys
+declare -A ranges
+for arg in "$@"; do
+	if [[ ! "$arg" =~ ^[A-Z][+-]?[0-9]+\.[0-9]{2},[+-]?[0-9]+\.[0-9]{2}$ ]]; then
+		echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first number must be less than the second." && ((validation_errors++)) && continue
+	fi
+    # Extract key (first character)
+    key=${arg:0:1}
+    keys+=("$key")
+    # Extract lower and upper bounds
+    bounds=${arg:1}
+    IFS=',' read -r lower upper <<< "$bounds"
+    # Ensure proper decimal format for bc
+    lower=$(echo "$lower" | sed 's/+//')
+    upper=$(echo "$upper" | sed 's/+//')
+    # Convert to integers (multiply by 100 to handle decimals)
+    lower_int=$(echo "scale=0; ($lower * 100)/1" | bc)
+    upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
+    
+    if [[ "$lower_int" -ge "$upper_int" ]]; then
+    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first number must be less than the second." && ((validation_errors++)) && continue
+    fi
+        
+    ranges[$key]=$(generate_range "$key" "$lower_int" "$upper_int" | tr '\n' ' ')
+done
+
+if [[ $validation_errors -gt 0 ]]; then
+	exit 1
+fi
+
+# Function to generate permutations
+generate_permutations() {
+    local result=()
+    
+    # Recursive function to build permutations
+    permute() {
+        local depth=$1
+        shift
+        local prefix=$1
+        
+        if (( depth == ${#keys[@]} )); then
+            # Remove trailing comma
+            result+=("${prefix%,}")
+            return
+        fi
+        
+        local key=${keys[$depth]}
+        # Convert range string to array
+        IFS=' ' read -r -a values <<< "${ranges[$key]}"
+        
+        for value in "${values[@]}"; do
+            permute $((depth + 1)) "$prefix$value,"
+        done
+    }
+    
+    permute 0 ""
+    echo "${result[@]}"
+}
+
+# Store permutations in array
+IFS=' ' read -r -a permutations <<< "$(generate_permutations)"
+
+# Output permutations
+for permutation in "${permutations[@]}"; do
+    echo "$permutation"
+    
+    alternate_title="$permutation"
+
+	mkdir -p alternate_versions
+
+	cp -f "$warpmarkers_file" alternate_versions/"$alternate_title".warpmarkers
+	cp -f "$settings_file" alternate_versions/"$alternate_title".settings
+
+	sed -i "s|title=.*|title=\"alternate_versions\/$alternate_title\"|" alternate_versions/"$alternate_title".settings
+	
+	IFS=',' read -r -a permutation_elements <<< "$permutation"
+	
+	for permutation_element in "${permutation_elements[@]}"; do
+		key=${permutation_element:0:1}
+		value=${permutation_element:1}
+		
+		sed -i "s|+$key|$value|g" alternate_versions/"$alternate_title".warpmarkers
+		if [[ "$value" == +* ]]; then
+			inverted_value=${value/+/-}
+		elif [[ "$value" == -* ]]; then
+			inverted_value=${value/-/+}
+		fi
+		sed -i "s|-$key|$inverted_value|g" alternate_versions/"$alternate_title".warpmarkers
+	done
+	
+	"$(dirname "$0")"/warptempo alternate_versions/"$alternate_title".warpmarkers alternate_versions/"$alternate_title".settings
+done
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

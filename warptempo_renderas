@@ -1,0 +1,38 @@
+#!/bin/bash
+#run only from terminal
+if [ ! -t 0 ]; then "$TE" "$0"; exit; fi
+IFS=$(echo -en "\n\b")
+shopt -s nocaseglob
+
+if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
+	echo "Render using an alternate title."
+	echo
+	echo "   Usage: "$(basename "$0")" alternate_title <warpmarkers> <settings>"
+	echo
+	echo "The default inputs are .warpmarkers and .settings. Outputs will be placed in alternate_versions."
+	exit
+fi
+
+alternate_title="$1"
+warpmarkers_file="${2:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
+settings_file="${3:-"$(ls .settings *.settings 2>/dev/null | head -n 1)"}"
+
+mkdir -p alternate_versions/"$(dirname "$alternate_title")"
+
+cp -f "$warpmarkers_file" alternate_versions/"$alternate_title".warpmarkers
+cp -f "$settings_file" alternate_versions/"$alternate_title".settings
+
+sed -i "s|title=.*|title=\"alternate_versions\/$alternate_title\"|" alternate_versions/"$alternate_title".settings
+
+"$(dirname "$0")"/warptempo alternate_versions/"$alternate_title".warpmarkers alternate_versions/"$alternate_title".settings
+
+
+
+
+
+
+
+
+
+
+

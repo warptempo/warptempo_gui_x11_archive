@@ -1,0 +1,22 @@
+#!/bin/bash
+#run only from terminal
+if [ ! -t 0 ]; then "$TE" "$0"; exit; fi
+IFS=$(echo -en "\n\b")
+shopt -s nocaseglob
+
+if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
+	echo "Remove trim points."
+	echo
+	echo "   Usage: "$(basename "$0")" <warpmarkers>"
+	echo
+	echo "The default inputs are .warpmarkers and .settings."
+	exit
+fi
+
+input_file="${1:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
+
+sed -i 's/b=//g' "$input_file"
+sed -i 's/begin_time=//g' "$input_file"
+sed -i 's/e=//g' "$input_file"
+sed -i 's/end_time=//g' "$input_file"
+

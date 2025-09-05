@@ -44,8 +44,16 @@ if [[ ! -f "$warpmarkers_file" ]]; then
 	echo "Error: Warp markers file does not exist." && ((preliminary_errors++))
 fi
 
+if [[ "$warpmarkers_file" != *.warpmarkers ]]; then
+	echo "Error: Warp markers file extension must be .warpmarkers." && ((preliminary_errors++))
+fi
+
 if [[ ! -f "$settings_file" ]]; then
 	echo "Error: Settings file does not exist." && ((preliminary_errors++))
+fi
+
+if [[ "$settings_file" != *.settings ]]; then
+	echo "Error: Settings file extension must be .settings." && ((preliminary_errors++))
 fi
 
 if [[ $preliminary_errors -gt 0 ]]; then
