@@ -28,7 +28,6 @@ for arg in "$@"; do
 done
 
 validation_errors=0
-error_msg=
 
 # Function to generate range for a given argument
 generate_range() {
@@ -55,7 +54,9 @@ declare -a keys
 declare -A ranges
 for arg in "$@"; do
 	if [[ ! "$arg" =~ ^[A-Z][+-]?[0-9]+\.[0-9]{2},[+-]?[0-9]+\.[0-9]{2}$ ]]; then
-		echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first number must be less than the second." && ((validation_errors++)) && continue
+		echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than the second."
+		((validation_errors++))
+		continue
 	fi
     # Extract key (first character)
     key=${arg:0:1}
@@ -71,7 +72,9 @@ for arg in "$@"; do
     upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
     
     if [[ "$lower_int" -ge "$upper_int" ]]; then
-    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first number must be less than the second." && ((validation_errors++)) && continue
+    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than the second."
+		((validation_errors++))
+		continue
     fi
         
     ranges[$key]=$(generate_range "$key" "$lower_int" "$upper_int" | tr '\n' ' ')
