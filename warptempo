@@ -181,7 +181,7 @@ if [[ $validation_errors -gt 0 ]]; then
 	exit 1
 fi
 
-requirements=(bc ffmpeg ffprobe jq metaflac rubberband sox yt-dlp)
+requirements=(bc ffmpeg ffprobe jq rubberband sox yt-dlp)
 requirement_errors=0
 
 for requirement in "${requirements[@]}"; do
@@ -257,11 +257,11 @@ if [[ ! -f "$audio_input" ]]; then
 fi
 
 md5=$(md5sum "$audio_input" | cut -d ' ' -f 1)
-audio_output="$title.flac"
+audio_output="$title.wav"
 mkdir -p "$(dirname "$audio_output")"
 log="$title.log"
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "${audio_output%.flac}-limit_final_output=false.wav" "$log"
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "$log"
 
 if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then 
 	echo >> "$warpmarkers_file"
@@ -405,6 +405,14 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	audio_input=.$md5-trimmed.wav
 	begin_frame="$(printf "%.0f\n" "$(echo "$begin_seconds*$sample_rate" | bc -l)")"
 	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate" | bc -l)")"
+fi
+
+if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && ! $limit_test_output; then
+	audio_output="${audio_output%.wav}-limit_test_output=false.wav"
+	rm -f "$audio_output"
+elif [[ -z "$begin_time" ]] && [[ -z "$end_time" ]] && ! $limit_final_output; then
+	audio_output="${audio_output%.wav}-limit_final_output=false.wav"
+	rm -f "$audio_output"
 fi
 
 previous_source_frame=0
@@ -562,8 +570,7 @@ if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) ||
 	af+=":attack=${attack}"
 	af+=":release=${release}"
 
-	ffmpeg -i .$md5-tmp.wav -c:a flac -af "$af" "$audio_output"
-	metaflac --set-tag="COMMENT=rubberband v$(rubberband -V 2>&1)" "$audio_output"
+	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="rubberband v$(rubberband -V 2>&1)" -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter or set "
 	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
@@ -571,7 +578,7 @@ else
 	else
 		clip_warning+="limit_final_output=true."
 	fi
-	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="rubberband v$(rubberband -V 2>&1)" "${audio_output%.flac}-limit_final_output=false.wav"
+	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="rubberband v$(rubberband -V 2>&1)" "$audio_output"
 	echo
 	echo -e "$clip_warning"
 fi
