@@ -1,7 +1,7 @@
 To use the script, run:
 ```
 git clone https://github.com/warptempo/scripts
-cd scripts/examples/"Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto Allegro (2024 Remaster, Tempo Warp)"
+cd scripts/examples/"Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp)"
 ../../warptempo
 ```
 
