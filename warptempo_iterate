@@ -71,8 +71,8 @@ for arg in "$@"; do
     lower_int=$(echo "scale=0; ($lower * 100)/1" | bc)
     upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
     
-    if [[ "$lower_int" -ge "$upper_int" ]]; then
-    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than the second."
+    if [[ "$lower_int" -gt "$upper_int" ]]; then
+    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than or equal to the second."
 		((validation_errors++))
 		continue
     fi
