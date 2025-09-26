@@ -115,15 +115,22 @@ generate_permutations() {
 
 # Store permutations in array
 IFS=' ' read -r -a permutations <<< "$(generate_permutations)"
+permutations_count=${#permutations[@]}
 
+i=1
 # Output permutations
 for permutation in "${permutations[@]}"; do
-    echo "$permutation"
+    alternate_title="$(printf "%0${#permutations_count}d" "$i")) $permutation"
+	
+    ((i++))
     
-    alternate_title="$permutation"
+    if [[ -f alternate_versions/"$alternate_title".wav ]]; then
+    	echo "skipping $alternate_title..."
+    	continue
+    fi
 
+    echo "$alternate_title"
 	mkdir -p alternate_versions
-
 	cp -f "$warpmarkers_file" alternate_versions/"$alternate_title".warpmarkers
 	cp -f "$settings_file" alternate_versions/"$alternate_title".settings
 
