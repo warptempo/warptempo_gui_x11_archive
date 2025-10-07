@@ -3,7 +3,7 @@ audio_input="Mozart_-_Symphony_No._40_in_G_Minor_K._550_-_III._Menuetto._Allegre
 url=https://music.youtube.com/watch?v=fNlHZoCwuqk
 scale=1.003668
 limit_test_output=true
-limit_final_output=true
+limit_final_output=false
 level_in=0
 limit=-0.1
 level_out=0
