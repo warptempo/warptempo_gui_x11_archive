@@ -9,7 +9,7 @@ if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo
 	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> [range range ...]"
 	echo
-	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as the first two arguments. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in alternate_versions."
+	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as the first two arguments. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in the folder test."
 	exit
 fi
 
@@ -80,6 +80,11 @@ for arg in "$@"; do
     ranges[$key]=$(generate_range "$key" "$lower_int" "$upper_int" | tr '\n' ' ')
 done
 
+if [[ -f test ]]; then
+	echo "Error: A file called test exists."
+	((validation_errors++))
+fi
+
 if [[ $validation_errors -gt 0 ]]; then
 	exit 1
 fi
@@ -124,17 +129,17 @@ for permutation in "${permutations[@]}"; do
 	
     ((i++))
     
-    if [[ -f alternate_versions/"$alternate_title".wav ]]; then
+    if [[ -f test/"$alternate_title".wav ]]; then
     	echo "skipping $alternate_title..."
     	continue
     fi
 
     echo "$alternate_title"
-	mkdir -p alternate_versions
-	cp -f "$warpmarkers_file" alternate_versions/"$alternate_title".warpmarkers
-	cp -f "$settings_file" alternate_versions/"$alternate_title".settings
+	mkdir -p test
+	cp -f "$warpmarkers_file" test/"$alternate_title".warpmarkers
+	cp -f "$settings_file" test/"$alternate_title".settings
 
-	sed -i "s|title=.*|title=\"alternate_versions\/$alternate_title\"|" alternate_versions/"$alternate_title".settings
+	sed -i "s|title=.*|title=\"test\/$alternate_title\"|" test/"$alternate_title".settings
 	
 	IFS=',' read -r -a permutation_elements <<< "$permutation"
 	
@@ -142,16 +147,16 @@ for permutation in "${permutations[@]}"; do
 		key=${permutation_element:0:1}
 		value=${permutation_element:1}
 		
-		sed -i "s|+$key|$value|g" alternate_versions/"$alternate_title".warpmarkers
+		sed -i "s|+$key|$value|g" test/"$alternate_title".warpmarkers
 		if [[ "$value" == +* ]]; then
 			inverted_value=${value/+/-}
 		elif [[ "$value" == -* ]]; then
 			inverted_value=${value/-/+}
 		fi
-		sed -i "s|-$key|$inverted_value|g" alternate_versions/"$alternate_title".warpmarkers
+		sed -i "s|-$key|$inverted_value|g" test/"$alternate_title".warpmarkers
 	done
 	
-	"$(dirname "$0")"/warptempo alternate_versions/"$alternate_title".warpmarkers alternate_versions/"$alternate_title".settings
+	"$(dirname "$0")"/warptempo test/"$alternate_title".warpmarkers test/"$alternate_title".settings
 done
 
 
