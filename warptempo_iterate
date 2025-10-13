@@ -121,6 +121,7 @@ generate_permutations() {
 # Store permutations in array
 IFS=' ' read -r -a permutations <<< "$(generate_permutations)"
 permutations_count=${#permutations[@]}
+echo "Creating $permutations_count permutations..."
 
 i=1
 # Output permutations
