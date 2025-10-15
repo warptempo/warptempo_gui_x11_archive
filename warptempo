@@ -353,8 +353,9 @@ while IFS= read -r line; do
 		warpmarker="$warpmarker|$label"
 	elif [[ "$prev_tempo" == "$tempo" ]]; then
 		previous_warpmarker="${warpmarkers[-1]}"
+		previous_warpmarker_tempo="$(echo "$previous_warpmarker" | cut -d \| -f 2)"
 		previous_warpmarker_label="$(echo "$previous_warpmarker" | cut -d \| -f 3)"
-		if [[ -z "$previous_warpmarker_label" ]] && ! $is_begin_time && ! $is_end_time; then
+		if [[ "$previous_warpmarker_tempo" == [0-9]* ]] && [[ -z "$previous_warpmarker_label" ]] && ! $is_begin_time && ! $is_end_time; then
 			continue
 		fi
 	fi
