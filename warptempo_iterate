@@ -121,12 +121,16 @@ generate_permutations() {
 # Store permutations in array
 IFS=' ' read -r -a permutations <<< "$(generate_permutations)"
 permutations_count=${#permutations[@]}
+pad=${#permutations_count}
+if [[ $pad -lt 2 ]]; then
+	pad=2
+fi
 echo "Creating $permutations_count permutations..."
 
 i=1
 # Output permutations
 for permutation in "${permutations[@]}"; do
-    alternate_title="$(printf "%0${#permutations_count}d" "$i")) $permutation"
+    alternate_title="$(printf "%0${pad}d" "$i")) $permutation"
 	
     ((i++))
     
