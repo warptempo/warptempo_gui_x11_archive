@@ -1,8 +1,8 @@
 #!/bin/bash
 #run only from terminal
-if [ ! -t 0 ]; then "$TE" "$0"; exit; fi
-IFS=$(echo -en "\n\b")
+if [ ! -t 0 ]; then exit; fi
 shopt -s nocaseglob
+set -e
 
 if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo "Remove trim points."
