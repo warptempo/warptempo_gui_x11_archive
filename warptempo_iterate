@@ -31,22 +31,29 @@ validation_errors=0
 
 # Function to generate range for a given argument
 generate_range() {
-    local key=$1
-    shift
-    local lower_int=$1
-    shift
-    local upper_int=$1
-    
-    # Generate range
-    for ((i=lower_int; i<=upper_int; i++)); do
-        # Format number back to decimal with two places
-        formatted=$(printf "%+.2f" $(echo "scale=2; $i/100" | bc))
-        # Handle -0.00 case
-        if [[ $formatted == "-0.00" ]]; then
-            formatted="0.00"
-        fi
-        echo "$key$formatted"
-    done
+	local key=$1
+	shift
+	local lower_int=$1
+	shift
+	local upper_int=$1
+	
+	range_spread=$((upper_int-lower_int+1))
+	pad=${#range_spread}
+	if [[ $pad -lt 2 ]]; then
+		pad=2
+	fi
+	
+	# Generate range
+	for ((i=lower_int; i<=upper_int; i++)); do
+		# Format number back to decimal with two places
+		formatted=$(printf "%+.2f" $(echo "scale=2; $i/100" | bc))
+		# Handle -0.00 case
+		if [[ $formatted == "-0.00" ]]; then
+			formatted="0.00"
+		fi
+		j=$((i-lower_int+1))
+		echo "$(printf "%0${pad}d" "$j"))$key$formatted"
+	done
 }
 
 # Store all ranges, preserving order of arguments
@@ -58,26 +65,30 @@ for arg in "$@"; do
 		((validation_errors++))
 		continue
 	fi
-    # Extract key (first character)
-    key=${arg:0:1}
-    keys+=("$key")
-    # Extract lower and upper bounds
-    bounds=${arg:1}
-    IFS=',' read -r lower upper <<< "$bounds"
-    # Ensure proper decimal format for bc
-    lower=$(echo "$lower" | sed 's/+//')
-    upper=$(echo "$upper" | sed 's/+//')
-    # Convert to integers (multiply by 100 to handle decimals)
-    lower_int=$(echo "scale=0; ($lower * 100)/1" | bc)
-    upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
-    
-    if [[ "$lower_int" -gt "$upper_int" ]]; then
-    	echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than or equal to the second."
+	# Extract key (first character)
+	key=${arg:0:1}
+	if [[ " ${keys[*]} " == *" $key "* ]]; then
+		echo "Error: $key is used more than once."
+		((validation_errors++))
+	fi
+	keys+=("$key")
+	# Extract lower and upper bounds
+	bounds=${arg:1}
+	IFS=',' read -r lower upper <<< "$bounds"
+	# Ensure proper decimal format for bc
+	lower=$(echo "$lower" | sed 's/+//')
+	upper=$(echo "$upper" | sed 's/+//')
+	# Convert to integers (multiply by 100 to handle decimals)
+	lower_int=$(echo "scale=0; ($lower * 100)/1" | bc)
+	upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
+	
+	if [[ "$lower_int" -gt "$upper_int" ]]; then
+		echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than or equal to the second."
 		((validation_errors++))
 		continue
-    fi
-        
-    ranges[$key]=$(generate_range "$key" "$lower_int" "$upper_int" | tr '\n' ' ')
+	fi
+		
+	ranges[$key]=$(generate_range "$key" "$lower_int" "$upper_int" | tr '\n' ' ')
 done
 
 if [[ -f test ]]; then
@@ -91,64 +102,59 @@ fi
 
 # Function to generate permutations
 generate_permutations() {
-    local result=()
-    
-    # Recursive function to build permutations
-    permute() {
-        local depth=$1
-        shift
-        local prefix=$1
-        
-        if (( depth == ${#keys[@]} )); then
-            # Remove trailing comma
-            result+=("${prefix%,}")
-            return
-        fi
-        
-        local key=${keys[$depth]}
-        # Convert range string to array
-        IFS=' ' read -r -a values <<< "${ranges[$key]}"
-        
-        for value in "${values[@]}"; do
-            permute $((depth + 1)) "$prefix$value,"
-        done
-    }
-    
-    permute 0 ""
-    echo "${result[@]}"
+	local result=()
+	
+	# Recursive function to build permutations
+	permute() {
+		local depth=$1
+		shift
+		local prefix=$1
+		
+		if (( depth == ${#keys[@]} )); then
+			# Remove trailing slash
+			result+=("${prefix%/}")
+			return
+		fi
+		
+		local key=${keys[$depth]}
+		# Convert range string to array
+		IFS=' ' read -r -a values <<< "${ranges[$key]}"
+		
+		for value in "${values[@]}"; do
+			permute $((depth + 1)) "$prefix$value/"
+		done
+	}
+	
+	permute 0 ""
+	echo "${result[@]}"
 }
 
 # Store permutations in array
 IFS=' ' read -r -a permutations <<< "$(generate_permutations)"
 permutations_count=${#permutations[@]}
-pad=${#permutations_count}
-if [[ $pad -lt 2 ]]; then
-	pad=2
-fi
 echo "Creating $permutations_count permutations..."
 
-i=1
 # Output permutations
 for permutation in "${permutations[@]}"; do
-    alternate_title="$(printf "%0${pad}d" "$i")) $permutation"
+	alternate_title="${permutation//)/) }"
 	
-    ((i++))
-    
-    if [[ -f test/"$alternate_title".wav ]]; then
-    	echo "skipping $alternate_title..."
-    	continue
-    fi
+	if [[ -f test/"$alternate_title".wav ]]; then
+		echo "skipping $alternate_title..."
+		continue
+	fi
 
-    echo "$alternate_title"
-	mkdir -p test
+	echo "$alternate_title"
+	
+	mkdir -p "$(dirname test/"$alternate_title".wav)"
 	cp -f "$warpmarkers_file" test/"$alternate_title".warpmarkers
 	cp -f "$settings_file" test/"$alternate_title".settings
 
 	sed -i "s|title=.*|title=\"test\/$alternate_title\"|" test/"$alternate_title".settings
 	
-	IFS=',' read -r -a permutation_elements <<< "$permutation"
+	IFS='/' read -r -a permutation_elements <<< "$permutation"
 	
 	for permutation_element in "${permutation_elements[@]}"; do
+		permutation_element=${permutation_element#*)}
 		key=${permutation_element:0:1}
 		value=${permutation_element:1}
 		
