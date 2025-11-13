@@ -7,9 +7,9 @@ set -e
 if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo "Iterate over tempo variations. Use +A, -B, etc in the warp markers file to increment or decrement tempo, then define ranges to iterate over these variables."
 	echo
-	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> [range range ...]"
+	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> <increment> [range range ...]"
 	echo
-	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as arguments. The default increment is 0.01. To use a different increment, pass it as an argument in the form i=<increment>. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in the folder test."
+	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as arguments before ranges. The default increment is 0.01. To use a different increment, pass it as an argument before ranges in the form i=<increment>. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in the folder test."
 	exit
 fi
 
