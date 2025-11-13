@@ -9,9 +9,11 @@ if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo
 	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> [range range ...]"
 	echo
-	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as the first two arguments. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in the folder test."
+	echo "The default inputs are .warpmarkers and .settings. To use other files, pass them as arguments. The default increment is 0.01. To use a different increment, pass it as an argument in the form i=<increment>. Range format is A±0.00,±0.01, etc. The first number must be less than the second. Outputs will be placed in the folder test."
 	exit
 fi
+
+validation_errors=0
 
 warpmarkers_file="$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"
 settings_file="$(ls .settings *.settings 2>/dev/null | head -n 1)"
@@ -25,9 +27,20 @@ for arg in "$@"; do
 		settings_file="$arg"
 		shift
 	fi
+	if [[ "$arg" == i=* ]]; then
+		increment="${arg#i=}"
+		if [[ ! "$increment" =~ ^([0-9]*\.[0-9]+|[0-9]+\.?[0-9]*)$ ]]; then
+			echo "Error: Increment is not a valid positive decimal." && ((validation_errors++))
+		else
+			increment=$(printf "%0.2f\n" "$increment")
+		fi
+		shift
+	fi
 done
 
-validation_errors=0
+if [[ -z "$increment" ]]; then
+	increment=$(printf "%0.2f\n" 0.01)
+fi
 
 # Function to generate range for a given argument
 generate_range() {
@@ -37,21 +50,22 @@ generate_range() {
 	shift
 	local upper_int=$1
 	
-	range_spread=$((upper_int-lower_int+1))
+	increment_int=$(echo "scale=0; ($increment * 100)/1" | bc)
+	range_spread=$(echo "scale=0; ($upper_int-$lower_int+1)/$increment_int" | bc -l)
 	pad=${#range_spread}
 	if [[ $pad -lt 2 ]]; then
 		pad=2
 	fi
 	
 	# Generate range
-	for ((i=lower_int; i<=upper_int; i++)); do
+	for ((i=lower_int; i<=upper_int; i=$((i+increment_int)) )); do
 		# Format number back to decimal with two places
 		formatted=$(printf "%+.2f" $(echo "scale=2; $i/100" | bc))
 		# Handle -0.00 case
 		if [[ $formatted == "-0.00" ]]; then
 			formatted="0.00"
 		fi
-		j=$((i-lower_int+1))
+		j=$(echo "scale=0; ($i-$lower_int)/$increment_int+1" | bc)
 		echo "$(printf "%0${pad}d" "$j"))$key$formatted"
 	done
 }
