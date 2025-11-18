@@ -508,7 +508,6 @@ for index in "${!warpmarkers[@]}"; do
 			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
 		fi
 	elif [[ "$warpmarker_time" == "$end_time" ]]; then
-		label="$tempo"
 		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
 	else
 		label="$tempo"
