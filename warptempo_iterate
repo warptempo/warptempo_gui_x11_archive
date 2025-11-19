@@ -51,7 +51,7 @@ generate_range() {
 	local upper_int=$1
 	
 	increment_int=$(echo "scale=0; ($increment * 100)/1" | bc)
-	range_spread=$(echo "scale=0; ($upper_int-$lower_int+1)/$increment_int" | bc -l)
+	range_spread=$(echo "scale=0; ($upper_int-$lower_int+1)/$increment_int" | sed 's/--/+/' | bc -l)
 	pad=${#range_spread}
 	if [[ $pad -lt 2 ]]; then
 		pad=2
@@ -65,7 +65,7 @@ generate_range() {
 		if [[ $formatted == "-0.00" ]]; then
 			formatted="0.00"
 		fi
-		j=$(echo "scale=0; ($i-$lower_int)/$increment_int+1" | bc)
+		j=$(echo "scale=0; ($i-$lower_int)/$increment_int+1" | sed 's/--/+/' | bc -l)
 		echo "$(printf "%0${pad}d" "$j"))$key$formatted"
 	done
 }
@@ -93,8 +93,8 @@ for arg in "$@"; do
 	lower=$(echo "$lower" | sed 's/+//')
 	upper=$(echo "$upper" | sed 's/+//')
 	# Convert to integers (multiply by 100 to handle decimals)
-	lower_int=$(echo "scale=0; ($lower * 100)/1" | bc)
-	upper_int=$(echo "scale=0; ($upper * 100)/1" | bc)
+	lower_int=$(echo "scale=0; ($lower * 100)/1" | bc -l)
+	upper_int=$(echo "scale=0; ($upper * 100)/1" | bc -l)
 	
 	if [[ "$lower_int" -gt "$upper_int" ]]; then
 		echo "Error: $arg is not a valid range. Format is A±0.00,±0.01, etc. The first value must be less than or equal to the second."
