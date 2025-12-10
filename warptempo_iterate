@@ -51,7 +51,7 @@ generate_range() {
 	local upper_int=$1
 	
 	increment_int=$(echo "scale=0; ($increment * 100)/1" | bc)
-	range_spread=$(echo "scale=0; ($upper_int-$lower_int+1)/$increment_int" | sed 's/--/+/' | bc -l)
+	range_spread=$(printf "%.0f" $(echo "($upper_int-$lower_int+1)/$increment_int" | sed 's/--/+/' | bc -l))
 	pad=${#range_spread}
 	if [[ $pad -lt 2 ]]; then
 		pad=2
@@ -65,7 +65,7 @@ generate_range() {
 		if [[ $formatted == "-0.00" ]]; then
 			formatted="0.00"
 		fi
-		j=$(echo "scale=0; ($i-$lower_int)/$increment_int+1" | sed 's/--/+/' | bc -l)
+		j=$(printf "%.0f" $(echo "($i-$lower_int)/$increment_int+1" | sed 's/--/+/' | bc -l))
 		echo "$(printf "%0${pad}d" "$j"))$key$formatted"
 	done
 }
