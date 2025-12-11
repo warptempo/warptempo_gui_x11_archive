@@ -13,14 +13,27 @@ if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	exit
 fi
 
-if [[ -f test ]]; then
-	echo "Error: A file called test exists."
-	exit 1
-fi
-
 alternate_title="$1"
 warpmarkers_file="${2:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
 settings_file="${3:-"$(ls .settings *.settings 2>/dev/null | head -n 1)"}"
+
+validation_errors=0
+
+if [[ ! -f "$warpmarkers_file" ]]; then
+	echo "Error: Warp markers file does not exist" && ((validation_errors++))
+fi
+
+if [[ ! -f "$settings_file" ]]; then
+	echo "Error: Settings file does not exist" && ((validation_errors++))
+fi
+
+if [[ -f test ]]; then
+	echo "Error: A file called test exists." && ((validation_errors++))
+fi
+
+if [[ $validation_errors -gt 0 ]]; then
+	exit 1
+fi
 
 mkdir -p test/"$(dirname "$alternate_title")"
 

@@ -16,6 +16,16 @@ fi
 input_file="${1:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
 output_file="${input_file}.flattened"
 
+validation_errors=0
+
+if [[ ! -f "$input_file" ]]; then
+	echo "Error: Input file does not exist" && ((validation_errors++))
+fi
+
+if [[ $validation_errors -gt 0 ]]; then
+	exit 1
+fi
+
 rm -f "$output_file"
 
 while IFS= read -r line; do
