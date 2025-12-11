@@ -123,7 +123,7 @@ while IFS= read -r line; do
 	new_line="$time|$tempo"
 	
 	if [[ ! -z "$label" ]]; then
-		if [[ ! "$label" =~ ^[a-z]\.[a-z0-9]{2}$ ]]; then
+		if [[ ! "$label" =~ ^[a-z]\.[a-z0-9]{2}$ ]] && [[ ! "$label" =~ ^#[a-z]\.[a-z0-9]{2}$ ]]; then
 			echo "Error: Invalid label - use a.01, b.2b, etc. First character must be a lowercase letter, followed by a period, then any two lowercase letters or digits. Use a hash symbol before the declaration of the label (ie, when the label is declared after a tempo value) to disable all warp markers with that label ($line)." && rm -f "$output_file" && exit 1
 		fi
 		new_line="$new_line|$label"
