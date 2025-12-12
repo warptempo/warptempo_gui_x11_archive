@@ -1,6 +1,15 @@
 Hummel: dotted half note = 76 in 3/4 (228bpm)
 Grodd: dotted half note = 61 in 3/4 (183bpm)
-warptempo: dotted half note = 63 in 3/4 (189bpm)
+warptempo: dotted half note = 62 2/3 in 3/4 (188bpm)
+
+###
+
+warptempo_basetemposcale 00:19.136 00:22.970 9 188
+ratio: 1.33480000000000000000
+base_tempo: 1.33
+scale: 1.003609
+
+###
 
 Cover: "Metropolis" (1927)
 
