@@ -1,4 +1,15 @@
 Hummel: eighth note = 116 in 6/8 (116bpm)
+Grodd: eighth note = 109 in 6/8 (109bpm)
+warptempo: eighth note = 115 in 6/8 (115bpm)
+
+###
+
+warptempo_basetemposcale 00:32.008 00:46.562 24 115
+ratio: 1.16229861111111111111
+base_tempo: 1.16
+scale: 1.001982
+
+###
 
 Cover: "Winged Migration" (2001)
 
