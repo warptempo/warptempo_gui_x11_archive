@@ -1,4 +1,15 @@
 Hummel: half note = 108 in 2/2 (216bpm)
+Grodd: half note = 112.5 in 2/2 (225bpm)
+warptempo: half note = 110 in 2/2 (220bpm)
+
+###
+
+warptempo_basetemposcale 00:02.442 00:14.965 36 220
+ratio: 1.27549074074074074074
+base_tempo: 1.28
+scale: 0.996477
+
+###
 
 Cover: "Koyaanisqatsi" (1982)
 
