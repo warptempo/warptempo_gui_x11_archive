@@ -54,7 +54,8 @@ ratio=$(echo "$duration / $desired_duration" | bc -l)
 echo "ratio: $ratio"
 base_tempo=$(printf "%0.2f" $ratio)
 echo "base_tempo: $base_tempo"
-scale=$(printf "%0.6f" $(echo "$ratio / $base_tempo" | bc -l))
+# Add epsilon to compensate for binary representation error
+scale=$(printf "%0.6f" $(echo "($ratio / $base_tempo) + 0.00000001" | bc -l))
 echo "scale: $scale"
 
 
