@@ -450,7 +450,6 @@ for index in "${!warpmarkers[@]}"; do
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
 	if [[ $tempo == [0-9]* ]]; then
-		#replace
 		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
 		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
@@ -459,7 +458,6 @@ for index in "${!warpmarkers[@]}"; do
 			if grep -q "^$label|" .$md5-labels 2>/dev/null; then
 				echo "Error: Label already exists ($warpmarker)." && exit 1
 			fi
-			#replace
 			#label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			echo "$label|$tempo|$label_delta" >> .$md5-labels
@@ -490,7 +488,6 @@ for index in "${!warpmarkers[@]}"; do
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
 	if [[ $tempo == [0-9]* ]]; then
-		#replace
 		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
 		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
@@ -505,7 +502,6 @@ for index in "${!warpmarkers[@]}"; do
 			else
 				padding=18
 			fi
-			#replace
 			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		else
 			if [[ $tempo == *\** ]]; then
@@ -513,11 +509,9 @@ for index in "${!warpmarkers[@]}"; do
 			else
 				padding=23
 			fi
-			#replace
 			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		fi
 	elif [[ "$warpmarker_time" == "$end_time" ]]; then
-		#replace
 		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 	else
 		label="$tempo"
@@ -540,7 +534,6 @@ for index in "${!warpmarkers[@]}"; do
 		if [[ "$(echo "$label_tempo_final_multiplier > 9.9999" | bc -l)" == 1 ]]; then
 			echo "Error: Label tempo final multipler greater than 9.9999 ($warpmarker)." && exit 1
 		fi
-		#replace
 		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 	fi
 	
@@ -581,7 +574,6 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	done < .$md5-timemap
 	mv .$md5-timemap-trimmed .$md5-timemap
 else
-	#replace
 	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log"
 fi
 
