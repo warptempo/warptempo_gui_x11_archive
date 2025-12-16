@@ -270,6 +270,7 @@ fi
 prev_tempo=1.00
 warpmarkers=()
 has_zero_time=false
+epsilon=$(echo "scale=8; 10^-8" | bc)
 
 while IFS= read -r line; do
 	is_begin_time=false
@@ -411,8 +412,8 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	end_seconds="$(echo "$end_time" | awk -F: '{ print ($1 * 60) + $2 }')"
 	sox "$audio_input" -b 32 .$md5-trimmed.wav trim "$begin_time" ="$end_time"
 	audio_input=.$md5-trimmed.wav
-	begin_frame="$(printf "%.0f\n" "$(echo "$begin_seconds*$sample_rate" | bc -l)")"
-	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate" | bc -l)")"
+	begin_frame="$(printf "%.0f\n" "$(echo "$begin_seconds*$sample_rate+$epsilon" | bc -l)")"
+	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate+$epsilon" | bc -l)")"
 fi
 
 if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && ! $limit_test_output; then
@@ -435,7 +436,7 @@ for index in "${!warpmarkers[@]}"; do
 	if [[ ! -z "$next_warpmarker" ]]; then
 		next_warpmarker_time="$(echo "$next_warpmarker" | cut -d \| -f 1)"
 		next_seconds="$(echo "$next_warpmarker_time" | awk -F: '{ print ($1 * 60) + $2 }')"
-		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate" | bc -l)")"
+		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate+$epsilon" | bc -l)")"
 		if [[ "$(echo "$total_frames-$source_frame < 1" | bc -l)" == 1 ]]; then
 			echo "Error: Invalid time - value greater than file length ($next_warpmarker)." && exit 1
 		fi
@@ -449,13 +450,17 @@ for index in "${!warpmarkers[@]}"; do
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
 	if [[ $tempo == [0-9]* ]]; then
-		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+		#replace
+		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
 		label="$(echo "$warpmarker" | cut -d \| -f 3)"
 		if [[ ! -z $label ]]; then
 			if grep -q "^$label|" .$md5-labels 2>/dev/null; then
 				echo "Error: Label already exists ($warpmarker)." && exit 1
 			fi
+			#replace
+			#label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			echo "$label|$tempo|$label_delta" >> .$md5-labels
 		fi
@@ -478,14 +483,16 @@ for index in "${!warpmarkers[@]}"; do
 	if [[ ! -z "$next_warpmarker" ]]; then
 		next_warpmarker_time="$(echo "$next_warpmarker" | cut -d \| -f 1)"
 		next_seconds="$(echo "$next_warpmarker_time" | awk -F: '{ print ($1 * 60) + $2 }')"
-		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate" | bc -l)")"
+		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate+$epsilon" | bc -l)")"
 	else
 		source_frame=$total_frames
 	fi
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
 	if [[ $tempo == [0-9]* ]]; then
-		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+		#replace
+		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
 		label="$(echo "$warpmarker" | cut -d \| -f 3)"
 		if [[ ! -z $label ]]; then
@@ -498,17 +505,20 @@ for index in "${!warpmarkers[@]}"; do
 			else
 				padding=18
 			fi
-			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+			#replace
+			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		else
 			if [[ $tempo == *\** ]]; then
 				padding=16
 			else
 				padding=23
 			fi
-			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+			#replace
+			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		fi
 	elif [[ "$warpmarker_time" == "$end_time" ]]; then
-		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+		#replace
+		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 	else
 		label="$tempo"
 		if ! grep -q "^$label|" .$md5-labels 2>/dev/null; then
@@ -516,39 +526,40 @@ for index in "${!warpmarkers[@]}"; do
 		fi
 		label_tempo=$(grep "^$label|" .$md5-labels | cut -d \| -f 2)
 		label_delta=$(grep "^$label|" .$md5-labels | cut -d \| -f 3)
-		target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+$label_delta" | bc -l)")"
-		unadjusted_target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/(($label_tempo)*$scale))" | bc -l)")"
+		target_frame="$(echo "$previous_target_frame+$label_delta" | bc -l)"
+		unadjusted_target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/(($label_tempo)*$scale))" | bc -l)"
 		label_tempo_multiplier="$(echo "($unadjusted_target_frame-$previous_target_frame)/($target_frame-$previous_target_frame)" | bc -l)"
 		if [[ "$label_tempo" == *\** ]]; then
 			label_tempo_initial=$(echo "$label_tempo" | cut -d \* -f 1)
 			label_tempo_scale=$(echo "$label_tempo" | cut -d \* -f 2)
-			label_tempo_string="$label_tempo_initial*$(printf "%06.4f\n" "$(echo "$label_tempo_scale*$label_tempo_multiplier" | bc -l)")"
+			label_tempo_string="$label_tempo_initial*$(printf "%06.4f\n" "$(echo "$label_tempo_scale*$label_tempo_multiplier+$epsilon" | bc -l)")"
 		else
-			label_tempo_string="$label_tempo*$(printf "%06.4f\n" "$label_tempo_multiplier")"
+			label_tempo_string="$label_tempo*$(printf "%06.4f\n" "$(echo "$label_tempo_multiplier+$epsilon" | bc -l)")"
 		fi
 		label_tempo_final_multiplier=$(echo "$label_tempo_string" | cut -d \* -f 2)
 		if [[ "$(echo "$label_tempo_final_multiplier > 9.9999" | bc -l)" == 1 ]]; then
 			echo "Error: Label tempo final multipler greater than 9.9999 ($warpmarker)." && exit 1
 		fi
-		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps"
+		#replace
+		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 	fi
 	
 	echo "$line" >> "$log"
-	echo "$source_frame $target_frame" >> .$md5-timemap
+	echo "$source_frame $(printf "%.0f\n" "$(echo "$target_frame+$epsilon" | bc -l)")" >> .$md5-timemap
 	
 	previous_source_frame=$source_frame
 	previous_target_frame=$target_frame
 	previous_target_time_s=$(echo "$previous_target_frame/$sample_rate" | bc -l)
 	previous_target_time_s_decimal=.$(echo "$previous_target_time_s" | cut -d . -f 2)
-	previous_target_time_ms=$(echo $(date -d@$(printf "%.3f\n" $previous_target_time_s) -u +%M:%S.%N) | cut -c1-9)
+	previous_target_time_ms=$(echo $(date -d@$(printf "%.3f\n" "$(echo $previous_target_time_s+$epsilon | bc -l)") -u +%M:%S.%N) | cut -c1-9)
 	round_at=$(echo "(1000-(1000/$fps))/1000" | bc -l)
 	
 	if [[ $(echo "$previous_target_time_s_decimal < $round_at" | bc -l) == 1 ]]; then
-		previous_target_time_fps_2=$(printf "%02.0f\n" $(echo "$previous_target_time_s_decimal*$fps" | bc -l))
-		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $previous_target_time_s) -u +%M:%S)
+		previous_target_time_fps_2=$(printf "%02.0f\n" $(echo "$previous_target_time_s_decimal*$fps+$epsilon" | bc -l))
+		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" "$(echo $previous_target_time_s+$epsilon | bc -l)") -u +%M:%S)
 	elif [[ $(echo "$previous_target_time_s_decimal >= $round_at" | bc -l) == 1 ]]; then
 		previous_target_time_fps_2=00
-		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $(echo "$previous_target_time_s+1" | bc -l)) -u +%M:%S)
+		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $(echo "$previous_target_time_s+1+$epsilon" | bc -l)) -u +%M:%S)
 	fi
 	previous_target_time_fps=$previous_target_time_fps_1.$previous_target_time_fps_2
 done
@@ -570,7 +581,8 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	done < .$md5-timemap
 	mv .$md5-timemap-trimmed .$md5-timemap
 else
-	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $previous_target_frame) $previous_target_time_ms $previous_target_time_fps" >> "$log"
+	#replace
+	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log"
 fi
 
 rubberband -t 1 --timemap .$md5-timemap --$engine --ignore-clipping "$audio_input" .$md5-tmp.wav

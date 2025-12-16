@@ -20,6 +20,7 @@ START="$1"
 END="$2"
 BEATS="$3"
 BPM="$4"
+epsilon=$(echo "scale=8; 10^-8" | bc)
 
 # Function to convert MM:SS.mmm → seconds (as decimal)
 time_to_seconds() {
@@ -52,10 +53,9 @@ desired_duration=$(echo "$BEATS * 60 / $BPM" | bc -l)
 ratio=$(echo "$duration / $desired_duration" | bc -l)
 
 echo "ratio: $ratio"
-base_tempo=$(printf "%0.2f" $ratio)
+base_tempo=$(printf "%0.2f" $(echo "($duration / $desired_duration) + $epsilon" | bc -l))
 echo "base_tempo: $base_tempo"
-# Add epsilon to compensate for binary representation error
-scale=$(printf "%0.6f" $(echo "($ratio / $base_tempo) + 0.00000001" | bc -l))
+scale=$(printf "%0.6f" $(echo "($ratio / $base_tempo) + $epsilon" | bc -l))
 echo "scale: $scale"
 
 
