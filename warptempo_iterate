@@ -197,7 +197,7 @@ for permutation in "${permutations[@]}"; do
 		sed -i "s|-$key|$inverted_value|g" test/"$alternate_title".warpmarkers
 	done
 	
-	"$(dirname "$0")"/warptempo test/"$alternate_title".warpmarkers test/"$alternate_title".settings
+	"$(dirname "$(realpath "$0")")"/warptempo test/"$alternate_title".warpmarkers test/"$alternate_title".settings
 	
 	((permutations_i++))
 done
