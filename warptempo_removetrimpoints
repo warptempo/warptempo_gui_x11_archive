@@ -3,6 +3,7 @@
 if [ ! -t 0 ]; then exit; fi
 shopt -s nocaseglob
 set -e
+export LC_ALL=C
 
 if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo "Remove trim points."

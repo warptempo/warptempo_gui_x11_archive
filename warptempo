@@ -1,21 +1,27 @@
 #!/bin/bash
-#run only from terminal
+# Run only from terminal
 if [ ! -t 0 ]; then exit; fi
+
 shopt -s nocaseglob
 set -e
+export LC_ALL=C
 
+# Display help
 if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo "Warp tempo by applying warp markers."
 	echo
-	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings>"
+	echo "   Usage: "$(basename "$0")" <warpmarkers> <settings> [log]"
 	echo
-	echo "The default inputs are .warpmarkers and .settings. If these do not exist, run "$(basename "$0")" with no arguments to create blank templates."
+	echo "The default inputs are .warpmarkers and .settings. If these do not exist, run "$(basename "$0")" with no arguments to create blank templates. Log is optional. If provided, or if .log exists, the second column of .warpmarkers can contain a timestamp (MM:SS.mmm) to reference that point in the log."
 	exit
 fi
 
+# Set default files
 warpmarkers_file="${1:-"$(ls .warpmarkers *.warpmarkers 2>/dev/null | head -n 1)"}"
 settings_file="${2:-"$(ls .settings *.settings 2>/dev/null | head -n 1)"}"
+log_file="${3:-"$(ls .log 2>/dev/null | head -n 1)"}"
 
+# Create templates if no inputs found
 if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "$settings_file" ]]; then
 	warpmarkers_file=.warpmarkers
 	settings_file=.settings
@@ -40,6 +46,7 @@ fi
 
 preliminary_errors=0
 
+# Check file existence and extensions
 if [[ ! -f "$warpmarkers_file" ]]; then
 	echo "Error: Warp markers file does not exist." && ((preliminary_errors++))
 fi
@@ -56,14 +63,20 @@ if [[ "$settings_file" != *.settings ]]; then
 	echo "Error: Settings file extension must be .settings." && ((preliminary_errors++))
 fi
 
+if [[ ! -z "$log_file" ]] && [[ ! -f "$log_file" ]]; then
+	echo "Error: Log file does not exist." && ((preliminary_errors++))
+fi
+
 if [[ $preliminary_errors -gt 0 ]]; then
 	exit 1
 fi
 
+# Load settings
 . "$settings_file"
 
 validation_errors=0
 
+# Validate title and input source
 if [[ -z "$title" ]]; then
 	echo "Error: Title is required." && ((validation_errors++))
 fi
@@ -76,6 +89,7 @@ elif [[ ! -z "$audio_input" ]] && [[ -f "$audio_input" ]] && [[ "$(file --mime-t
 	echo "Error: Audio input file is not a valid audio file." && ((validation_errors++))
 fi
 
+# Validate scale
 if [[ ! -z "$scale" ]] && [[ ! "$scale" =~ ^([0-9]*\.[0-9]+|[0-9]+\.?[0-9]*)$ ]]; then
 	echo "Error: Scale is not a valid decimal." && ((validation_errors++))
 elif [[ ! -z "$scale" ]]; then
@@ -84,6 +98,7 @@ else
 	scale=$(printf "%0.6f\n" 1)
 fi
 
+# Validate booleans
 if [[ ! -z "$limit_test_output" ]] && [[ "$limit_test_output" != true ]] && [[ "$limit_test_output" != false ]]; then
 	echo "Error: Limit test output must be true or false." && ((validation_errors++))
 elif [[ -z "$limit_test_output" ]]; then
@@ -96,6 +111,7 @@ elif [[ -z "$limit_final_output" ]]; then
 	limit_final_output=true
 fi
 
+# Validate limiter settings
 if [[ ! -z "$level_in" ]] && [[ ! "$level_in" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
 	echo "Error: Level in is not a valid decimal." && ((validation_errors++))
 elif [[ ! -z "$level_in" ]]; then
@@ -128,8 +144,7 @@ else
 	attack=$(printf "%0.1f\n" 10)
 fi
 
-if [[ ! -z "$release" ]] && [[ ! "$release" =~ ^([1-9][0-9]{0,2}(\.[0-9]+)?|[1-7][0-9]{3}(\.[0-9]+)?|8000(\.0+)?)$
- ]]; then
+if [[ ! -z "$release" ]] && [[ ! "$release" =~ ^([1-9][0-9]{0,2}(\.[0-9]+)?|[1-7][0-9]{3}(\.[0-9]+)?|8000(\.0+)?)$ ]]; then
 	echo "Error: Release must be from 1 to 8000." && ((validation_errors++))
 elif [[ ! -z "$release" ]]; then
 	release=$(printf "%0.1f\n" "$release")
@@ -145,6 +160,7 @@ else
 	fps=$(printf "%0.2f\n" 60)
 fi
 
+# Validate browser for yt-dlp
 if [[ ! -z "$browser" ]]; then
 	supported_browsers=(brave chrome chromium edge firefox opera safari vivaldi whale none)
 	supported=false
@@ -161,6 +177,7 @@ else
 	browser=firefox
 fi
 
+# Validate rubberband engine
 if [[ ! -z "$engine" ]]; then
 	supported_engines=(fast fine)
 	supported=false
@@ -181,6 +198,7 @@ if [[ $validation_errors -gt 0 ]]; then
 	exit 1
 fi
 
+# Check dependencies
 requirements=(bc ffmpeg ffprobe jq rubberband sox yt-dlp)
 requirement_errors=0
 
@@ -195,6 +213,7 @@ if [[ $requirement_errors -gt 0 ]]; then
 	exit 1
 fi
 
+# Download audio if not local
 if [[ ! -f "$audio_input" ]]; then
 	if [[ "$browser" == none ]]; then
 		best_audio=$(yt-dlp -J "$url" | jq -r '
@@ -213,6 +232,8 @@ if [[ ! -f "$audio_input" ]]; then
 			| .[0]
 		')
 	fi
+	
+	# Determine extension
 	format_id=$(echo "$best_audio" | jq -r '.format_id')
 	acodec=$(echo "$best_audio" | jq -r '.acodec')
 	case "$acodec" in
@@ -224,17 +245,21 @@ if [[ ! -f "$audio_input" ]]; then
 		alac) ext="m4a" ;;
 		*) ext="m4a" ;;
 	esac
+	
 	if [[ "$browser" == none ]]; then
 		base_filename=$(yt-dlp --restrict-filenames -f "$format_id" --print filename -o "%(title)s-[%(id)s]" "$url")
 	else
 		base_filename=$(yt-dlp --restrict-filenames -f "$format_id" --print filename -o "%(title)s-[%(id)s]" --cookies-from-browser $browser "$url")
 	fi
 	filename="$base_filename.$ext"
+	
+	# Update setting if filename differs
 	if [[ "$audio_input" != "$filename" ]]; then
 		sed -i "s/audio_input=.*/audio_input=\"$filename\"/" "$settings_file"
 		audio_input="$filename"
 	fi
 
+	# Perform download
 	if [[ ! -f "$audio_input" ]]; then
 		if [[ "$browser" == none ]]; then
 			echo "Downloading source file..."
@@ -242,8 +267,9 @@ if [[ ! -f "$audio_input" ]]; then
 		else
 			echo "Downloading source file... (login to YouTube Premium for best audio quality)"
 			yt-dlp -f bestaudio --extract-audio --restrict-filenames --cookies-from-browser $browser "$url"
-
 		fi
+		
+		# Wait for download completion
 		count=0
 		timeout=3600
 		while [[ ! -f "$audio_input" ]]; do
@@ -256,23 +282,26 @@ if [[ ! -f "$audio_input" ]]; then
 	fi
 fi
 
+# Prepare temp files
 md5=$(md5sum "$audio_input" | cut -d ' ' -f 1)
 audio_output="$title.wav"
 mkdir -p "$(dirname "$audio_output")"
-log="$title.log"
+log_output="$title.log"
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "$log"
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "$log_output"
 
 if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then 
 	echo >> "$warpmarkers_file"
 fi
 
-prev_tempo=1.00
+# Parse warpmarkers
+previous_tempo=1.00
 warpmarkers=()
 has_zero_time=false
 epsilon=$(echo "scale=8; 10^-8" | bc)
 
 while IFS= read -r line; do
+	# Check for start/end trim settings
 	is_begin_time=false
 	is_end_time=false
 	if [[ "$line" == begin_time=* ]] || [[ "$line" == b=* ]]; then
@@ -285,7 +314,8 @@ while IFS= read -r line; do
 		is_end_time=true
 	fi
 	
-	if [[ "$line" != ??:??.???*\|?.??* ]] && [[ "$line" != ??:??.???*\|'""""'* ]]; then
+	# Skip invalid lines
+	if [[ "$line" != ??:??.???*\|?.??* ]] && [[ "$line" != ??:??.???*\|'""""'* ]] && [[ "$line" != ??:??.???*\|??:??.???* ]]; then
 		continue
 	fi
 	
@@ -293,11 +323,14 @@ while IFS= read -r line; do
 	time="$(echo "$line" | cut -d \| -f 1)"
 	tempo="$(echo "$line" | cut -d \| -f 2)"
 	label="$(echo "$line" | cut -d \| -f 3)"
+	
+	# Skip disabled labels
 	if [[ "$label" =~ ^#[a-z]\.[a-z0-9]{2}$ ]]; then
 		echo "${label:1}" >> .$md5-labels-disabled
 		continue
 	fi
 	
+	# Validate timestamp
 	time_initial="${time:0:9}"
 	if [[ ! "$time_initial" =~ ^([0-5][0-9]):([0-5][0-9])\.[0-9]{3}$ ]]; then
 		echo "Error: Invalid time format - use MM:SS.mmm ($line)." && exit 1
@@ -311,6 +344,7 @@ while IFS= read -r line; do
 		echo "Error: First time must be 00:00.000 ($line)." && exit 1
 	fi
 	
+	# Calculate offsets
 	if [[ "$time" == ??:??.???+* ]] || [[ "$time" == ??:??.???-* ]]; then
 		sign="${time:9:1}"
 		time_offset="${time:10}"
@@ -325,8 +359,16 @@ while IFS= read -r line; do
 		time=$(echo $(date -d@$(printf "%.3f\n" $seconds_total) -u +%M:%S.%N) | cut -c1-9)
 	fi
 	
-	if [[ "$tempo" == '""""' ]]; then
-		tempo=$prev_tempo
+	# Validate tempo and perform calculations
+	if [[ "$tempo" =~ ^[0-5][0-9]:[0-5][0-9]\.[0-9]{3}$ ]]; then
+		if [[ -z "$log_file" ]]; then
+			echo "Error: Log time found in second column but no log file provided ($line)." && exit 1
+		fi
+		if [[ "$time" == "00:00.000" ]]; then
+			echo "Error: Log time cannot be used in second column in first time ($line)." && exit 1
+		fi
+	elif [[ "$tempo" == '""""' ]]; then
+		tempo=$previous_tempo
 	elif [[ "$tempo" == [0-9]* ]]; then
 		if [[ ! "$tempo" =~ ^([0-9]\.[0-9]{2}([+-][0-9]\.[0-9]{2})*)(\*[0-9]\.[0-9]{4})?$ ]]; then
 			echo "Error: Invalid tempo format - use 1.00(±0.01) or 1.00(±0.01)*1.0000, etc. Addition and subtraction will be performed before multiplication. Examples: 1.00, 1.00+0.01-0.02, 1.00*1.0000, 1.00+0.01-0.02*1.0000 ($line)." && exit 1
@@ -354,12 +396,14 @@ while IFS= read -r line; do
 	
 	warpmarker="$time|$tempo"
 	
+	# Handle labels
 	if [[ ! -z "$label" ]]; then
 		if [[ ! "$label" =~ ^[a-z]\.[a-z0-9]{2}$ ]]; then
 			echo "Error: Invalid label - use a.01, b.2b, etc. First character must be a lowercase letter, followed by a period, then any two lowercase letters or digits. Use a hash symbol before the declaration of the label (ie, when the label is declared after a tempo value) to disable all warp markers with that label ($line)." && exit 1
 		fi
 		warpmarker="$warpmarker|$label"
-	elif [[ "$prev_tempo" == "$tempo" ]]; then
+	elif [[ "$previous_tempo" == "$tempo" ]] && [[ "$time" != "00:00.000" ]]; then
+		# Skip redundant markers
 		previous_warpmarker="${warpmarkers[-1]}"
 		previous_warpmarker_tempo="$(echo "$previous_warpmarker" | cut -d \| -f 2)"
 		previous_warpmarker_label="$(echo "$previous_warpmarker" | cut -d \| -f 3)"
@@ -369,11 +413,12 @@ while IFS= read -r line; do
 	fi
 	
 	if [[ "$tempo" == [0-9]* ]]; then
-		prev_tempo="$tempo"
+		previous_tempo="$tempo"
 	fi
 	
 	warpmarkers+=("$warpmarker")
 	
+	# Set begin/end times
 	if $is_begin_time; then
 		if [[ "$time" == "00:00.000" ]]; then
 			echo "Error: Begin time cannot be 00:00.000 ($line)." && exit 1
@@ -390,6 +435,7 @@ while IFS= read -r line; do
 	fi
 done < "$warpmarkers_file"
 
+# Filter disabled labels from markers
 if [[ -f .$md5-labels-disabled ]]; then
 	warpmarkers_tmp=()
 	for warpmarker in "${warpmarkers[@]}"; do
@@ -402,11 +448,13 @@ if [[ -f .$md5-labels-disabled ]]; then
 	unset warpmarkers_tmp
 fi
 
+# Get audio stats
 sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep sample_rate= | cut -d = -f 2)"
 total_frames="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration_ts= | cut -d = -f 2)"
 total_seconds="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration= | cut -d = -f 2)"
 total_time_ms=$(echo $(date -d@$(printf "%.3f\n" $total_seconds) -u +%M:%S.%N) | cut -c1-9)
 
+# Trim audio if requested
 if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	begin_seconds="$(echo "$begin_time" | awk -F: '{ print ($1 * 60) + $2 }')"
 	end_seconds="$(echo "$end_time" | awk -F: '{ print ($1 * 60) + $2 }')"
@@ -416,6 +464,7 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate+$epsilon" | bc -l)")"
 fi
 
+# Clean up output name
 if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && ! $limit_test_output; then
 	audio_output="${audio_output%.wav}-limit_test_output=false.wav"
 	rm -f "$audio_output"
@@ -427,6 +476,7 @@ fi
 previous_source_frame=0
 previous_target_frame=0
 
+# First pass: Calculate label deltas
 for index in "${!warpmarkers[@]}"; do
 	warpmarker="${warpmarkers[index]}"
 	next_warpmarker="${warpmarkers[$((index+1))]}"
@@ -449,8 +499,9 @@ for index in "${!warpmarkers[@]}"; do
 	fi
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
-	if [[ $tempo == [0-9]* ]]; then
-		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+	if [[ "$tempo" =~ ^[0-5][0-9]:[0-5][0-9]\.[0-9]{3}$ ]]; then
+		target_frame=$previous_target_frame
+	elif [[ $tempo == [0-9]* ]]; then
 		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
 		label="$(echo "$warpmarker" | cut -d \| -f 3)"
@@ -458,7 +509,6 @@ for index in "${!warpmarkers[@]}"; do
 			if grep -q "^$label|" .$md5-labels 2>/dev/null; then
 				echo "Error: Label already exists ($warpmarker)." && exit 1
 			fi
-			#label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			label_delta="$(echo "$target_frame-$previous_target_frame" | bc -l)"
 			echo "$label|$tempo|$label_delta" >> .$md5-labels
 		fi
@@ -473,30 +523,76 @@ previous_target_frame=0
 previous_target_time_ms=00:00.000
 previous_target_time_fps=00:00.00
 
+# Second pass: Generate timemap and logs
+# This loop calculates the exact sample frame positions for the output audio (target_frame)
+# based on the input audio positions (source_frame) and the desired tempo/duration.
 for index in "${!warpmarkers[@]}"; do
 	warpmarker="${warpmarkers[index]}"
 	next_warpmarker="${warpmarkers[$((index+1))]}"
 	warpmarker_time="$(echo "$warpmarker" | cut -d \| -f 1)"
 	
+	# --- Calculate Source Frame (Input Audio Position) ---
 	if [[ ! -z "$next_warpmarker" ]]; then
 		next_warpmarker_time="$(echo "$next_warpmarker" | cut -d \| -f 1)"
 		next_seconds="$(echo "$next_warpmarker_time" | awk -F: '{ print ($1 * 60) + $2 }')"
+		# Convert time to samples: seconds * sample_rate
 		source_frame="$(printf "%.0f\n" "$(echo "$next_seconds*$sample_rate+$epsilon" | bc -l)")"
 	else
+		# If no next marker, we use the total length of the file
 		source_frame=$total_frames
 	fi
 	
 	tempo="$(echo "$warpmarker" | cut -d \| -f 2)"
-	if [[ $tempo == [0-9]* ]]; then
-		#target_frame="$(printf "%.0f\n" "$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)")"
+
+	# --- Logic Branch 1: Log Sync Mode ---
+	# If the "tempo" column contains a timestamp (MM:SS.mmm), we are syncing 
+	# this point to an existing frame in an external log file.
+	if [[ "$tempo" =~ ^[0-5][0-9]:[0-5][0-9]\.[0-9]{3}$ ]]; then
+		log_file_time="$tempo"
+		# Search the external log file for the matching time line
+		log_file_line=$(grep -E "^${log_file_time//./\\.}" "$log_file" || true)
+		if [[ -z "$log_file_line" ]]; then
+			echo "Error: Time $log_file_time not found in log file ($warpmarker)." && exit 1
+		fi
+		
+		# Extract the target frame from the external log line (Fixed width parsing)
+		current_log_file_target_frame="${log_file_line:39:9}"
+		# Strip leading zeros to prevent octal interpretation, default to 0
+		current_log_file_target_frame="${current_log_file_target_frame#"${current_log_file_target_frame%%[!0]*}"}"
+		current_log_file_target_frame="${current_log_file_target_frame:-0}"
+		
+		# Get the NEXT line from the log to calculate the duration (delta)
+		context_lines=$(grep -A1 -E "^${log_file_time//./\\.}" "$log_file")
+		next_line=$(echo "$context_lines" | tail -n 1)
+		
+		next_log_file_target_frame="${next_line:39:9}"
+		next_log_file_target_frame="${next_log_file_target_frame#"${next_log_file_target_frame%%[!0]*}"}"
+		next_log_file_target_frame="${next_log_file_target_frame:-0}"
+		
+		# Calculate how many frames passed in the reference log and apply that delta here
+		log_file_delta=$(echo "$next_log_file_target_frame - $current_log_file_target_frame" | bc -l)
+		target_frame=$(echo "$previous_target_frame + $log_file_delta" | bc -l)
+		
+		padding=18
+		line="$warpmarker_time|$log_file_time $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+
+	# --- Logic Branch 2: Standard Tempo Mode ---
+	# If tempo is a number (e.g. 1.00), calculate target frames using the speed formula.
+	elif [[ $tempo == [0-9]* ]]; then
+		# Formula: Target = Previous + ( InputDuration/(Tempo * GlobalScale) )
 		target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/($tempo*$scale))" | bc -l)"
 	
 		label="$(echo "$warpmarker" | cut -d \| -f 3)"
+		
+		# If this marker defines a Label (e.g. "a.01"), store the duration for later retrieval
 		if [[ ! -z $label ]]; then
 			if ! grep -q "^$label|" .$md5-labels 2>/dev/null; then
 				echo "Error: Label does not exist ($warpmarker)." && exit 1
 			fi
+			# Retrieve the pre-calculated delta from Pass 1
 			label_delta="$(grep "^$label|" .$md5-labels | cut -d \| -f 3)"
+			
+			# Adjust padding for log output readability based on multiplication syntax
 			if [[ $tempo == *\** ]]; then
 				padding=11
 			else
@@ -504,6 +600,7 @@ for index in "${!warpmarkers[@]}"; do
 			fi
 			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		else
+			# Standard number without label
 			if [[ $tempo == *\** ]]; then
 				padding=16
 			else
@@ -511,18 +608,34 @@ for index in "${!warpmarkers[@]}"; do
 			fi
 			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 		fi
+
+	# --- Logic Branch 3: End of File ---
 	elif [[ "$warpmarker_time" == "$end_time" ]]; then
 		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+
+	# --- Logic Branch 4: Label Reference Mode ---
+	# If tempo is a label (e.g. "a.01"), we must fit the audio exactly into the 
+	# duration defined by that label in a previous section.
 	else
 		label="$tempo"
 		if ! grep -q "^$label|" .$md5-labels 2>/dev/null; then
 			echo "Error: Label does not exist ($warpmarker)." && exit 1
 		fi
+		
+		# Retrieve stored Tempo and Duration (Delta) associated with this label
 		label_tempo=$(grep "^$label|" .$md5-labels | cut -d \| -f 2)
 		label_delta=$(grep "^$label|" .$md5-labels | cut -d \| -f 3)
+		
+		# Calculate the hard target frame based on the stored delta
 		target_frame="$(echo "$previous_target_frame+$label_delta" | bc -l)"
+		
+		# Calculate what the target WOULD be if we just used the raw tempo
 		unadjusted_target_frame="$(echo "$previous_target_frame+(($source_frame-$previous_source_frame)/(($label_tempo)*$scale))" | bc -l)"
+		
+		# Calculate a multiplier to force the unadjusted frame to match the hard target
 		label_tempo_multiplier="$(echo "($unadjusted_target_frame-$previous_target_frame)/($target_frame-$previous_target_frame)" | bc -l)"
+		
+		# Format the new calculated tempo string for the log output
 		if [[ "$label_tempo" == *\** ]]; then
 			label_tempo_initial=$(echo "$label_tempo" | cut -d \* -f 1)
 			label_tempo_scale=$(echo "$label_tempo" | cut -d \* -f 2)
@@ -530,6 +643,8 @@ for index in "${!warpmarkers[@]}"; do
 		else
 			label_tempo_string="$label_tempo*$(printf "%06.4f\n" "$(echo "$label_tempo_multiplier+$epsilon" | bc -l)")"
 		fi
+		
+		# Safety check: Ensure the multiplier isn't absurdly high
 		label_tempo_final_multiplier=$(echo "$label_tempo_string" | cut -d \* -f 2)
 		if [[ "$(echo "$label_tempo_final_multiplier > 9.9999" | bc -l)" == 1 ]]; then
 			echo "Error: Label tempo final multipler greater than 9.9999 ($warpmarker)." && exit 1
@@ -537,14 +652,20 @@ for index in "${!warpmarkers[@]}"; do
 		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
 	fi
 	
-	echo "$line" >> "$log"
+	# Write the formatted line to the log and the raw frames to the timemap
+	echo "$line" >> "$log_output"
 	echo "$source_frame $(printf "%.0f\n" "$(echo "$target_frame+$epsilon" | bc -l)")" >> .$md5-timemap
 	
+	# --- Update Previous Variables for Next Iteration ---
 	previous_source_frame=$source_frame
 	previous_target_frame=$target_frame
+	
+	# Calculate Human Readable Time (Min:Sec.ms) for the log
 	previous_target_time_s=$(echo "$previous_target_frame/$sample_rate" | bc -l)
 	previous_target_time_s_decimal=.$(echo "$previous_target_time_s" | cut -d . -f 2)
 	previous_target_time_ms=$(echo $(date -d@$(printf "%.3f\n" "$(echo $previous_target_time_s+$epsilon | bc -l)") -u +%M:%S.%N) | cut -c1-9)
+	
+	# Calculate Video Frames (MM:SS.FrameNumber) based on FPS setting
 	round_at=$(echo "(1000-(1000/$fps))/1000" | bc -l)
 	
 	if [[ $(echo "$previous_target_time_s_decimal < $round_at" | bc -l) == 1 ]]; then
@@ -557,6 +678,7 @@ for index in "${!warpmarkers[@]}"; do
 	previous_target_time_fps=$previous_target_time_fps_1.$previous_target_time_fps_2
 done
 
+# Adjust timemap for trim
 if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	begin_target_frame=
 	while IFS= read -r line; do
@@ -574,11 +696,13 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	done < .$md5-timemap
 	mv .$md5-timemap-trimmed .$md5-timemap
 else
-	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log"
+	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log_output"
 fi
 
+# Run rubberband
 rubberband -t 1 --timemap .$md5-timemap --$engine --ignore-clipping "$audio_input" .$md5-tmp.wav
 
+# Apply limiting or copy
 if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) || $limit_final_output; then
 	af="alimiter=latency=enabled:level=disabled:asc=disabled"
 	af+=":level_in=${level_in}dB"
