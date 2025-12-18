@@ -16,7 +16,6 @@ git clone --recurse-submodules https://github.com/bungee-audio-stretch/bungee.gi
 mkdir build && cd build
 cmake ..
 make
-
 ```
 
 Once compiled, you can use engine=bungee in your .settings file.
