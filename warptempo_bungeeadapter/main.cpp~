@@ -3,7 +3,6 @@
 #include <fstream>
 #include <cmath>
 #include <algorithm>
-#include <iomanip>
 #include <sndfile.h>
 #include "Bungee.h"
 
@@ -16,30 +15,6 @@ struct TimeMapPoint {
     double source_frame;
     double target_frame;
 };
-
-// Helper: Calculates how many Output Frames are needed to render the input
-long calculate_output_duration(long total_input_frames, const std::vector<TimeMapPoint>& map) {
-    if (map.empty()) return total_input_frames;
-    if (total_input_frames <= map.front().source_frame) return total_input_frames;
-
-    for (size_t i = 0; i < map.size() - 1; ++i) {
-        if (total_input_frames >= map[i].source_frame && total_input_frames < map[i+1].source_frame) {
-            double section_input_len = map[i+1].source_frame - map[i].source_frame;
-            double section_output_len = map[i+1].target_frame - map[i].target_frame;
-            double progress = total_input_frames - map[i].source_frame;
-            double ratio = section_output_len / section_input_len;
-            return (long)(map[i].target_frame + (progress * ratio));
-        }
-    }
-
-    const auto& last = map.back();
-    const auto& prev = map[map.size()-2];
-    double last_in = last.source_frame - prev.source_frame;
-    double last_out = last.target_frame - prev.target_frame;
-    if (last_in <= 0.0001) last_in = 0.0001;
-    
-    return (long)(last.target_frame + ((total_input_frames - last.source_frame) * (last_out / last_in)));
-}
 
 void get_timemap_status(double target_frame, const std::vector<TimeMapPoint>& map, double& out_source_frame, double& out_speed) {
     if (map.empty()) {
@@ -142,33 +117,28 @@ int main(int argc, char* argv[]) {
         timemap.insert(timemap.begin(), {0.0, 0.0});
     }
 
-    // --- AUTO-CALCULATE OUTPUT DURATION ---
-    long total_job_frames = calculate_output_duration(sfinfo.frames, timemap);
-    
-    // Update output info to match this duration
+    // FORCE 32-BIT FLOAT OUTPUT
     SF_INFO out_sfinfo = sfinfo; 
-    out_sfinfo.frames = total_job_frames;
+    if (!timemap.empty()) out_sfinfo.frames = (long)timemap.back().target_frame;
     out_sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 
     SNDFILE* outfile = sf_open(argv[3], SFM_WRITE, &out_sfinfo);
     if (!outfile) { std::cerr << "Error opening output." << std::endl; return 1; }
 
     Bungee::Stretcher<Bungee::Basic> stretcher({sample_rate, sample_rate}, channels);
+    
     Bungee::Request request;
     request.pitch = 1.0; 
     
     std::vector<float> planar_grain_buffer;
+
     long current_output_frames_generated = 0;
+    long total_target_frames = (long)timemap.back().target_frame;
+    if (total_target_frames <= 0) total_target_frames = sfinfo.frames;
 
     std::cout << "Processing..." << std::endl;
-    
-    while (current_output_frames_generated < total_job_frames) {
-        // --- PROGRESS BAR ---
-        if (current_output_frames_generated % 4096 == 0 && total_job_frames > 0) {
-            float percent = (float)current_output_frames_generated / total_job_frames * 100.0f;
-            std::cout << "\rProgress: " << std::fixed << std::setprecision(1) << percent << "%" << std::flush;
-        }
-        
+
+    while (current_output_frames_generated < total_target_frames) {
         double mapped_source_pos, mapped_speed;
         get_timemap_status((double)current_output_frames_generated, timemap, mapped_source_pos, mapped_speed);
         
@@ -232,7 +202,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "\rProgress: 100.0%   " << std::endl;
     std::cout << "Done! Generated " << current_output_frames_generated << " frames." << std::endl;
 
     sf_close(outfile);

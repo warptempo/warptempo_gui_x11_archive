@@ -202,7 +202,9 @@ fi
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
 if [[ "$engine" == bungee ]]; then
 	adapter_path="$(dirname "$(realpath "$0")")/warptempo_bungeeadapter/build/warptempo_bungeeadapter"
-	if [[ ! -x "$adapter_path" ]]; then
+	if [[ -x "$adapter_path"_pro ]]; then
+		adapter_path="$adapter_path"_pro
+	elif [[ ! -x "$adapter_path" ]]; then
 		echo "Error: Bungee adapter not found at $adapter_path" && ((requirement_errors++))
 	fi
 elif [[ "$engine" == rubberband ]]; then
@@ -710,9 +712,11 @@ fi
 if [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
 	"$adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
+	version_comment="$("$adapter_path" -v)"
 elif [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
+	version_comment="rubberband v$(rubberband -V 2>&1)"
 fi
 
 # Apply limiting or copy
@@ -724,7 +728,7 @@ if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) ||
 	af+=":attack=${attack}"
 	af+=":release=${release}"
 
-	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="rubberband v$(rubberband -V 2>&1)" -af "$af" "$audio_output"
+	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="$version_comment" -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter or set "
 	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
