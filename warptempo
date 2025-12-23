@@ -736,7 +736,7 @@ else
 	else
 		clip_warning+="limit_final_output=true."
 	fi
-	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="rubberband v$(rubberband -V 2>&1)" "$audio_output"
+	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "$audio_output"
 	echo
 	echo -e "$clip_warning"
 fi
