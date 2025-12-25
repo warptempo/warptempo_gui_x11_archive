@@ -20,7 +20,7 @@ make
 
 Once compiled, you can use engine=bungee in your .settings file.
 
-For limiting, use the script's default limiter (ffmpeg alimiter) by setting limit_final_output=true in .settings or leave limit_final_output=false and use an external limiter. Recommended settings for FabFilter Pro-L2: gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol-manual.pdf)).  
+For limiting, use the script's default limiter (ffmpeg alimiter) by setting limit_final_output=true in .settings or leave limit_final_output=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)).  
 
 Stream / download examples:  
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
