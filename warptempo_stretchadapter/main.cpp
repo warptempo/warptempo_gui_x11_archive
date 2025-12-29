@@ -157,18 +157,33 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\rProcessing: 100%" << std::endl;
 
-    // --- UPDATED: Trim Power-of-2 FFT Latency ---
-    // At 48kHz, the FFT likely snaps to 4096 samples (85.33ms)
-    // This is mathematically 2^12 samples
-    int latencyFrames = 4096; 
-
-    // Safety check for other sample rates (e.g. 44.1k would be different)
-    // If you ever switch to 44.1k, this logic handles the 120ms cap
-    if (sampleRate == 44100) latencyFrames = 4096; // Still likely 4096 (92ms)
+    // =========================================================
+    // --- NEW: FLUSH THE BUFFER (Recover the Tail) ---
+    // =========================================================
+    // The STFT engine holds audio in its buffer. We must push it out.
+    // We flush the same amount we intend to trim from the start (4096)
+    // so the final duration remains mathematically accurate.
     
-    std::cout << "Trimming latency: " << latencyFrames << " frames" 
-              << " (" << (latencyFrames * 1000.0 / sampleRate) << " ms)" 
-              << std::endl;
+    int latencyFrames = 4096; // Hardcoded Power-of-2 (85.33ms)
+    
+    std::cout << "Flushing internal buffer (" << latencyFrames << " frames)..." << std::endl;
+
+    // Prepare flush buffers
+    std::vector<std::vector<float>> flushOutput(channels, std::vector<float>(latencyFrames));
+    std::vector<float*> flushChPtrs(channels);
+    for (int c = 0; c < channels; ++c) flushChPtrs[c] = flushOutput[c].data();
+
+    // Tell library to generate output with no new input
+    stretch.flush(flushChPtrs, latencyFrames);
+
+    // Append flushed audio to our main planar output
+    for (int c = 0; c < channels; ++c) {
+        outputPlanar[c].insert(outputPlanar[c].end(), flushOutput[c].begin(), flushOutput[c].end());
+    }
+    // =========================================================
+
+    // Trimming Latency
+    std::cout << "Trimming start latency: " << latencyFrames << " frames..." << std::endl;
 
     for (int c = 0; c < channels; ++c) {
         if (outputPlanar[c].size() > (size_t)latencyFrames) {
@@ -177,7 +192,6 @@ int main(int argc, char* argv[]) {
             outputPlanar[c].clear();
         }
     }
-    // --------------------------------------------
 
     // 6. Write Output
     if (outputPlanar[0].empty()) {
@@ -197,3 +211,4 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
