@@ -29,7 +29,7 @@ cmake ..
 make
 ```
 
-Once compiled, you can use engine=stretch or engine=bungee in your .settings file.
+Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. 
 
 For limiting, use the script's default limiter (ffmpeg alimiter) by setting limit_final_output=true in .settings or leave limit_final_output=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the warptempo_vstpreset folder.
 

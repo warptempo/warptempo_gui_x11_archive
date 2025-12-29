@@ -40,7 +40,7 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo release=20 >> "$settings_file"
 	echo fps=60 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
-	echo engine=bungee >> "$settings_file"
+	echo engine=bungee+stretch >> "$settings_file"
 	echo >> "$settings_file"
 fi
 
@@ -179,7 +179,7 @@ fi
 
 # Validate rubberband engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(bungee stretch rubberband none)
+	supported_engines=(bungee+stretch bungee stretch rubberband none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -200,17 +200,19 @@ fi
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
-if [[ "$engine" == bungee ]]; then
-	adapter_path="$(dirname "$(realpath "$0")")/warptempo_bungeeadapter/build/warptempo_bungeeadapter"
-	if [[ ! -x "$adapter_path" ]]; then
-		echo "Error: Bungee adapter not found at $adapter_path" && ((requirement_errors++))
+if [[ "$engine" == bungee* ]]; then
+	bungee_adapter_path="$(dirname "$(realpath "$0")")/warptempo_bungeeadapter/build/warptempo_bungeeadapter"
+	if [[ ! -x "$bungee_adapter_path" ]]; then
+		echo "Error: Bungee adapter not found at $bungee_adapter_path" && ((requirement_errors++))
 	fi
-elif [[ "$engine" == stretch ]]; then
-	adapter_path="$(dirname "$(realpath "$0")")/warptempo_stretchadapter/build/warptempo_stretchadapter"
-	if [[ ! -x "$adapter_path" ]]; then
-		echo "Error: Signalsmith Stretch adapter not found at $adapter_path" && ((requirement_errors++))
+fi
+if [[ "$engine" == *stretch ]]; then
+	stretch_adapter_path="$(dirname "$(realpath "$0")")/warptempo_stretchadapter/build/warptempo_stretchadapter"
+	if [[ ! -x "$stretch_adapter_path" ]]; then
+		echo "Error: Signalsmith Stretch adapter not found at $stretch_adapter_path" && ((requirement_errors++))
 	fi
-elif [[ "$engine" == rubberband ]]; then
+fi
+if [[ "$engine" == rubberband ]]; then
 	requirements+=(rubberband)
 fi
 requirement_errors=0
@@ -301,7 +303,7 @@ audio_output="$title.wav"
 mkdir -p "$(dirname "$audio_output")"
 log_output="$title.log"
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav "$audio_output" "$log_output"
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap *"$title.wav" *"$title.log"
 
 if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then 
 	echo >> "$warpmarkers_file"
@@ -475,15 +477,6 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	audio_input=.$md5-trimmed.wav
 	begin_frame="$(printf "%.0f\n" "$(echo "$begin_seconds*$sample_rate+$epsilon" | bc -l)")"
 	end_frame="$(printf "%.0f\n" "$(echo "$end_seconds*$sample_rate+$epsilon" | bc -l)")"
-fi
-
-# Clean up output name
-if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && ! $limit_test_output; then
-	audio_output="${audio_output%.wav}-limit_test_output=false.wav"
-	rm -f "$audio_output"
-elif [[ -z "$begin_time" ]] && [[ -z "$end_time" ]] && ! $limit_final_output; then
-	audio_output="${audio_output%.wav}-limit_final_output=false.wav"
-	rm -f "$audio_output"
 fi
 
 previous_source_frame=0
@@ -714,12 +707,29 @@ fi
 
 if [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
-	"$adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
-	version_comment="$("$adapter_path" -v)"
+	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
+	version_comment="$("$bungee_adapter_path" -v)"
 elif [[ "$engine" == stretch ]]; then
 	# Run warptempo_stretchadapter
-	"$adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
-	version_comment="$("$adapter_path" -v)"
+	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
+	version_comment="$("$stretch_adapter_path" -v)"
+elif [[ "$engine" == bungee+stretch ]]; then
+	# Run warptempo_bungeeadapter
+	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp-bungee.wav
+	# Run warptempo_stretchadapter
+	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp-stretch.wav
+	version_comment="$("$bungee_adapter_path" -v), $("$stretch_adapter_path" -v)"
+	if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) || $limit_final_output; then
+		crossover=100
+		q_width=0.707
+		hp="highpass=f=$crossover:width_type=q:width=$q_width"
+		lp="lowpass=f=$crossover:width_type=q:width=$q_width"
+		filter_complex="[0:a]$hp,$hp[b_high];"
+		filter_complex+="[1:a]$lp,$lp[s_low];"
+		filter_complex+="[b_high][s_low]amix=inputs=2:duration=first:normalize=0"
+		ffmpeg -i .$md5-tmp-bungee.wav -i .$md5-tmp-stretch.wav -filter_complex "$filter_complex" -c:a pcm_f32le .$md5-tmp.wav
+		rm -f .$md5-tmp-bungee.wav .$md5-tmp-stretch.wav
+	fi
 elif [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
@@ -742,18 +752,18 @@ if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) ||
 
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="$version_comment" -af "$af" "$audio_output"
 else
-	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter or set "
-	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
-		clip_warning+="limit_test_output=true."
+	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
+	if [[ "$engine" == bungee+stretch ]]; then
+		ffmpeg -i .$md5-tmp-bungee.wav -c copy -metadata comment="$version_comment" "engine=bungee;limiter=false;$audio_output"
+		ffmpeg -i .$md5-tmp-stretch.wav -c copy -metadata comment="$version_comment" "engine=stretch;limiter=false;$audio_output"
 	else
-		clip_warning+="limit_final_output=true."
+		ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "limiter=false;$audio_output"
 	fi
-	ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "$audio_output"
 	echo
 	echo -e "$clip_warning"
 fi
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav
+rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap
 
 
 
