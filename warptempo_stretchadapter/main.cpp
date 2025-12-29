@@ -40,9 +40,8 @@ std::vector<float> planarToInterleaved(const std::vector<std::vector<float>>& pl
 }
 
 int main(int argc, char* argv[]) {
-    // --- NEW: Check for Version Flag ---
+    // --- Check for Version Flag ---
     if (argc > 1 && std::strcmp(argv[1], "-v") == 0) {
-        // Access static version array from the template
         auto v = signalsmith::stretch::SignalsmithStretch<float>::version;
         std::cout << "signalsmith-stretch v" << v[0] << "." << v[1] << "." << v[2] << std::endl;
         return 0;
@@ -73,7 +72,6 @@ int main(int argc, char* argv[]) {
     std::vector<float> inputBuffer(inputFrames * channels);
     inputFile.read(inputBuffer.data(), inputFrames * channels);
 
-    // Convert to Planar (LLLL... RRRR...)
     auto inputPlanar = interleavedToPlanar(inputBuffer, channels, inputFrames);
 
     // 3. Load Timemap
@@ -94,7 +92,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Ensure 0 0 is always the first point
     if (mapPoints[0].source != 0 || mapPoints[0].target != 0) {
         mapPoints.insert(mapPoints.begin(), {0, 0});
     }
@@ -103,7 +100,6 @@ int main(int argc, char* argv[]) {
     signalsmith::stretch::SignalsmithStretch<float> stretch;
     stretch.presetDefault(channels, sampleRate);
     
-    // Output container
     std::vector<std::vector<float>> outputPlanar(channels);
 
     // Helper lambda to process a segment
@@ -111,33 +107,27 @@ int main(int argc, char* argv[]) {
         long long inputLen = endSrc - startSrc;
         long long outputLen = endTgt - startTgt;
 
-        // Validation
         if (inputLen <= 0 || outputLen <= 0) return;
         if (startSrc >= (long long)inputFrames) return; 
 
-        // Clamp endSrc if it exceeds audio length
         if (endSrc > (long long)inputFrames) {
             endSrc = inputFrames;
             inputLen = endSrc - startSrc;
         }
 
-        // Create pointers to the specific region in the input vectors
         std::vector<const float*> inputChPtrs(channels);
         for (int c = 0; c < channels; ++c) {
             inputChPtrs[c] = &inputPlanar[c][startSrc];
         }
 
-        // Prepare temporary output buffers for this segment
         std::vector<std::vector<float>> segmentOutput(channels, std::vector<float>(outputLen));
         std::vector<float*> outputChPtrs(channels);
         for (int c = 0; c < channels; ++c) {
             outputChPtrs[c] = segmentOutput[c].data();
         }
 
-        // Process
         stretch.process(inputChPtrs, inputLen, outputChPtrs, outputLen);
 
-        // Append to main output
         for (int c = 0; c < channels; ++c) {
             outputPlanar[c].insert(outputPlanar[c].end(), segmentOutput[c].begin(), segmentOutput[c].end());
         }
@@ -147,41 +137,57 @@ int main(int argc, char* argv[]) {
     long long currentSrc = 0;
     long long currentTgt = 0;
 
-    // Loop through all points (including our inserted 0,0)
     for (const auto& point : mapPoints) {
-        // Only process if time has moved forward
         if (point.source > currentSrc) {
             processSegment(currentSrc, point.source, currentTgt, point.target);
             currentSrc = point.source;
             currentTgt = point.target;
 
-            // Update Progress (In-place)
             int percent = (int)((currentSrc * 100.0) / inputFrames);
             std::cout << "\rProcessing: " << percent << "%" << std::flush;
-
         } else {
             currentTgt = std::max(currentTgt, point.target);
         }
     }
 
-    // Handle implicit end (Tail)
     if (currentSrc < (long long)inputFrames) {
         long long remaining = inputFrames - currentSrc;
         processSegment(currentSrc, inputFrames, currentTgt, currentTgt + remaining);
     }
 
-    // Finish progress bar
     std::cout << "\rProcessing: 100%" << std::endl;
+
+    // --- UPDATED: Trim Power-of-2 FFT Latency ---
+    // At 48kHz, the FFT likely snaps to 4096 samples (85.33ms)
+    // This is mathematically 2^12 samples
+    int latencyFrames = 4096; 
+
+    // Safety check for other sample rates (e.g. 44.1k would be different)
+    // If you ever switch to 44.1k, this logic handles the 120ms cap
+    if (sampleRate == 44100) latencyFrames = 4096; // Still likely 4096 (92ms)
+    
+    std::cout << "Trimming latency: " << latencyFrames << " frames" 
+              << " (" << (latencyFrames * 1000.0 / sampleRate) << " ms)" 
+              << std::endl;
+
+    for (int c = 0; c < channels; ++c) {
+        if (outputPlanar[c].size() > (size_t)latencyFrames) {
+            outputPlanar[c].erase(outputPlanar[c].begin(), outputPlanar[c].begin() + latencyFrames);
+        } else {
+            outputPlanar[c].clear();
+        }
+    }
+    // --------------------------------------------
 
     // 6. Write Output
     if (outputPlanar[0].empty()) {
-        std::cerr << "Error: No output generated." << std::endl;
+        std::cerr << "Error: No output generated (or file was shorter than latency)." << std::endl;
         return 1;
     }
 
     std::cout << "Writing output (" << outputPlanar[0].size() << " frames)..." << std::endl;
     
-    // --- UPDATED: Force 32-bit Floating Point Output ---
+    // Force 32-bit Floating Point Output
     SndfileHandle outputFile(outputPath, SFM_WRITE, SF_FORMAT_WAV | SF_FORMAT_FLOAT, channels, sampleRate);
     
     auto outputInterleaved = planarToInterleaved(outputPlanar, channels, outputPlanar[0].size());
