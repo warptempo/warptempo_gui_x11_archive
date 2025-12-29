@@ -1,0 +1,193 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <cstring>
+#include <algorithm>
+#include <iomanip>
+
+// Requires libsndfile
+#include <sndfile.hh> 
+#include "signalsmith-stretch.h"
+
+// Convenience struct for our map points
+struct TimemapPoint {
+    long long source;
+    long long target;
+};
+
+// Helper to get planar audio (Vector of Vectors) from interleaved buffer
+std::vector<std::vector<float>> interleavedToPlanar(const std::vector<float>& interleaved, int channels, size_t frames) {
+    std::vector<std::vector<float>> planar(channels, std::vector<float>(frames));
+    for (size_t i = 0; i < frames; ++i) {
+        for (int c = 0; c < channels; ++c) {
+            planar[c][i] = interleaved[i * channels + c];
+        }
+    }
+    return planar;
+}
+
+// Helper to flatten planar audio back to interleaved for writing
+std::vector<float> planarToInterleaved(const std::vector<std::vector<float>>& planar, int channels, size_t frames) {
+    std::vector<float> interleaved(frames * channels);
+    for (size_t i = 0; i < frames; ++i) {
+        for (int c = 0; c < channels; ++c) {
+            interleaved[i * channels + c] = planar[c][i];
+        }
+    }
+    return interleaved;
+}
+
+int main(int argc, char* argv[]) {
+    // --- NEW: Check for Version Flag ---
+    if (argc > 1 && std::strcmp(argv[1], "-v") == 0) {
+        // Access static version array from the template
+        auto v = signalsmith::stretch::SignalsmithStretch<float>::version;
+        std::cout << "signalsmith-stretch v" << v[0] << "." << v[1] << "." << v[2] << std::endl;
+        return 0;
+    }
+
+    // 1. Argument Validation
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0] << " <input.wav> <timemap.txt> <output.wav>" << std::endl;
+        std::cerr << "       " << argv[0] << " -v (to see version)" << std::endl;
+        return 1;
+    }
+    std::string inputPath = argv[1];
+    std::string timemapPath = argv[2];
+    std::string outputPath = argv[3];
+
+    // 2. Load Input Audio
+    SndfileHandle inputFile(inputPath);
+    if (inputFile.error()) {
+        std::cerr << "Error opening input: " << inputFile.strError() << std::endl;
+        return 1;
+    }
+
+    size_t inputFrames = inputFile.frames();
+    int channels = inputFile.channels();
+    int sampleRate = inputFile.samplerate();
+
+    std::cout << "Loading audio (" << inputFrames << " frames)..." << std::endl;
+    std::vector<float> inputBuffer(inputFrames * channels);
+    inputFile.read(inputBuffer.data(), inputFrames * channels);
+
+    // Convert to Planar (LLLL... RRRR...)
+    auto inputPlanar = interleavedToPlanar(inputBuffer, channels, inputFrames);
+
+    // 3. Load Timemap
+    std::ifstream timemapFile(timemapPath);
+    std::vector<TimemapPoint> mapPoints;
+    std::string line;
+    while (std::getline(timemapFile, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        long long src, tgt;
+        if (ss >> src >> tgt) {
+            mapPoints.push_back({src, tgt});
+        }
+    }
+
+    if (mapPoints.empty()) {
+        std::cerr << "Error: Timemap is empty." << std::endl;
+        return 1;
+    }
+
+    // Ensure 0 0 is always the first point
+    if (mapPoints[0].source != 0 || mapPoints[0].target != 0) {
+        mapPoints.insert(mapPoints.begin(), {0, 0});
+    }
+
+    // 4. Configure Stretch Engine
+    signalsmith::stretch::SignalsmithStretch<float> stretch;
+    stretch.presetDefault(channels, sampleRate);
+    
+    // Output container
+    std::vector<std::vector<float>> outputPlanar(channels);
+
+    // Helper lambda to process a segment
+    auto processSegment = [&](long long startSrc, long long endSrc, long long startTgt, long long endTgt) {
+        long long inputLen = endSrc - startSrc;
+        long long outputLen = endTgt - startTgt;
+
+        // Validation
+        if (inputLen <= 0 || outputLen <= 0) return;
+        if (startSrc >= (long long)inputFrames) return; 
+
+        // Clamp endSrc if it exceeds audio length
+        if (endSrc > (long long)inputFrames) {
+            endSrc = inputFrames;
+            inputLen = endSrc - startSrc;
+        }
+
+        // Create pointers to the specific region in the input vectors
+        std::vector<const float*> inputChPtrs(channels);
+        for (int c = 0; c < channels; ++c) {
+            inputChPtrs[c] = &inputPlanar[c][startSrc];
+        }
+
+        // Prepare temporary output buffers for this segment
+        std::vector<std::vector<float>> segmentOutput(channels, std::vector<float>(outputLen));
+        std::vector<float*> outputChPtrs(channels);
+        for (int c = 0; c < channels; ++c) {
+            outputChPtrs[c] = segmentOutput[c].data();
+        }
+
+        // Process
+        stretch.process(inputChPtrs, inputLen, outputChPtrs, outputLen);
+
+        // Append to main output
+        for (int c = 0; c < channels; ++c) {
+            outputPlanar[c].insert(outputPlanar[c].end(), segmentOutput[c].begin(), segmentOutput[c].end());
+        }
+    };
+
+    // 5. Execution Loop
+    long long currentSrc = 0;
+    long long currentTgt = 0;
+
+    // Loop through all points (including our inserted 0,0)
+    for (const auto& point : mapPoints) {
+        // Only process if time has moved forward
+        if (point.source > currentSrc) {
+            processSegment(currentSrc, point.source, currentTgt, point.target);
+            currentSrc = point.source;
+            currentTgt = point.target;
+
+            // Update Progress (In-place)
+            int percent = (int)((currentSrc * 100.0) / inputFrames);
+            std::cout << "\rProcessing: " << percent << "%" << std::flush;
+
+        } else {
+            currentTgt = std::max(currentTgt, point.target);
+        }
+    }
+
+    // Handle implicit end (Tail)
+    if (currentSrc < (long long)inputFrames) {
+        long long remaining = inputFrames - currentSrc;
+        processSegment(currentSrc, inputFrames, currentTgt, currentTgt + remaining);
+    }
+
+    // Finish progress bar
+    std::cout << "\rProcessing: 100%" << std::endl;
+
+    // 6. Write Output
+    if (outputPlanar[0].empty()) {
+        std::cerr << "Error: No output generated." << std::endl;
+        return 1;
+    }
+
+    std::cout << "Writing output (" << outputPlanar[0].size() << " frames)..." << std::endl;
+    
+    // --- UPDATED: Force 32-bit Floating Point Output ---
+    SndfileHandle outputFile(outputPath, SFM_WRITE, SF_FORMAT_WAV | SF_FORMAT_FLOAT, channels, sampleRate);
+    
+    auto outputInterleaved = planarToInterleaved(outputPlanar, channels, outputPlanar[0].size());
+    outputFile.write(outputInterleaved.data(), outputInterleaved.size());
+
+    std::cout << "Done." << std::endl;
+
+    return 0;
+}

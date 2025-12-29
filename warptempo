@@ -40,7 +40,7 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo release=20 >> "$settings_file"
 	echo fps=60 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
-	echo engine=bungee >> "$settings_file"
+	echo engine=stretch >> "$settings_file"
 	echo >> "$settings_file"
 fi
 
@@ -179,7 +179,7 @@ fi
 
 # Validate rubberband engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(bungee rubberband)
+	supported_engines=(stretch bungee rubberband none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -191,7 +191,7 @@ if [[ ! -z "$engine" ]]; then
 		echo -e "Error: Engine is not supported. Enter one of the following:\n${supported_engines[@]}" && ((validation_errors++))
 	fi
 else
-	engine=fine
+	engine=stretch
 fi
 
 if [[ $validation_errors -gt 0 ]]; then
@@ -200,7 +200,14 @@ fi
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
-if [[ "$engine" == bungee ]]; then
+if [[ "$engine" == stretch ]]; then
+	adapter_path="$(dirname "$(realpath "$0")")/warptempo_stretchadapter/build/warptempo_stretchadapter"
+	if [[ -x "$adapter_path"_pro ]]; then
+		adapter_path="$adapter_path"_pro
+	elif [[ ! -x "$adapter_path" ]]; then
+		echo "Error: Signalsmith Stretch adapter not found at $adapter_path" && ((requirement_errors++))
+	fi
+elif [[ "$engine" == bungee ]]; then
 	adapter_path="$(dirname "$(realpath "$0")")/warptempo_bungeeadapter/build/warptempo_bungeeadapter"
 	if [[ -x "$adapter_path"_pro ]]; then
 		adapter_path="$adapter_path"_pro
@@ -709,7 +716,11 @@ else
 	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log_output"
 fi
 
-if [[ "$engine" == bungee ]]; then
+if [[ "$engine" == stretch ]]; then
+	# Run warptempo_stretchadapter
+	"$adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
+	version_comment="$("$adapter_path" -v)"
+elif [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
 	"$adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 	version_comment="$("$adapter_path" -v)"
@@ -717,6 +728,11 @@ elif [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
 	version_comment="rubberband v$(rubberband -V 2>&1)"
+elif [[ "$engine" == none ]]; then
+	# Save timemap
+	mv .$md5-timemap .timemap
+	rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav
+	exit
 fi
 
 # Apply limiting or copy

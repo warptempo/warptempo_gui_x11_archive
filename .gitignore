@@ -1,3 +1,7 @@
+# Stretch Adapter Build Artifacts
+warptempo_stretchadapter/build/
+warptempo_stretchadapter/signalsmith-*/
+
 # Bungee Adapter Build Artifacts
 warptempo_bungeeadapter/build/
 warptempo_bungeeadapter/bungee/
