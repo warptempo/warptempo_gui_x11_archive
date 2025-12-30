@@ -476,7 +476,6 @@ done
 previous_source_frame=0
 previous_target_frame=0
 previous_target_time_ms=00:00.000
-previous_target_time_fps=00:00.00
 
 # Second pass: Generate timemap and logs
 # This loop calculates the exact sample frame positions for the output audio (target_frame)
@@ -529,7 +528,7 @@ for index in "${!warpmarkers[@]}"; do
 		target_frame=$(echo "$previous_target_frame + $log_file_delta" | bc -l)
 		
 		padding=18
-		line="$warpmarker_time|$log_file_time $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+		line="$warpmarker_time|$log_file_time $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms"
 
 	# --- Logic Branch 2: Standard Tempo Mode ---
 	# If tempo is a number (e.g. 1.00), calculate target frames using the speed formula.
@@ -553,7 +552,7 @@ for index in "${!warpmarkers[@]}"; do
 			else
 				padding=18
 			fi
-			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+			line="$warpmarker_time|$tempo|$label $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms"
 		else
 			# Standard number without label
 			if [[ $tempo == *\** ]]; then
@@ -561,12 +560,12 @@ for index in "${!warpmarkers[@]}"; do
 			else
 				padding=23
 			fi
-			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+			line="$warpmarker_time|$tempo $(printf "%${padding}s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms"
 		fi
 
 	# --- Logic Branch 3: End of File ---
 	elif [[ "$warpmarker_time" == "$end_time" ]]; then
-		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+		line="$warpmarker_time $(printf "%18s\n") $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms"
 
 	# --- Logic Branch 4: Label Reference Mode ---
 	# If tempo is a label (e.g. "a.01"), we must fit the audio exactly into the 
@@ -604,7 +603,7 @@ for index in "${!warpmarkers[@]}"; do
 		if [[ "$(echo "$label_tempo_final_multiplier > 9.9999" | bc -l)" == 1 ]]; then
 			echo "Error: Label tempo final multipler greater than 9.9999 ($warpmarker)." && exit 1
 		fi
-		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps"
+		line="$warpmarker_time|$label ~=$label_tempo_string $(printf "%09.0f\n" $previous_source_frame) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms"
 	fi
 	
 	# Write the formatted line to the log and the raw frames to the timemap
@@ -619,18 +618,6 @@ for index in "${!warpmarkers[@]}"; do
 	previous_target_time_s=$(echo "$previous_target_frame/$sample_rate" | bc -l)
 	previous_target_time_s_decimal=.$(echo "$previous_target_time_s" | cut -d . -f 2)
 	previous_target_time_ms=$(echo $(date -d@$(printf "%.3f\n" "$(echo $previous_target_time_s+$epsilon | bc -l)") -u +%M:%S.%N) | cut -c1-9)
-	
-	# Calculate Video Frames (MM:SS.FrameNumber) based on FPS setting
-	round_at=$(echo "(1000-(1000/$fps))/1000" | bc -l)
-	
-	if [[ $(echo "$previous_target_time_s_decimal < $round_at" | bc -l) == 1 ]]; then
-		previous_target_time_fps_2=$(printf "%02.0f\n" $(echo "$previous_target_time_s_decimal*$fps+$epsilon" | bc -l))
-		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" "$(echo $previous_target_time_s+$epsilon | bc -l)") -u +%M:%S)
-	elif [[ $(echo "$previous_target_time_s_decimal >= $round_at" | bc -l) == 1 ]]; then
-		previous_target_time_fps_2=00
-		previous_target_time_fps_1=$(date -d@$(printf "%.3f\n" $(echo "$previous_target_time_s+1+$epsilon" | bc -l)) -u +%M:%S)
-	fi
-	previous_target_time_fps=$previous_target_time_fps_1.$previous_target_time_fps_2
 done
 
 # Adjust timemap for trim
@@ -651,7 +638,7 @@ if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
 	done < .$md5-timemap
 	mv .$md5-timemap-trimmed .$md5-timemap
 else
-	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms $previous_target_time_fps" >> "$log_output"
+	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms" >> "$log_output"
 fi
 
 if [[ "$engine" == bungee ]]; then

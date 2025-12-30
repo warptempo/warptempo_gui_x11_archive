@@ -179,8 +179,6 @@ int main(int argc, char* argv[]) {
     // We flush the same amount we intend to trim from the start (4096)
     // so the final duration remains mathematically accurate.
     
-    // int latencyFrames = 4096; // Hardcoded Power-of-2 (85.33ms)
-    
     std::cout << "Flushing internal buffer (" << latencyFrames << " frames)..." << std::endl;
 
     // Prepare flush buffers

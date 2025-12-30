@@ -2,14 +2,9 @@ title="Mozart - Symphony No. 40 in G Minor (K. 550) - II. Andante (2024 Remaster
 audio_input="Mozart_-_Symphony_No._40_in_G_Minor_K._550_-_II._Andante_2024_Remaster-[GYVFB-qi49I].opus"
 url=https://music.youtube.com/watch?v=GYVFB-qi49I
 scale=1.001982
-limit_test_output=true
-limit_final_output=false
-level_in=0
+limiter=true
 limit=-0.1
-level_out=0
-attack=10
-release=20
-fps=60
+crossover_frequency=100
 browser=firefox
-engine=bungee
+engine=bungee+stretch
 

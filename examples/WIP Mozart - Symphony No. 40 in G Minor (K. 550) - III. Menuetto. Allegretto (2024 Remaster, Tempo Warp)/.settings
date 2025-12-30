@@ -2,14 +2,9 @@ title="WIP Mozart - Symphony No. 40 in G Minor (K. 550) - III. Menuetto. Allegre
 audio_input="Mozart_-_Symphony_No._40_in_G_Minor_K._550_-_III._Menuetto._Allegretto_2024_Remaster-[fNlHZoCwuqk].opus"
 url=https://music.youtube.com/watch?v=fNlHZoCwuqk
 scale=1.003609
-limit_test_output=true
-limit_final_output=true
-level_in=0
+limiter=true
 limit=-0.1
-level_out=0
-attack=10
-release=20
-fps=60
+crossover_frequency=100
 browser=firefox
-engine=bungee
+engine=bungee+stretch
 
