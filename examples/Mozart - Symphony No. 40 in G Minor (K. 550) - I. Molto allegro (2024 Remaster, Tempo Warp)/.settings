@@ -1,15 +1,10 @@
-title="Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp)"
-audio_input="Mozart_-_Symphony_No._40_in_G_Minor_K._550_-_I._Molto_allegro_2024_Remaster-[f10ISOkJZuA].opus"
-url=https://music.youtube.com/watch?v=f10ISOkJZuA
-scale=0.996477
-limit_test_output=true
-limit_final_output=false
-level_in=0
+title="Mozart - Symphony No. 41 in C Major (K. 551) - I. Allegro vivace (2024 Remaster, Tempo Warp)"
+audio_input="Mozart_-_Symphony_No._41_in_C_Major_K._551_Jupiter_-_I._Allegro_vivace_2024_Remaster-[BWDEWwNQ1kA].opus"
+url=https://music.youtube.com/watch?v=BWDEWwNQ1kA
+scale=0.999444
+limiter=true
 limit=-0.1
-level_out=0
-attack=10
-release=20
-fps=60
+crossover_frequency=100
 browser=firefox
-engine=bungee
+engine=fine
 

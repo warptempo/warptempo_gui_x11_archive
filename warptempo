@@ -31,14 +31,9 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo audio_input= >> "$settings_file"
 	echo url= >> "$settings_file"
 	echo scale=1 >> "$settings_file"
-	echo limit_test_output=true >> "$settings_file"
-	echo limit_final_output=true >> "$settings_file"
-	echo level_in=0 >> "$settings_file"
+	echo limiter=true >> "$settings_file"
 	echo limit=-0.1 >> "$settings_file"
-	echo level_out=0 >> "$settings_file"
-	echo attack=10 >> "$settings_file"
-	echo release=20 >> "$settings_file"
-	echo fps=60 >> "$settings_file"
+	echo crossover_frequency=100 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
 	echo engine=bungee+stretch >> "$settings_file"
 	echo >> "$settings_file"
@@ -99,65 +94,19 @@ else
 fi
 
 # Validate booleans
-if [[ ! -z "$limit_test_output" ]] && [[ "$limit_test_output" != true ]] && [[ "$limit_test_output" != false ]]; then
-	echo "Error: Limit test output must be true or false." && ((validation_errors++))
-elif [[ -z "$limit_test_output" ]]; then
-	limit_test_output=true
+if [[ ! -z "$limiter" ]] && [[ "$limiter" != true ]] && [[ "$limiter" != false ]]; then
+	echo "Error: Limiter must be true or false." && ((validation_errors++))
+elif [[ -z "$limiter" ]]; then
+	limiter=true
 fi
 
-if [[ ! -z "$limit_final_output" ]] && [[ "$limit_final_output" != true ]] && [[ "$limit_final_output" != false ]]; then
-	echo "Error: Limit final output must be true or false." && ((validation_errors++))
-elif [[ -z "$limit_final_output" ]]; then
-	limit_final_output=true
-fi
-
-# Validate limiter settings
-if [[ ! -z "$level_in" ]] && [[ ! "$level_in" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
-	echo "Error: Level in is not a valid decimal." && ((validation_errors++))
-elif [[ ! -z "$level_in" ]]; then
-	level_in=$(printf "%0.1f\n" "$level_in")
-else
-	level_in=$(printf "%0.1f\n" 0)
-fi
-
+# Validate limiter setting
 if [[ ! -z "$limit" ]] && [[ ! "$limit" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
 	echo "Error: Limit is not a valid decimal." && ((validation_errors++))
 elif [[ ! -z "$limit" ]]; then
 	limit=$(printf "%0.1f\n" "$limit")
 else
 	limit=$(printf "%0.1f\n" -0.1)
-fi
-
-if [[ ! -z "$level_out" ]] && [[ ! "$level_out" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
-	echo "Error: Level out is not a valid decimal." && ((validation_errors++))
-elif [[ ! -z "$level_out" ]]; then
-	level_out=$(printf "%0.1f\n" "$level_out")
-else
-	level_out=$(printf "%0.1f\n" 0)
-fi
-
-if [[ ! -z "$attack" ]] && [[ ! "$attack" =~ ^(0?\.[1-9][0-9]?|[1-9][0-9]?(\.[0-9]+)?|80(\.0+)?)$ ]]; then
-	echo "Error: Attack must be from 0.1 to 80." && ((validation_errors++))
-elif [[ ! -z "$attack" ]]; then
-	attack=$(printf "%0.1f\n" "$attack")
-else
-	attack=$(printf "%0.1f\n" 10)
-fi
-
-if [[ ! -z "$release" ]] && [[ ! "$release" =~ ^([1-9][0-9]{0,2}(\.[0-9]+)?|[1-7][0-9]{3}(\.[0-9]+)?|8000(\.0+)?)$ ]]; then
-	echo "Error: Release must be from 1 to 8000." && ((validation_errors++))
-elif [[ ! -z "$release" ]]; then
-	release=$(printf "%0.1f\n" "$release")
-else
-	release=$(printf "%0.1f\n" 20)
-fi
-
-if [[ ! -z "$fps" ]] && [[ ! "$fps" =~ ^([0-9]*\.[0-9]+|[0-9]+\.?[0-9]*)$ ]]; then
-	echo "Error: FPS is not a valid decimal." && ((validation_errors++))
-elif [[ ! -z "$fps" ]]; then
-	fps=$(printf "%0.2f\n" "$fps")
-else
-	fps=$(printf "%0.2f\n" 60)
 fi
 
 # Validate browser for yt-dlp
@@ -177,7 +126,7 @@ else
 	browser=firefox
 fi
 
-# Validate rubberband engine
+# Validate engine
 if [[ ! -z "$engine" ]]; then
 	supported_engines=(bungee+stretch bungee stretch rubberband none)
 	supported=false
@@ -719,11 +668,11 @@ elif [[ "$engine" == bungee+stretch ]]; then
 	# Run warptempo_stretchadapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp-stretch.wav
 	version_comment="$("$bungee_adapter_path" -v), $("$stretch_adapter_path" -v)"
-	if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) || $limit_final_output; then
-		crossover=100
-		q_width=0.707
-		hp="highpass=f=$crossover:width_type=q:width=$q_width"
-		lp="lowpass=f=$crossover:width_type=q:width=$q_width"
+	if $limiter; then
+		hp="highpass=f=$crossover_frequency:width_type=q:width=0.707"
+		lp="lowpass=f=$crossover_frequency:width_type=q:width=0.707"
+		# 24 dB/oct Linkwitz-Riley (LR4)
+		# Cascading two 2nd-order Butterworths
 		filter_complex="[0:a]$hp,$hp[b_high];"
 		filter_complex+="[1:a]$lp,$lp[s_low];"
 		filter_complex+="[b_high][s_low]amix=inputs=2:duration=first:normalize=0"
@@ -742,22 +691,22 @@ elif [[ "$engine" == none ]]; then
 fi
 
 # Apply limiting or copy
-if ([[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]] && $limit_test_output) || $limit_final_output; then
+if $limiter; then
 	af="alimiter=latency=enabled:level=disabled:asc=disabled"
-	af+=":level_in=${level_in}dB"
+	af+=":level_in=0dB"
 	af+=":limit=${limit}dB"
-	af+=":level_out=${level_out}dB"
-	af+=":attack=${attack}"
-	af+=":release=${release}"
+	af+=":level_out=0dB"
+	af+=":attack=10"
+	af+=":release=20"
 
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="$version_comment" -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
 	if [[ "$engine" == bungee+stretch ]]; then
-		ffmpeg -i .$md5-tmp-bungee.wav -c copy -metadata comment="$version_comment" "engine=bungee;limiter=false;$audio_output"
-		ffmpeg -i .$md5-tmp-stretch.wav -c copy -metadata comment="$version_comment" "engine=stretch;limiter=false;$audio_output"
+		ffmpeg -i .$md5-tmp-bungee.wav -c copy -metadata comment="$version_comment" "engine=bungee;limiter=$limiter;$audio_output"
+		ffmpeg -i .$md5-tmp-stretch.wav -c copy -metadata comment="$version_comment" "engine=stretch;limiter=$limiter;$audio_output"
 	else
-		ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "limiter=false;$audio_output"
+		ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "engine=$engine;limiter=$limiter;$audio_output"
 	fi
 	echo
 	echo -e "$clip_warning"

@@ -1,0 +1,10 @@
+title="Mozart - Symphony No. 41 in C Major (K. 551) - I. Allegro vivace (2024 Remaster, Tempo Warp)"
+audio_input="Mozart_-_Symphony_No._41_in_C_Major_K._551_Jupiter_-_I._Allegro_vivace_2024_Remaster-[BWDEWwNQ1kA].opus"
+url=https://music.youtube.com/watch?v=BWDEWwNQ1kA
+scale=0.999444
+limiter=true
+limit=-0.1
+crossover_frequency=100
+browser=firefox
+engine=bungee+stretch
+

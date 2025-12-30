@@ -97,8 +97,23 @@ int main(int argc, char* argv[]) {
     }
 
     // 4. Configure Stretch Engine
+    // --- LATENCY CONFIGURATION ---
+    // OPTIMIZATION: We increase window size for better bass resolution.
+    // Default was 4096. We use 16384 (approx 340ms).
+    // This smears transients (which we don't care about) but makes sub-bass smooth.
+    int windowSize = 16384; 
+    int interval = windowSize / 4; // Standard overlap
+    int latencyFrames = windowSize; // Latency = Window Size
+
+    std::cout << "Loading audio (" << inputFrames << " frames)..." << std::endl;
+    // ... load audio ...
+
+    // 4. Configure Stretch Engine
     signalsmith::stretch::SignalsmithStretch<float> stretch;
-    stretch.presetDefault(channels, sampleRate);
+    
+    // REPLACED presetDefault WITH MANUAL CONFIGURATION
+    // stretch.presetDefault(channels, sampleRate); 
+    stretch.configure(channels, windowSize, interval);
     
     std::vector<std::vector<float>> outputPlanar(channels);
 
@@ -164,7 +179,7 @@ int main(int argc, char* argv[]) {
     // We flush the same amount we intend to trim from the start (4096)
     // so the final duration remains mathematically accurate.
     
-    int latencyFrames = 4096; // Hardcoded Power-of-2 (85.33ms)
+    // int latencyFrames = 4096; // Hardcoded Power-of-2 (85.33ms)
     
     std::cout << "Flushing internal buffer (" << latencyFrames << " frames)..." << std::endl;
 
