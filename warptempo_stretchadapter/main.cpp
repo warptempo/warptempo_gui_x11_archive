@@ -68,6 +68,7 @@ int main(int argc, char* argv[]) {
     int channels = inputFile.channels();
     int sampleRate = inputFile.samplerate();
 
+    // ... load audio ...
     std::cout << "Loading audio (" << inputFrames << " frames)..." << std::endl;
     std::vector<float> inputBuffer(inputFrames * channels);
     inputFile.read(inputBuffer.data(), inputFrames * channels);
@@ -102,13 +103,10 @@ int main(int argc, char* argv[]) {
     // Default was 4096. We use 16384 (approx 340ms).
     // This smears transients (which we don't care about) but makes sub-bass smooth.
     int windowSize = 16384; 
-    int interval = windowSize / 4; // Standard overlap
+    int overlapFactor = 8; // Double the standard overlap
+    int interval = windowSize / overlapFactor;
     int latencyFrames = windowSize; // Latency = Window Size
 
-    std::cout << "Loading audio (" << inputFrames << " frames)..." << std::endl;
-    // ... load audio ...
-
-    // 4. Configure Stretch Engine
     signalsmith::stretch::SignalsmithStretch<float> stretch;
     
     // REPLACED presetDefault WITH MANUAL CONFIGURATION
@@ -176,7 +174,7 @@ int main(int argc, char* argv[]) {
     // --- NEW: FLUSH THE BUFFER (Recover the Tail) ---
     // =========================================================
     // The STFT engine holds audio in its buffer. We must push it out.
-    // We flush the same amount we intend to trim from the start (4096)
+    // We flush the same amount we intend to trim from the start (latencyFrames)
     // so the final duration remains mathematically accurate.
     
     std::cout << "Flushing internal buffer (" << latencyFrames << " frames)..." << std::endl;
