@@ -29,7 +29,7 @@ cmake ..
 make
 ```
 
-Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. If the limiter is enabled, the bungee version will be used for frequencies above the crossover point, and the stretch version will be used for frequencies below the crossover. The stretch adapter is optimized for low frequencies; reduce the windowSize (eg, to 4096) and the overlapFactor (eg, to 4) for general purpose use.
+Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. If the limiter is enabled, the bungee version will be used for frequencies above the crossover point, and the stretch version will be used for frequencies below the crossover. The stretch adapter is optimized for low frequencies; reduce the overlapFactor (eg, to 4) for general purpose use.
 
 For limiting, use the script's default limiter (ffmpeg alimiter) by setting limiter=true in .settings or leave limiter=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the warptempo_vstpresets folder.
 
