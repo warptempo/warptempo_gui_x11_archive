@@ -100,13 +100,21 @@ elif [[ -z "$limiter" ]]; then
 	limiter=true
 fi
 
-# Validate limiter setting
+# Validate limiter and crossover settings
 if [[ ! -z "$limit" ]] && [[ ! "$limit" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
 	echo "Error: Limit is not a valid decimal." && ((validation_errors++))
 elif [[ ! -z "$limit" ]]; then
 	limit=$(printf "%0.1f\n" "$limit")
 else
 	limit=$(printf "%0.1f\n" -0.1)
+fi
+
+if [[ ! -z "$crossover_frequency" ]] && [[ ! "$crossover_frequency" =~ ^[0-9]+$ ]]; then
+	echo "Error: Crossover frequency is not a valid integer." && ((validation_errors++))
+elif [[ ! -z "$crossover_frequency" ]]; then
+	crossover_frequency=$(printf "%0.0f\n" "$crossover_frequency")
+else
+	crossover_frequency=$(printf "%0.0f\n" 100)
 fi
 
 # Validate browser for yt-dlp
