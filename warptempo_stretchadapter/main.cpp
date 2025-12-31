@@ -98,13 +98,12 @@ int main(int argc, char* argv[]) {
     }
 
     // 4. Configure Stretch Engine
-    // Default windowSize in stretch is 5760 (120ms @ 48kHz).
+    // Default windowSize in Stretch is 5760 (120ms @ 48kHz).
     // We increase overlap for better bass resolution.
-    // This smears transients (which we don't care about) but makes sub-bass smooth.
     int windowSize = 5760;
-    int overlapFactor = 8; // Double the standard overlap
+    int overlapFactor = 8; // Double the standard overlap. This increases latency but since we are using offline rendering that is not a problem. 
     int interval = windowSize / overlapFactor;
-    int latencyFrames = 4096; // This is set to match bungee's timing
+    int latencyFrames = 4096; // This is set to match Bungee's timing
 
     signalsmith::stretch::SignalsmithStretch<float> stretch;
     

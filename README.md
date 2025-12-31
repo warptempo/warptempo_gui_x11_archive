@@ -7,7 +7,7 @@ bc ffmpeg ffprobe jq sox yt-dlp
 
 Additionally, `stretch`, `bungee` or `rubberband` are required.
 
-To use the script, clone this repository and run `warptempo` within one of the example projects. Set engine=rubberband in the project's .settings file to use rubberband without needing to compile either `warptempo_stretchadapter` or `warptempo_bungeeadapter`.
+To use the script, clone this repository and run `warptempo` within one of the example projects. Set engine=rubberband in the project's .settings file to use Rubber Band without needing to compile either `warptempo_stretchadapter` or `warptempo_bungeeadapter`.
 
 To compile an adapter, install `cmake`, `libsndfile`, and `gcc` or `clang`. For `warptempo_stretchadapter`, run:
 ```
@@ -29,7 +29,7 @@ cmake ..
 make
 ```
 
-Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. If the limiter is enabled, the bungee version will be used for frequencies above the crossover point, and the stretch version will be used for frequencies below the crossover. The stretch adapter is optimized for low frequencies; reduce the overlapFactor (eg, to 4) for general purpose use.
+Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. If the limiter is enabled, the Bungee version will be used for frequencies above the crossover point, and the Stretch version will be used for frequencies below the crossover.
 
 For limiting, use the script's default limiter (ffmpeg alimiter) by setting limiter=true in .settings or leave limiter=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the warptempo_vstpresets folder.
 
