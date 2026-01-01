@@ -33,7 +33,7 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo scale=1 >> "$settings_file"
 	echo limiter=true >> "$settings_file"
 	echo limit=-0.1 >> "$settings_file"
-	echo crossover_frequency=40 >> "$settings_file"
+	echo crossover_frequency=150 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
 	echo engine=bungee+stretch >> "$settings_file"
 	echo >> "$settings_file"
@@ -114,7 +114,7 @@ if [[ ! -z "$crossover_frequency" ]] && [[ ! "$crossover_frequency" =~ ^[0-9]+$ 
 elif [[ ! -z "$crossover_frequency" ]]; then
 	crossover_frequency=$(printf "%0.0f\n" "$crossover_frequency")
 else
-	crossover_frequency=$(printf "%0.0f\n" 40)
+	crossover_frequency=$(printf "%0.0f\n" 150)
 fi
 
 # Validate browser for yt-dlp
