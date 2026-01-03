@@ -1,7 +1,6 @@
 #!/bin/bash
 # Run only from terminal
 if [ ! -t 0 ]; then exit; fi
-
 shopt -s nocaseglob
 set -e
 export LC_ALL=C
@@ -33,9 +32,8 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo scale=1 >> "$settings_file"
 	echo limiter=true >> "$settings_file"
 	echo limit=-0.1 >> "$settings_file"
-	echo crossover_frequency=150 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
-	echo engine=bungee+stretch >> "$settings_file"
+	echo engine=rubberband >> "$settings_file"
 	echo >> "$settings_file"
 fi
 
@@ -100,21 +98,13 @@ elif [[ -z "$limiter" ]]; then
 	limiter=true
 fi
 
-# Validate limiter and crossover settings
+# Validate limiter settings
 if [[ ! -z "$limit" ]] && [[ ! "$limit" =~ ^-?[0-9]*(\.[0-9]+)?$ ]]; then
 	echo "Error: Limit is not a valid decimal." && ((validation_errors++))
 elif [[ ! -z "$limit" ]]; then
 	limit=$(printf "%0.1f\n" "$limit")
 else
 	limit=$(printf "%0.1f\n" -0.1)
-fi
-
-if [[ ! -z "$crossover_frequency" ]] && [[ ! "$crossover_frequency" =~ ^[0-9]+$ ]]; then
-	echo "Error: Crossover frequency is not a valid integer." && ((validation_errors++))
-elif [[ ! -z "$crossover_frequency" ]]; then
-	crossover_frequency=$(printf "%0.0f\n" "$crossover_frequency")
-else
-	crossover_frequency=$(printf "%0.0f\n" 150)
 fi
 
 # Validate browser for yt-dlp
@@ -136,7 +126,7 @@ fi
 
 # Validate engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(bungee+stretch bungee stretch rubberband none)
+	supported_engines=(ableton bungee stretch rubberband none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -157,13 +147,13 @@ fi
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
-if [[ "$engine" == bungee* ]]; then
+if [[ "$engine" == bungee ]]; then
 	bungee_adapter_path="$(dirname "$(realpath "$0")")/warptempo_bungeeadapter/build/warptempo_bungeeadapter"
 	if [[ ! -x "$bungee_adapter_path" ]]; then
 		echo "Error: Bungee adapter not found at $bungee_adapter_path" && ((requirement_errors++))
 	fi
 fi
-if [[ "$engine" == *stretch ]]; then
+if [[ "$engine" == stretch ]]; then
 	stretch_adapter_path="$(dirname "$(realpath "$0")")/warptempo_stretchadapter/build/warptempo_stretchadapter"
 	if [[ ! -x "$stretch_adapter_path" ]]; then
 		echo "Error: Signalsmith Stretch adapter not found at $stretch_adapter_path" && ((requirement_errors++))
@@ -649,7 +639,107 @@ else
 	echo "$total_time_ms $(printf "%28s\n" $(printf "%09.0f\n" $previous_source_frame)) $(printf "%09.0f\n" $(echo $previous_target_frame+$epsilon | bc -l)) $previous_target_time_ms" >> "$log_output"
 fi
 
-if [[ "$engine" == bungee ]]; then
+if [[ "$engine" == ableton ]]; then
+	rm -rf .ableton*
+	cp -r "$(dirname "$(realpath "$0")")/warptempo_abletonadapter/.ableton Project" .
+	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
+		cp .$md5-trimmed.wav ".ableton Project/Samples/Imported/${audio_input%.*}.wav"
+	elif [[ "${audio_input,,}" != *.wav ]]; then
+		if [[ ! -f "${audio_input%.*}.wav" ]]; then
+			ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+		fi
+		cp "${audio_input%.*}.wav" ".ableton Project/Samples/Imported"
+	else
+		cp "$audio_input" ".ableton Project/Samples/Imported"
+	fi
+	# --- ABLETON LIVE SET GENERATION START ---
+	
+	# 1. Locate and prepare the Project files
+	project_dir=".ableton Project"
+	als_file="$project_dir/.ableton.als"
+	if [[ -z "$als_file" ]]; then echo "Error: No .als file found in template."; exit 1; fi
+	
+	# Define destination path inside the Project (Standard Ableton structure)
+	# Note: $title is used for the filename as requested
+	dest_filename="${audio_input%.*}.wav"
+	dest_rel_path="Samples/Imported"
+	
+	# 2. Get Statistics for the New Audio File
+	# We probe the actual file in the project to ensure data consistency
+	eval $(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,duration_ts -of default=noprint_wrappers=1:nokey=0 "$project_dir/$dest_rel_path/$dest_filename")
+	file_size=$(stat -c%s "$project_dir/$dest_rel_path/$dest_filename")
+	
+	# 3. Calculate Final Timeline Duration
+	# Read the last target frame from the timemap to know where the clip ends
+	# At 60 BPM, 1 Beat = 1 Second. Duration(s) = Frame / SampleRate
+	last_target_frame=$(tail -n 1 ".$md5-timemap" | cut -d ' ' -f 2)
+	final_duration=$(echo "$last_target_frame / $sample_rate" | bc -l)
+	
+	# 4. Generate the Warp Markers XML Block
+	# Find the largest existing 'Id' attribute to avoid collisions
+	# We stream the compressed ALS file to grep to find the max ID
+	max_id=$(gzip -cd "$als_file" | grep -o 'Id="[0-9]*"' | cut -d'"' -f2 | sort -rn | head -n1)
+	
+	# Start numbering one higher than the max found (default to 1 if none found)
+	id=$(( ${max_id:-0} + 1 ))
+
+	# Convert Source/Target Frames to Seconds/Beats
+	markers_xml=""
+	while read -r src_frame tgt_frame; do
+		# Math: Frame / SR = Seconds (and Beats at 60 BPM)
+		sec_time=$(echo "$src_frame / $sample_rate" | bc -l)
+		beat_time=$(echo "$tgt_frame / $sample_rate" | bc -l)
+		
+		# Append to XML string
+		markers_xml+="<WarpMarker Id=\"$id\" SecTime=\"$sec_time\" BeatTime=\"$beat_time\" />"
+		((id++))
+	done < ".$md5-timemap"
+	
+	# 5. Patch the ALS (XML) File
+	# Decompress the Live Set
+	#mv "$als_file" "$als_file.gz"
+	#gunzip "$als_file.gz"
+	gunzip -c "$als_file" > "$als_file.xml"
+	xml_file="$als_file.xml" #"${als_file%.*}" # The unzipped XML path
+	
+	# Update File Paths and Names (Regex matches the specific attributes)
+	sed -i "s|<EffectiveName Value=\".*\"|<EffectiveName Value=\"$dest_filename\"|g" "$xml_file"
+	sed -i "s|<RelativePath Value=\".*\"|<RelativePath Value=\"$dest_rel_path/$dest_filename\"|g" "$xml_file"
+	
+	# Update Audio Properties (Critical for correct playback speed)
+	sed -i "s|OriginalFileSize Value=\".*\"|OriginalFileSize Value=\"$file_size\"|g" "$xml_file"
+	sed -i "s|DefaultDuration Value=\".*\"|DefaultDuration Value=\"$duration_ts\"|g" "$xml_file"
+	sed -i "s|DefaultSampleRate Value=\".*\"|DefaultSampleRate Value=\"$sample_rate\"|g" "$xml_file"
+	
+	# Update Timeline Position (Clip End, Loop End, Out Marker)
+	sed -i "s|CurrentEnd Value=\".*\"|CurrentEnd Value=\"$final_duration\"|g" "$xml_file"
+	sed -i "s|LoopEnd Value=\".*\"|LoopEnd Value=\"$final_duration\"|g" "$xml_file"
+	sed -i "s|OutMarker Value=\".*\"|OutMarker Value=\"$final_duration\"|g" "$xml_file"
+	
+	# Replace the WarpMarkers Block
+	# We write the new markers to a temp file and use sed to replace the range between tags
+	echo "<WarpMarkers>$markers_xml</WarpMarkers>" > markers.tmp
+	# Escape newlines/slashes for sed is tricky, so we use the 'c' (change) command on the block range
+	xml_content=$(cat markers.tmp)
+	# Escape backslashes and forward slashes for sed
+	safe_xml=$(echo "$xml_content" | sed 's/\\/\\\\/g' | sed 's/\//\\\//g' | sed 's/&/\\&/g')
+	sed -i "/<WarpMarkers>/,/<\/WarpMarkers>/c $safe_xml" "$xml_file"
+	rm markers.tmp
+	
+	# Re-compress and Cleanup
+	#gzip -n "$xml_file"
+	#mv "$xml_file.gz" "$als_file"
+	gzip -c "$xml_file" > "$als_file"
+	
+	echo "Generated Ableton Project at $project_dir"
+	
+	# Clean up temp files created by main script and exit
+	rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap
+	exit 0
+	
+	# --- ABLETON LIVE SET GENERATION END ---
+	
+elif [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
 	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 	version_comment="$("$bungee_adapter_path" -v)"
@@ -657,23 +747,6 @@ elif [[ "$engine" == stretch ]]; then
 	# Run warptempo_stretchadapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 	version_comment="$("$stretch_adapter_path" -v)"
-elif [[ "$engine" == bungee+stretch ]]; then
-	# Run warptempo_bungeeadapter
-	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp-bungee.wav
-	# Run warptempo_stretchadapter
-	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp-stretch.wav
-	version_comment="$("$bungee_adapter_path" -v), $("$stretch_adapter_path" -v)"
-	if $limiter; then
-		hp="highpass=f=$crossover_frequency:width_type=q:width=0.707"
-		lp="lowpass=f=$crossover_frequency:width_type=q:width=0.707"
-		# 24 dB/oct Linkwitz-Riley (LR4)
-		# Cascading two 2nd-order Butterworths
-		filter_complex="[0:a]$hp,$hp[b_high];"
-		filter_complex+="[1:a]$lp,$lp[s_low];"
-		filter_complex+="[b_high][s_low]amix=inputs=2:duration=first:normalize=0"
-		ffmpeg -i .$md5-tmp-bungee.wav -i .$md5-tmp-stretch.wav -filter_complex "$filter_complex" -c:a pcm_f32le .$md5-tmp.wav
-		rm -f .$md5-tmp-bungee.wav .$md5-tmp-stretch.wav
-	fi
 elif [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav

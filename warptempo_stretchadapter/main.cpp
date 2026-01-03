@@ -68,7 +68,6 @@ int main(int argc, char* argv[]) {
     int channels = inputFile.channels();
     int sampleRate = inputFile.samplerate();
 
-    // ... load audio ...
     std::cout << "Loading audio (" << inputFrames << " frames)..." << std::endl;
     std::vector<float> inputBuffer(inputFrames * channels);
     inputFile.read(inputBuffer.data(), inputFrames * channels);
@@ -98,18 +97,8 @@ int main(int argc, char* argv[]) {
     }
 
     // 4. Configure Stretch Engine
-    // Default windowSize in Stretch is 5760 (120ms @ 48kHz).
-    // We increase overlap for better bass resolution.
-    int windowSize = 5760;
-    int overlapFactor = 8; // Double the standard overlap. This increases latency but since we are using offline rendering that is not a problem. 
-    int interval = windowSize / overlapFactor;
-    int latencyFrames = 4096; // This is set to match Bungee's timing
-
     signalsmith::stretch::SignalsmithStretch<float> stretch;
-    
-    // REPLACED presetDefault WITH MANUAL CONFIGURATION
-    // stretch.presetDefault(channels, sampleRate); 
-    stretch.configure(channels, windowSize, interval);
+    stretch.presetDefault(channels, sampleRate);
     
     std::vector<std::vector<float>> outputPlanar(channels);
 
@@ -172,8 +161,10 @@ int main(int argc, char* argv[]) {
     // --- NEW: FLUSH THE BUFFER (Recover the Tail) ---
     // =========================================================
     // The STFT engine holds audio in its buffer. We must push it out.
-    // We flush the same amount we intend to trim from the start (latencyFrames)
+    // We flush the same amount we intend to trim from the start (4096)
     // so the final duration remains mathematically accurate.
+    
+    int latencyFrames = 4096; // Hardcoded Power-of-2 (85.33ms)
     
     std::cout << "Flushing internal buffer (" << latencyFrames << " frames)..." << std::endl;
 

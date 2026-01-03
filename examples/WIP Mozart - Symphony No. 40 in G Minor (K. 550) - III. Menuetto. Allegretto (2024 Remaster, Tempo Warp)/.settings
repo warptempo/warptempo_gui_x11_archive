@@ -4,7 +4,6 @@ url=https://music.youtube.com/watch?v=fNlHZoCwuqk
 scale=1.003609
 limiter=true
 limit=-0.1
-crossover_frequency=150
 browser=firefox
-engine=bungee+stretch
+engine=rubberband
 
