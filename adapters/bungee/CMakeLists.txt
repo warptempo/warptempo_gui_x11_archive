@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(warptempo_bungeeadapter)
+project(bungee_adapter)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,13 +32,13 @@ endif()
 # Pass this string to C++ code
 add_definitions(-DBUNGEE_VERSION="${BUNGEE_GIT_VERSION}")
 
-add_executable(warptempo_bungeeadapter main.cpp)
+add_executable(bungee_adapter main.cpp)
 
 # Link against the library
-target_link_libraries(warptempo_bungeeadapter PRIVATE bungee_library ${SNDFILE_LIBRARIES})
+target_link_libraries(bungee_adapter PRIVATE bungee_library ${SNDFILE_LIBRARIES})
 
 # Include directories
-target_include_directories(warptempo_bungeeadapter PRIVATE 
+target_include_directories(bungee_adapter PRIVATE 
     ${SNDFILE_INCLUDE_DIRS}
     "${CMAKE_CURRENT_SOURCE_DIR}/bungee/bungee" 
 )

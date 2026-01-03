@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/b/.warptempo/scripts/adapters/bungee/build/cmake_install.cmake",
+		"/home/b/.warptempo/scripts/adapters/bungee/build/bungee/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

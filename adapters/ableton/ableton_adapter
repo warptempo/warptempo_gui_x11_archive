@@ -1,0 +1,102 @@
+#!/bin/bash
+# Run only from terminal
+if [ ! -t 0 ]; then exit; fi
+shopt -s nocaseglob
+set -e
+export LC_ALL=C
+
+	rm -rf ".ableton Project"
+	cp -r "$script_dir/adapters/ableton/.ableton Project" .
+	if [[ ! -z "$begin_time" ]] && [[ ! -z "$end_time" ]]; then
+		cp .$md5-trimmed.wav ".ableton Project/Samples/Imported/${audio_input%.*}.wav"
+	elif [[ "${audio_input,,}" != *.wav ]]; then
+		if [[ ! -f "${audio_input%.*}.wav" ]]; then
+			ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+		fi
+		cp "${audio_input%.*}.wav" ".ableton Project/Samples/Imported"
+	else
+		cp "$audio_input" ".ableton Project/Samples/Imported"
+	fi
+	
+	# 1. Locate and prepare the Project files
+	project_dir=".ableton Project"
+	als_file="$project_dir/.ableton.als"
+	if [[ -z "$als_file" ]]; then echo "Error: No .als file found in template."; exit 1; fi
+	
+	# Define destination path inside the Project (Standard Ableton structure)
+	# Note: $title is used for the filename as requested
+	dest_filename="${audio_input%.*}.wav"
+	dest_rel_path="Samples/Imported"
+	
+	# 2. Get Statistics for the New Audio File
+	# We probe the actual file in the project to ensure data consistency
+	eval $(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,duration_ts -of default=noprint_wrappers=1:nokey=0 "$project_dir/$dest_rel_path/$dest_filename")
+	file_size=$(stat -c%s "$project_dir/$dest_rel_path/$dest_filename")
+	
+	# 3. Calculate Final Timeline Duration
+	# Read the last target frame from the timemap to know where the clip ends
+	# At 60 BPM, 1 Beat = 1 Second. Duration(s) = Frame / SampleRate
+	last_target_frame=$(tail -n 1 ".$md5-timemap" | cut -d ' ' -f 2)
+	final_duration=$(echo "$last_target_frame / $sample_rate" | bc -l)
+	
+	# 4. Generate the Warp Markers XML Block
+	# Find the largest existing 'Id' attribute to avoid collisions
+	# We stream the compressed ALS file to grep to find the max ID
+	max_id=$(gzip -cd "$als_file" | grep -o 'Id="[0-9]*"' | cut -d'"' -f2 | sort -rn | head -n1)
+	
+	# Start numbering one higher than the max found (default to 1 if none found)
+	id=$(( ${max_id:-0} + 1 ))
+
+	# Convert Source/Target Frames to Seconds/Beats
+	markers_xml=""
+	while read -r src_frame tgt_frame; do
+		# Math: Frame / SR = Seconds (and Beats at 60 BPM)
+		sec_time=$(echo "$src_frame / $sample_rate" | bc -l)
+		beat_time=$(echo "$tgt_frame / $sample_rate" | bc -l)
+		
+		# Append to XML string
+		markers_xml+="<WarpMarker Id=\"$id\" SecTime=\"$sec_time\" BeatTime=\"$beat_time\" />"
+		((id++))
+	done < ".$md5-timemap"
+	
+	# 5. Patch the ALS (XML) File
+	# Decompress the Live Set
+	#mv "$als_file" "$als_file.gz"
+	#gunzip "$als_file.gz"
+	gunzip -c "$als_file" > "$als_file.xml"
+	xml_file="$als_file.xml" #"${als_file%.*}" # The unzipped XML path
+	
+	# Update File Paths and Names (Regex matches the specific attributes)
+	sed -i "s|<EffectiveName Value=\".*\"|<EffectiveName Value=\"$dest_filename\"|g" "$xml_file"
+	sed -i "s|<RelativePath Value=\".*\"|<RelativePath Value=\"$dest_rel_path/$dest_filename\"|g" "$xml_file"
+	
+	# Update Audio Properties (Critical for correct playback speed)
+	sed -i "s|OriginalFileSize Value=\".*\"|OriginalFileSize Value=\"$file_size\"|g" "$xml_file"
+	sed -i "s|DefaultDuration Value=\".*\"|DefaultDuration Value=\"$duration_ts\"|g" "$xml_file"
+	sed -i "s|DefaultSampleRate Value=\".*\"|DefaultSampleRate Value=\"$sample_rate\"|g" "$xml_file"
+	
+	# Update Timeline Position (Clip End, Loop End, Out Marker)
+	sed -i "s|CurrentEnd Value=\".*\"|CurrentEnd Value=\"$final_duration\"|g" "$xml_file"
+	sed -i "s|LoopEnd Value=\".*\"|LoopEnd Value=\"$final_duration\"|g" "$xml_file"
+	sed -i "s|OutMarker Value=\".*\"|OutMarker Value=\"$final_duration\"|g" "$xml_file"
+	
+	# Replace the WarpMarkers Block
+	# We write the new markers to a temp file and use sed to replace the range between tags
+	echo "<WarpMarkers>$markers_xml</WarpMarkers>" > markers.tmp
+	# Escape newlines/slashes for sed is tricky, so we use the 'c' (change) command on the block range
+	xml_content=$(cat markers.tmp)
+	# Escape backslashes and forward slashes for sed
+	safe_xml=$(echo "$xml_content" | sed 's/\\/\\\\/g' | sed 's/\//\\\//g' | sed 's/&/\\&/g')
+	sed -i "/<WarpMarkers>/,/<\/WarpMarkers>/c $safe_xml" "$xml_file"
+	rm markers.tmp
+	
+	# Re-compress and Cleanup
+	#gzip -n "$xml_file"
+	#mv "$xml_file.gz" "$als_file"
+	gzip -c "$xml_file" > "$als_file"
+	
+	echo "Generated Ableton Project at $project_dir"
+	
+	# Clean up temp files created by main script and exit
+	rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap
+	exit

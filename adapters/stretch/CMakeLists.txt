@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(warptempo_stretchadapter VERSION 1.0 LANGUAGES CXX)
+project(stretch_adapter VERSION 1.0 LANGUAGES CXX)
 
 # Set C++ Standard (C++11 is minimum, C++17 recommended)
 set(CMAKE_CXX_STANDARD 17)
@@ -45,16 +45,16 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 
-add_executable(warptempo_stretchadapter main.cpp)
+add_executable(stretch_adapter main.cpp)
 
-target_include_directories(warptempo_stretchadapter PRIVATE 
+target_include_directories(stretch_adapter PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}  # Allows resolving "signalsmith-linear/stft.h"
     ${STRETCH_INCLUDE_DIR}       # Allows resolving "signalsmith-stretch.h"
     ${SNDFILE_INCLUDE_DIRS}
 )
 
-target_link_libraries(warptempo_stretchadapter PRIVATE ${SNDFILE_LIBRARIES})
+target_link_libraries(stretch_adapter PRIVATE ${SNDFILE_LIBRARIES})
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(warptempo_stretchadapter PRIVATE -Wall -Wextra -O3 -march=native)
+    target_compile_options(stretch_adapter PRIVATE -Wall -Wextra -O3 -march=native)
 endif()

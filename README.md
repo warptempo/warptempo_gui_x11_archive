@@ -5,20 +5,20 @@ Requirements:
 bc ffmpeg ffprobe jq sox yt-dlp
 ```
 
-Additionally, `stretch`, `bungee` or `rubberband` are required.
+Additionally, `stretch`, `bungee` or `rubberband` are required for rendering output, or use engine=ableton to produce an Ableton Live Set. The default is engine=rubberband.
 
-To use the script, clone this repository and run `warptempo` within one of the example projects. Set engine=rubberband in the project's .settings file to use Rubber Band without needing to compile either `warptempo_stretchadapter` or `warptempo_bungeeadapter`.
+To use the script, clone this repository and run `warptempo` within one of the example projects. 
 
-To compile an adapter, install `cmake`, `libsndfile`, and `gcc` or `clang`. For `warptempo_stretchadapter`, run:
+To compile an adapter, install `cmake`, `libsndfile`, and `gcc` or `clang`. For the `stretch` adapter, run:
 ```
-cd scripts/warptempo_stretchadapter
+cd scripts/adapters/stretch
 git clone https://github.com/Signalsmith-Audio/signalsmith-stretch.git
 git clone https://github.com/Signalsmith-Audio/linear.git signalsmith-linear
 ```
 
-Or, for `warptempo_bungeeadapter`, run:
+Or, for `bungee`, run:
 ```
-cd scripts/warptempo_bungeeadapter
+cd scripts/adapters/bungee
 git clone --recurse-submodules https://github.com/bungee-audio-stretch/bungee.git
 ```
 
@@ -29,11 +29,9 @@ cmake ..
 make
 ```
 
-Once compiled, you can use engine=stretch or engine=bungee in your .settings file, or use engine=bungee+stretch to render using both engines. If the limiter is enabled, the Bungee version will be used for frequencies above the crossover point, and the Stretch version will be used for frequencies below the crossover.
+Once compiled, you can use engine=stretch or engine=bungee in your .settings file.
 
-For limiting, use the script's default limiter (ffmpeg alimiter) by setting limiter=true in .settings or leave limiter=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the warptempo_vstpresets folder.
-
-For crossover when alimiter is disabled, use a true Linkwitz-Reilly filter such as Crossover Stereo x8 in `lsp-plugins-vst3`. A VST preset is also provided. 
+For limiting, use the script's default limiter (ffmpeg alimiter) by setting limiter=true in .settings or leave limiter=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the presets folder.
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  

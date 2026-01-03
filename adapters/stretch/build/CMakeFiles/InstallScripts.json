@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/b/.warptempo/scripts/adapters/stretch/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

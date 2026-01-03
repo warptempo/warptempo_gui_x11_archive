@@ -1,0 +1,16 @@
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/bungee_adapter.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/edit_cache.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/rebuild_cache.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/list_install_components.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/install.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/install/local.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/CMakeFiles/install/strip.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/bungee_library.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/bungee_executable.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/pffft.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/edit_cache.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/rebuild_cache.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/list_install_components.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/install.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/install/local.dir
+/home/b/.warptempo/scripts/adapters/bungee/build/bungee/CMakeFiles/install/strip.dir
