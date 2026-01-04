@@ -251,7 +251,7 @@ audio_output="$title.wav"
 mkdir -p "$(dirname "$audio_output")"
 log_output="$title.log"
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap *"$title.wav" *"$title.log"
+rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav *"$title.wav" *"$title.log"
 
 # Get audio stats
 sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep sample_rate= | cut -d = -f 2)"
@@ -307,7 +307,7 @@ elif [[ "$engine" == rubberband ]]; then
 elif [[ "$engine" == none ]]; then
 	# Save timemap
 	mv .$md5-timemap .timemap
-	rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp.wav
+	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 fi
 
@@ -333,7 +333,7 @@ else
 	echo -e "$clip_warning"
 fi
 
-rm -f .$md5-timemap .$md5-timemap-trimmed .$md5-labels .$md5-labels-disabled .$md5-trimmed.wav .$md5-tmp*.wav .timemap
+rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav
 
 
 

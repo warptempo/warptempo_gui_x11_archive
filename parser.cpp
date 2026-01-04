@@ -12,9 +12,6 @@
 
 using namespace std;
 
-// Configuration and Constants
-const double EPSILON = 1e-8;
-
 struct WarpMarker {
     string original_line;
     string time_str;
@@ -148,7 +145,6 @@ map<string, pair<long, long>> load_log_file(const string& filename) {
         size_t pipe = line.find('|');
         if (pipe != string::npos) {
             string timestamp = line.substr(0, pipe);
-            // UPDATED: Check length >= 53 and substr(44, 9) for new padding
             if (line.length() >= 53) {
                 string frame_str = line.substr(44, 9);
                 try {
@@ -168,7 +164,6 @@ long get_log_next_frame(const string& log_filename, long current_line_idx) {
     long idx = 0;
     while (getline(file, line)) {
         if (idx == current_line_idx + 1) {
-             // UPDATED: Check length >= 53 and substr(44, 9) for new padding
              if (line.length() >= 53) {
                 string frame_str = line.substr(44, 9);
                 try { return stol(frame_str); } catch (...) { return 0; }
@@ -204,6 +199,7 @@ int main(int argc, char* argv[]) {
     if (settings.title.empty()) { cerr << "Error: Title required in settings." << endl; return 1; }
 
     string timemap_file = "." + md5 + "-timemap";
+    string precise_timemap_file = "." + md5 + "-timemap-precise";
     string log_output_file = settings.title + ".log";
 
     string begin_time_str = "";
@@ -374,6 +370,9 @@ int main(int argc, char* argv[]) {
 
     // --- 4. Pass 2: Generate Timemap & Logs ---
     ofstream of_tm(timemap_file);
+    ofstream of_tm_p(precise_timemap_file);
+    of_tm_p << fixed << setprecision(16); // 16 is optimal for double precision
+    
     ofstream of_log(log_output_file);
     map<string, pair<long, long>> log_ref_map;
     if (!log_file_path.empty()) log_ref_map = load_log_file(log_file_path);
@@ -383,7 +382,6 @@ int main(int argc, char* argv[]) {
     
     // Formatting helper
     auto print_log_line = [&](string left_part, long p_src, double p_tgt) {
-        // Updated padding logic: reach exactly 34 chars for the left part
         int padding = 34 - (int)left_part.length();
         if (padding < 0) padding = 0;
         
@@ -398,7 +396,6 @@ int main(int argc, char* argv[]) {
         double target_frame = 0;
         string left_part;
         
-        // Use formatted (evaluated) time string instead of raw input
         string display_time = format_timestamp(markers[i].time_seconds);
 
         if (markers[i].is_log_sync) {
@@ -412,13 +409,9 @@ int main(int argc, char* argv[]) {
             double delta = (double)(next_ref_frame - curr_ref_frame);
             target_frame = prev_tgt_frame + delta;
             
-            // Calculate effective tempo approximation
             double input_delta = (double)(src_frame - prev_src_frame);
             double exact_tempo = input_delta / (delta * settings.scale);
-            
-            // Round to nearest 2 decimals for base
             double base_tempo = round(exact_tempo * 100.0) / 100.0;
-            // Avoid division by zero if base ends up 0 (unlikely but safe)
             double multiplier = (base_tempo != 0) ? (exact_tempo / base_tempo) : 0;
             
             stringstream ss_approx;
@@ -477,6 +470,9 @@ int main(int argc, char* argv[]) {
         }
 
         of_tm << src_frame << " " << llrint(target_frame) << endl;
+        // Cast src_frame to double to ensure precise floating point output
+        of_tm_p << (double)src_frame << " " << target_frame << endl;
+        
         prev_src_frame = src_frame;
         prev_tgt_frame = target_frame;
     }
@@ -491,10 +487,10 @@ int main(int argc, char* argv[]) {
         end_time_display = format_timestamp(total_sec);
     }
     
-    // Use the same padding logic for the final line
     print_log_line(end_time_display, prev_src_frame, prev_tgt_frame);
 
     of_tm.close();
+    of_tm_p.close();
     of_log.close();
 
     // --- 5. Post-Process Trim on Timemap ---
@@ -503,6 +499,7 @@ int main(int argc, char* argv[]) {
         long end_frame = (!end_time_str.empty()) ? 
                          (long)llrint(parse_timestamp(end_time_str) * sample_rate) : total_frames;
         
+        // Standard Timemap Trim
         ifstream tm_in(timemap_file);
         string tm_trimmed_file = timemap_file + "-trimmed";
         ofstream tm_out(tm_trimmed_file);
@@ -521,6 +518,29 @@ int main(int argc, char* argv[]) {
         
         remove(timemap_file.c_str());
         rename(tm_trimmed_file.c_str(), timemap_file.c_str());
+        
+        // Precise Timemap Trim
+        ifstream tm_p_in(precise_timemap_file);
+        string tm_p_trimmed_file = precise_timemap_file + "-trimmed";
+        ofstream tm_p_out(tm_p_trimmed_file);
+        tm_p_out << fixed << setprecision(16);
+        
+        double begin_target_frame_p = -1.0;
+        bool first_p = true;
+        // Read both as double for precision preservation
+        double s_f_p, t_f_p;
+        while (tm_p_in >> s_f_p >> t_f_p) {
+            if (s_f_p >= begin_frame && s_f_p <= end_frame) {
+                if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
+                if (s_f_p == begin_frame) continue; 
+                tm_p_out << (s_f_p - (double)begin_frame) << " " << (t_f_p - begin_target_frame_p) << endl;
+            }
+        }
+        tm_p_in.close();
+        tm_p_out.close();
+        
+        remove(precise_timemap_file.c_str());
+        rename(tm_p_trimmed_file.c_str(), precise_timemap_file.c_str());
         
         cout << "AUDIO_INPUT_UPDATED=." << md5 << "-trimmed.wav" << endl;
     }

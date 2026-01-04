@@ -36,7 +36,7 @@ export LC_ALL=C
 	# 3. Calculate Final Timeline Duration
 	# Read the last target frame from the timemap to know where the clip ends
 	# At 60 BPM, 1 Beat = 1 Second. Duration(s) = Frame / SampleRate
-	last_target_frame=$(tail -n 1 ".$md5-timemap" | cut -d ' ' -f 2)
+	last_target_frame=$(tail -n 1 ".$md5-timemap-precise" | cut -d ' ' -f 2)
 	final_duration=$(echo "$last_target_frame / $sample_rate" | bc -l)
 	
 	# 4. Generate the Warp Markers XML Block
@@ -57,7 +57,7 @@ export LC_ALL=C
 		# Append to XML string
 		markers_xml+="<WarpMarker Id=\"$id\" SecTime=\"$sec_time\" BeatTime=\"$beat_time\" />"
 		((id++))
-	done < ".$md5-timemap"
+	done < ".$md5-timemap-precise"
 	
 	# 5. Patch the ALS (XML) File
 	# Decompress the Live Set
