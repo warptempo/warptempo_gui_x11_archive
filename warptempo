@@ -307,6 +307,7 @@ elif [[ "$engine" == rubberband ]]; then
 elif [[ "$engine" == none ]]; then
 	# Save timemap
 	mv .$md5-timemap .timemap
+	mv .$md5-timemap-precise .timemap-precise
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 fi

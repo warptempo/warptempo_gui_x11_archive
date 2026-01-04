@@ -223,13 +223,22 @@ int main(int argc, char* argv[]) {
             t_line = t_line.substr(0, first_space);
         }
 
-        if (t_line.rfind("begin_time=", 0) == 0 || t_line.rfind("b=", 0) == 0) {
-            begin_time_str = t_line.substr(t_line.find('=') + 1);
-            continue;
+        // 1. Check for b= / begin_time=
+        if (t_line.rfind("begin_time=", 0) == 0) {
+            t_line = t_line.substr(11); // Strip prefix
+            begin_time_str = t_line;    // Capture for trim logic later
+        } else if (t_line.rfind("b=", 0) == 0) {
+            t_line = t_line.substr(2);  // Strip prefix
+            begin_time_str = t_line;    // Capture for trim logic later
         }
-        if (t_line.rfind("end_time=", 0) == 0 || t_line.rfind("e=", 0) == 0) {
-            end_time_str = t_line.substr(t_line.find('=') + 1);
-            continue;
+
+        // 2. Check for e= / end_time=
+        if (t_line.rfind("end_time=", 0) == 0) {
+            t_line = t_line.substr(9);  // Strip prefix
+            end_time_str = t_line;      // Capture for trim logic later
+        } else if (t_line.rfind("e=", 0) == 0) {
+            t_line = t_line.substr(2);  // Strip prefix
+            end_time_str = t_line;      // Capture for trim logic later
         }
 
         if (t_line.length() < 9 || t_line.find('|') == string::npos) continue;
@@ -314,11 +323,26 @@ int main(int argc, char* argv[]) {
 
     // --- 2. Handle Trim ---
     if (!begin_time_str.empty() || !end_time_str.empty()) {
+        // CLEANUP: Remove everything after the first pipe '|'
+        if (begin_time_str.find('|') != string::npos) {
+            begin_time_str = begin_time_str.substr(0, begin_time_str.find('|'));
+        }
+        if (end_time_str.find('|') != string::npos) {
+            end_time_str = end_time_str.substr(0, end_time_str.find('|'));
+        }
+
+        // Also strip the 'b=' or 'e=' prefixes if your parser included them
+        if (begin_time_str.rfind("b=", 0) == 0) begin_time_str.erase(0, 2);
+        if (end_time_str.rfind("e=", 0) == 0) end_time_str.erase(0, 2);
+
         if (begin_time_str == "00:00.000") { cerr << "Error: Begin time cannot be 00:00.000." << endl; return 1; }
+        
         string trim_out = "." + md5 + "-trimmed.wav";
         string cmd = "sox \"" + audio_input + "\" -b 32 " + trim_out + " trim " + 
                      (begin_time_str.empty() ? "0" : begin_time_str);
+        
         if (!end_time_str.empty()) cmd += " =" + end_time_str;
+        
         int ret = system(cmd.c_str());
         if (ret != 0) { cerr << "Error: Sox trim failed." << endl; return 1; }
         audio_input = trim_out;
