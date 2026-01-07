@@ -1,11 +1,14 @@
 # Backups
 *~
 
-# Stretch Adapter Build Artifacts
-warptempo_stretchadapter/build/
-warptempo_stretchadapter/signalsmith-*/
-
 # Bungee Adapter Build Artifacts
-warptempo_bungeeadapter/build/
-warptempo_bungeeadapter/bungee/
+adapters/bungee/build/
+adapters/bungee/bungee/
+
+# Stretch Adapter Build Artifacts
+adapters/stretch/build/
+adapters/stretch/signalsmith-*/
+
+# SoundTouch Adapter Build Artifacts
+adapters/soundtouch/build/
 

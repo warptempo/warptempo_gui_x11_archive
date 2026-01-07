@@ -1,2 +1,0 @@
-/usr/bin/ar qc libpffft.a CMakeFiles/pffft.dir/submodules/pffft/pffft.c.o CMakeFiles/pffft.dir/submodules/pffft/fftpack.c.o
-/usr/bin/ranlib libpffft.a

@@ -148,11 +148,8 @@ fi
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
-if [[ "$engine" == soundtouch ]]; then
-	soundtouch_adapter_path="$script_dir/adapters/soundtouch/build/soundtouch_adapter"
-	if [[ ! -x "$soundtouch_adapter_path" ]]; then
-		echo "Error: SoundTouch adapter not found at $soundtouch_adapter_path" && ((requirement_errors++))
-	fi
+if [[ "$engine" == rubberband ]]; then
+	requirements+=(rubberband)
 fi
 if [[ "$engine" == bungee ]]; then
 	bungee_adapter_path="$script_dir/adapters/bungee/build/bungee_adapter"
@@ -166,8 +163,11 @@ if [[ "$engine" == stretch ]]; then
 		echo "Error: Signalsmith Stretch adapter not found at $stretch_adapter_path" && ((requirement_errors++))
 	fi
 fi
-if [[ "$engine" == rubberband ]]; then
-	requirements+=(rubberband)
+if [[ "$engine" == soundtouch ]]; then
+	soundtouch_adapter_path="$script_dir/adapters/soundtouch/build/soundtouch_adapter"
+	if [[ ! -x "$soundtouch_adapter_path" ]]; then
+		echo "Error: SoundTouch adapter not found at $soundtouch_adapter_path" && ((requirement_errors++))
+	fi
 fi
 if [[ "$engine" == ableton ]]; then
 	ableton_adapter_path="$script_dir/adapters/ableton/ableton_adapter"
@@ -297,17 +297,17 @@ if [[ ! -z "$updated_input" ]]; then
 fi
 
 # Adapter / Engine Execution
-if [[ "$engine" == soundtouch ]]; then
-	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
+if [[ "$engine" == rubberband ]]; then
+	# Run rubberband
+	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
 elif [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
 	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 elif [[ "$engine" == stretch ]]; then
 	# Run warptempo_stretchadapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
-elif [[ "$engine" == rubberband ]]; then
-	# Run rubberband
-	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
+elif [[ "$engine" == soundtouch ]]; then
+	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
 elif [[ "$engine" == ableton ]]; then
 	. "$ableton_adapter_path"
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav

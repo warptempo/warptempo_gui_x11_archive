@@ -1,1 +1,0 @@
-/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/soundtouch_adapter.dir/link.d CMakeFiles/soundtouch_adapter.dir/main.cpp.o -o soundtouch_adapter  -lsndfile -lSoundTouch

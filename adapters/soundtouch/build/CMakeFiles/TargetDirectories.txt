@@ -1,3 +1,0 @@
-/home/b/.warptempo/scripts/adapters/soundtouch/build/CMakeFiles/soundtouch_adapter.dir
-/home/b/.warptempo/scripts/adapters/soundtouch/build/CMakeFiles/edit_cache.dir
-/home/b/.warptempo/scripts/adapters/soundtouch/build/CMakeFiles/rebuild_cache.dir

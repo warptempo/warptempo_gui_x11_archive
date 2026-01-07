@@ -1,1 +1,0 @@
-/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/bungee_executable.dir/link.d CMakeFiles/bungee_executable.dir/cmd/main.cpp.o -o bungee  -Wl,-rpath,/home/b/.warptempo/scripts/adapters/bungee/build/bungee: libbungee.so

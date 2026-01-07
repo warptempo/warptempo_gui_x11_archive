@@ -1,3 +1,0 @@
-/home/b/.warptempo/scripts/adapters/stretch/build/CMakeFiles/stretch_adapter.dir
-/home/b/.warptempo/scripts/adapters/stretch/build/CMakeFiles/edit_cache.dir
-/home/b/.warptempo/scripts/adapters/stretch/build/CMakeFiles/rebuild_cache.dir
