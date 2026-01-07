@@ -17,6 +17,7 @@ struct WarpMarker {
     string time_str;
     string tempo_str;
     string label_def;
+    string label_prefix;
     
     double time_seconds;
     long source_frame; // Calculated input frame
@@ -240,6 +241,27 @@ int main(int argc, char* argv[]) {
             t_line = t_line.substr(2);  // Strip prefix
             end_time_str = t_line;      // Capture for trim logic later
         }
+        
+        // --- VALIDATION RULE ---
+        // Bash equiv: if [[ "$line" != ??:??.???*\|?.??* ]] && [[ "$line" != ??:??.???*\|'""""'* ]]; then continue
+        size_t pipe_pos = t_line.find('|');
+        if (pipe_pos == string::npos) continue;
+
+        // 1. Check Timestamp Format (??:??.???*)
+        // Must be at least 9 chars long before the pipe, with colons/dots at specific indices
+        if (pipe_pos < 9 || t_line[2] != ':' || t_line[5] != '.') continue;
+
+        // 2. Check Tempo Format (?.??* OR """"*)
+        string rhs = t_line.substr(pipe_pos + 1);
+        
+        // Matches ?.??* (e.g. "1.00", "0.95"). Note: This filters out "10.00" as per your bash rule.
+        bool match_numeric = (rhs.length() >= 4 && rhs[1] == '.'); 
+        
+        // Matches """" (quoted quotes)
+        bool match_quoted = (rhs.find("\"\"\"\"") == 0);
+
+        if (!match_numeric && !match_quoted) continue;
+        // -----------------------
 
         if (t_line.length() < 9 || t_line.find('|') == string::npos) continue;
 
@@ -276,6 +298,15 @@ int main(int argc, char* argv[]) {
         wm.time_str = time_raw; 
         wm.time_seconds = final_time_sec;
         wm.label_def = label_raw;
+        
+        if (!label_raw.empty()) {
+            size_t dot_pos = label_raw.find('.');
+            if (dot_pos != string::npos) {
+                wm.label_prefix = label_raw.substr(0, dot_pos);
+            } else {
+                wm.label_prefix = label_raw;
+            }
+        }
 
         if (tempo_raw.find(':') != string::npos) {
             if (log_file_path.empty()) { cerr << "Error: Log time found but no log file." << endl; return 1; }
@@ -338,7 +369,7 @@ int main(int argc, char* argv[]) {
         if (begin_time_str == "00:00.000") { cerr << "Error: Begin time cannot be 00:00.000." << endl; return 1; }
         
         string trim_out = "." + md5 + "-trimmed.wav";
-        string cmd = "sox \"" + audio_input + "\" -b 32 " + trim_out + " trim " + 
+        string cmd = "sox \"" + audio_input + "\" -b 32 -e float " + trim_out + " trim " + 
                      (begin_time_str.empty() ? "0" : begin_time_str);
         
         if (!end_time_str.empty()) cmd += " =" + end_time_str;
@@ -494,7 +525,6 @@ int main(int argc, char* argv[]) {
         }
 
         of_tm << src_frame << " " << llrint(target_frame) << endl;
-        // Cast src_frame to double to ensure precise floating point output
         of_tm_p << (double)src_frame << " " << target_frame << endl;
         
         prev_src_frame = src_frame;
@@ -553,11 +583,18 @@ int main(int argc, char* argv[]) {
         bool first_p = true;
         // Read both as double for precision preservation
         double s_f_p, t_f_p;
-        while (tm_p_in >> s_f_p >> t_f_p) {
+        string lbl; // <--- NEW: Variable for label
+
+        // NEW: Read 3 columns (src, tgt, label)
+        while (tm_p_in >> s_f_p >> t_f_p >> lbl) { 
             if (s_f_p >= begin_frame && s_f_p <= end_frame) {
                 if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
                 if (s_f_p == begin_frame) continue; 
-                tm_p_out << (s_f_p - (double)begin_frame) << " " << (t_f_p - begin_target_frame_p) << endl;
+                
+                // NEW: Write 3 columns including label
+                tm_p_out << (s_f_p - (double)begin_frame) << " " 
+                         << (t_f_p - begin_target_frame_p) << " " 
+                         << lbl << endl; 
             }
         }
         tm_p_in.close();

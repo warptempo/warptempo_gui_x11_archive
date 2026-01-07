@@ -9,6 +9,3 @@ warptempo_stretchadapter/signalsmith-*/
 warptempo_bungeeadapter/build/
 warptempo_bungeeadapter/bungee/
 
-# Python
-.venv
-

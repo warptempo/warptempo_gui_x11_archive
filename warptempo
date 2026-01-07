@@ -127,7 +127,7 @@ fi
 
 # Validate engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(ableton bungee stretch rubberband none)
+	supported_engines=(ableton bungee soundtouch stretch rubberband none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -148,6 +148,12 @@ fi
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
+if [[ "$engine" == soundtouch ]]; then
+	soundtouch_adapter_path="$script_dir/adapters/soundtouch/build/soundtouch_adapter"
+	if [[ ! -x "$soundtouch_adapter_path" ]]; then
+		echo "Error: SoundTouch adapter not found at $soundtouch_adapter_path" && ((requirement_errors++))
+	fi
+fi
 if [[ "$engine" == bungee ]]; then
 	bungee_adapter_path="$script_dir/adapters/bungee/build/bungee_adapter"
 	if [[ ! -x "$bungee_adapter_path" ]]; then
@@ -162,6 +168,9 @@ if [[ "$engine" == stretch ]]; then
 fi
 if [[ "$engine" == rubberband ]]; then
 	requirements+=(rubberband)
+fi
+if [[ "$engine" == ableton ]]; then
+	ableton_adapter_path="$script_dir/adapters/ableton/ableton_adapter"
 fi
 requirement_errors=0
 
@@ -263,17 +272,16 @@ if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then
 	echo >> "$warpmarkers_file"
 fi
 
-# --- C++ Compilation ---
-# We assume the cpp file is in the same dir as the script
-cpp_source="$script_dir/parser.cpp"
-cpp_binary="$script_dir/parser"
+# Parser
+parser_source="$script_dir/parser.cpp"
+parser_binary="$script_dir/parser"
 
-if [[ ! -f "$cpp_binary" ]] || [[ "$cpp_source" -nt "$cpp_binary" ]]; then
+if [[ ! -f "$parser_binary" ]] || [[ "$parser_source" -nt "$parser_binary" ]]; then
 	echo "Compiling parser..."
-	g++ -O3 -march=native -o "$cpp_binary" "$cpp_source"
+	g++ -O3 -o "$parser_binary" "$parser_source"
 fi
 
-# Call the C++ parser
+# Run Parser
 parser_output=$("$script_dir/parser" "$warpmarkers_file" "$settings_file" "$audio_input" "$sample_rate" "$total_frames" "$md5" "$log_file" "$total_time_ms")
 
 # Check for failure
@@ -286,24 +294,24 @@ fi
 updated_input=$(echo "$parser_output" | grep "AUDIO_INPUT_UPDATED" | cut -d = -f 2)
 if [[ ! -z "$updated_input" ]]; then
     audio_input="$updated_input"
-    # Optional: Recalculate stats for the new file if strictly necessary, 
-    # though the timemap is already aligned to this new file.
 fi
 
-if [[ "$engine" == ableton ]]; then
-	. "$script_dir/adapters/ableton/ableton_adapter"
+# Adapter / Engine Execution
+if [[ "$engine" == soundtouch ]]; then
+	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
 elif [[ "$engine" == bungee ]]; then
 	# Run warptempo_bungeeadapter
 	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
-	version_comment="$("$bungee_adapter_path" -v)"
 elif [[ "$engine" == stretch ]]; then
 	# Run warptempo_stretchadapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
-	version_comment="$("$stretch_adapter_path" -v)"
 elif [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
-	version_comment="rubberband v$(rubberband -V 2>&1)"
+elif [[ "$engine" == ableton ]]; then
+	. "$ableton_adapter_path"
+	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
+	exit
 elif [[ "$engine" == none ]]; then
 	# Save timemap
 	mv .$md5-timemap .timemap
@@ -321,15 +329,10 @@ if $limiter; then
 	af+=":attack=10"
 	af+=":release=20"
 
-	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -metadata comment="$version_comment" -af "$af" "$audio_output"
+	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
-	if [[ "$engine" == bungee+stretch ]]; then
-		ffmpeg -i .$md5-tmp-bungee.wav -c copy -metadata comment="$version_comment" "engine=bungee;limiter=$limiter;$audio_output"
-		ffmpeg -i .$md5-tmp-stretch.wav -c copy -metadata comment="$version_comment" "engine=stretch;limiter=$limiter;$audio_output"
-	else
-		ffmpeg -i .$md5-tmp.wav -c copy -metadata comment="$version_comment" "engine=$engine;limiter=$limiter;$audio_output"
-	fi
+	mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"
 	echo
 	echo -e "$clip_warning"
 fi
