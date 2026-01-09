@@ -170,7 +170,24 @@ if [[ "$engine" == soundtouch ]]; then
 	fi
 fi
 if [[ "$engine" == ableton ]]; then
-	ableton_adapter_path="$script_dir/adapters/ableton/ableton_adapter"
+	# Ableton Adapter
+	ableton_adapter_source="$script_dir/adapters/ableton/ableton_adapter.cpp"
+	ableton_adapter_binary="$script_dir/adapters/ableton/ableton_adapter"
+
+	if [[ ! -f "$ableton_adapter_binary" ]] || [[ "$ableton_adapter_source" -nt "$ableton_adapter_binary" ]]; then
+		echo "Compiling ableton adapter..."
+		g++ -O3 -o "$ableton_adapter_binary" "$ableton_adapter_source"
+	fi
+	ableton_adapter_path="$ableton_adapter_binary"
+	
+	# RMS Splitter
+	rms_splitter_source="$script_dir/rms_splitter.cpp"
+	rms_splitter_binary="$script_dir/rms_splitter"
+
+	if [[ ! -f "$rms_splitter_binary" ]] || [[ "$rms_splitter_source" -nt "$rms_splitter_binary" ]]; then
+		echo "Compiling rms splitter..."
+		g++ -O3 -o "$rms_splitter_binary" "$rms_splitter_source" -lsndfile
+	fi
 fi
 requirement_errors=0
 
@@ -282,7 +299,7 @@ if [[ ! -f "$parser_binary" ]] || [[ "$parser_source" -nt "$parser_binary" ]]; t
 fi
 
 # Run Parser
-parser_output=$("$script_dir/parser" "$warpmarkers_file" "$settings_file" "$audio_input" "$sample_rate" "$total_frames" "$md5" "$log_file" "$total_time_ms")
+parser_output=$("$parser_binary" "$warpmarkers_file" "$settings_file" "$audio_input" "$sample_rate" "$total_frames" "$md5" "$log_file" "$total_time_ms")
 
 # Check for failure
 if [ $? -ne 0 ]; then
@@ -301,15 +318,17 @@ if [[ "$engine" == rubberband ]]; then
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
 elif [[ "$engine" == bungee ]]; then
-	# Run warptempo_bungeeadapter
+	# Run bungee_adapter
 	"$bungee_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 elif [[ "$engine" == stretch ]]; then
-	# Run warptempo_stretchadapter
+	# Run stretch_adapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 elif [[ "$engine" == soundtouch ]]; then
 	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
 elif [[ "$engine" == ableton ]]; then
-	. "$ableton_adapter_path"
+	# Run ableton_adapter
+	"$ableton_adapter_path" "$audio_input" .$md5-timemap-precise $md5 "$script_dir"
+	mv .$md5-timemap-precise .timemap-precise
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 elif [[ "$engine" == none ]]; then

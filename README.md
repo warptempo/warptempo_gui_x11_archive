@@ -41,7 +41,7 @@ make
 
 Once compiled, you can use engine=bungee, engine=stretch or engine=soundtouch in your .settings file.
 
-For limiting, use the script's default limiter (ffmpeg alimiter) by setting limiter=true in .settings or leave limiter=false and use an external limiter. Recommended settings for FabFilter Pro-L2: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). A VST preset exported from REAPER is provided in the presets folder.
+For best timing accuracy, engine=ableton is recommended. Once rendered in Ableton, the output can be mastered in any DAW or CLI tool. To improve sound quality, `rms_splitter` is provided - pass the Ableton output and use the two split bands (quiet and loud) to apply separate mastering profiles. 
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
