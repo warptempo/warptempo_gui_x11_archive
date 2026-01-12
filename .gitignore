@@ -1,6 +1,11 @@
 # Backups
 *~
 
+# Compiled Binaries
+parser
+rms_splitter
+ableton_adapter
+
 # Bungee Adapter Build Artifacts
 adapters/bungee/build/
 adapters/bungee/bungee/
@@ -11,4 +16,5 @@ adapters/stretch/signalsmith-*/
 
 # SoundTouch Adapter Build Artifacts
 adapters/soundtouch/build/
+
 
