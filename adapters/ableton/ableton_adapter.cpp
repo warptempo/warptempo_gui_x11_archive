@@ -120,8 +120,15 @@ int main(int argc, char* argv[]) {
         string fmt = exec(fmt_cmd.c_str());
 
         if (fmt != "flt") {
-            cout << "[Adapter] Converting to 32-bit float WAV..." << endl;
-            string conv_cmd = "ffmpeg -y -i \"" + audio_input + "\" -c:a pcm_f32le \"" + wav_candidate + "\" >/dev/null 2>&1";
+            // Probe input sample rate to ensure output matches
+            string rate_cmd = "ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of default=noprint_wrappers=1:nokey=1 \"" + audio_input + "\"";
+            string in_rate = exec(rate_cmd.c_str());
+
+            cout << "[Adapter] Converting to 32-bit float WAV at " << in_rate << "Hz..." << endl;
+            
+            // Added -ar <rate> to force matching sample rate
+            string conv_cmd = "ffmpeg -y -i \"" + audio_input + "\" -ar " + in_rate + " -c:a pcm_f32le \"" + wav_candidate + "\" >/dev/null 2>&1";
+            
             system(conv_cmd.c_str());
             audio_source_path = wav_candidate;
         } else {

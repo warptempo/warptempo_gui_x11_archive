@@ -18,9 +18,10 @@ struct WarpMarker {
     string tempo_str;
     string label_def;
     string label_prefix;
+    string rms_override;
     
     double time_seconds;
-    long source_frame; // Calculated input frame
+    double source_frame; // Calculated input frame
     double target_frame; // Calculated output frame
     
     // Parsed properties
@@ -195,9 +196,9 @@ int main(int argc, char* argv[]) {
     string log_file_path = (argc > 7 && string(argv[7]) != "0") ? argv[7] : "";
     string total_time_ms_arg = (argc > 8) ? argv[8] : "";
 
-    if (!file_exists(set_file)) { cerr << "Error: Settings file not found." << endl; return 1; }
+    if (!file_exists(set_file)) { cerr << "Error: Settings file not found: " << set_file << endl; return 1; }
     Settings settings = load_settings(set_file);
-    if (settings.title.empty()) { cerr << "Error: Title required in settings." << endl; return 1; }
+    if (settings.title.empty()) { cerr << "Error: Title required in settings file: " << set_file << endl; return 1; }
 
     string timemap_file = "." + md5 + "-timemap";
     string precise_timemap_file = "." + md5 + "-timemap-precise";
@@ -212,17 +213,42 @@ int main(int argc, char* argv[]) {
 
     // --- 1. Parse Warp Markers ---
     ifstream wmf(wm_file);
-    if (!wmf.is_open()) { cerr << "Error: Cannot open warpmarkers file." << endl; return 1; }
+    if (!wmf.is_open()) { cerr << "Error: Cannot open warpmarkers file: " << wm_file << endl; return 1; }
 
     string line;
     while (getline(wmf, line)) {
         string t_line = trim_str(line);
         if (t_line.empty()) continue;
         
+        // --- RMS Override Tag Detection ---
+        string rms_tag = "";
+        
+        // Check for tags (Longer versions first to avoid partial matches)
+        if (t_line.find("!loud") != string::npos) {
+            rms_tag = "!loud";
+            size_t pos = t_line.find("!loud");
+            t_line.replace(pos, 5, ""); 
+        } else if (t_line.find("!quiet") != string::npos) {
+            rms_tag = "!quiet";
+            size_t pos = t_line.find("!quiet");
+            t_line.replace(pos, 6, "");
+        } else if (t_line.find("!l") != string::npos) {
+            rms_tag = "!loud";
+            size_t pos = t_line.find("!l");
+            t_line.replace(pos, 2, "");
+        } else if (t_line.find("!q") != string::npos) {
+            rms_tag = "!quiet";
+            size_t pos = t_line.find("!q");
+            t_line.replace(pos, 2, "");
+        }
+        
+        // Clean up potentially created double spaces or trailing spaces
+        t_line = trim_str(t_line);
+        
         size_t first_space = t_line.find(' ');
         if (first_space != string::npos) {
             t_line = t_line.substr(0, first_space);
-        }
+        }	
 
         // 1. Check for b= / begin_time=
         if (t_line.rfind("begin_time=", 0) == 0) {
@@ -281,7 +307,7 @@ int main(int argc, char* argv[]) {
         }
 
         string time_base = time_raw.substr(0, 9);
-        if (parse_timestamp(time_base) < 0) { cerr << "Error: Invalid time format." << endl; return 1; }
+        if (parse_timestamp(time_base) < 0) { cerr << "Error: Invalid time format: " << time_base << " in line: " << line << endl; return 1; }
         if (time_base == "00:00.000") has_zero_time = true;
 
         double final_time_sec;
@@ -298,6 +324,7 @@ int main(int argc, char* argv[]) {
         wm.time_str = time_raw; 
         wm.time_seconds = final_time_sec;
         wm.label_def = label_raw;
+        wm.rms_override = rms_tag;
         
         if (!label_raw.empty()) {
             size_t dot_pos = label_raw.find('.');
@@ -309,8 +336,8 @@ int main(int argc, char* argv[]) {
         }
 
         if (tempo_raw.find(':') != string::npos) {
-            if (log_file_path.empty()) { cerr << "Error: Log time found but no log file." << endl; return 1; }
-            if (time_base == "00:00.000") { cerr << "Error: Log time cannot be used in first time." << endl; return 1; }
+            if (log_file_path.empty()) { cerr << "Error: Log time found but no log file provided. Line: " << line << endl; return 1; }
+            if (time_base == "00:00.000") { cerr << "Error: Log time cannot be used in first time (00:00.000). Line: " << line << endl; return 1; }
             wm.is_log_sync = true;
             wm.tempo_str = tempo_raw; 
         } else if (tempo_raw == "\"\"\"\"") {
@@ -338,7 +365,7 @@ int main(int argc, char* argv[]) {
     }
     wmf.close();
 
-    if (!has_zero_time) { cerr << "Error: First time must be 00:00.000." << endl; return 1; }
+    if (!has_zero_time) { cerr << "Error: First time must be 00:00.000 in file: " << wm_file << endl; return 1; }
 
     if (!disabled_labels.empty()) {
         vector<WarpMarker> filtered;
@@ -366,7 +393,7 @@ int main(int argc, char* argv[]) {
         if (begin_time_str.rfind("b=", 0) == 0) begin_time_str.erase(0, 2);
         if (end_time_str.rfind("e=", 0) == 0) end_time_str.erase(0, 2);
 
-        if (begin_time_str == "00:00.000") { cerr << "Error: Begin time cannot be 00:00.000." << endl; return 1; }
+        if (begin_time_str == "00:00.000") { cerr << "Error: Begin time cannot be 00:00.000. Found: " << begin_time_str << endl; return 1; }
         
         string trim_out = "." + md5 + "-trimmed.wav";
         string cmd = "sox \"" + audio_input + "\" -b 32 -e float " + trim_out + " trim " + 
@@ -375,7 +402,7 @@ int main(int argc, char* argv[]) {
         if (!end_time_str.empty()) cmd += " =" + end_time_str;
         
         int ret = system(cmd.c_str());
-        if (ret != 0) { cerr << "Error: Sox trim failed." << endl; return 1; }
+        if (ret != 0) { cerr << "Error: Sox trim failed. Command: " << cmd << endl; return 1; }
         audio_input = trim_out;
     }
 
@@ -383,19 +410,21 @@ int main(int argc, char* argv[]) {
     map<string, double> label_deltas; 
     map<string, string> label_tempos; 
 
-    long prev_src_frame = 0;
+    double prev_src_frame = 0.0; // Changed to double
     double prev_tgt_frame = 0.0;
 
     for (size_t i = 0; i < markers.size(); ++i) {
-        long src_frame;
+        double src_frame; // Changed to double
         if (i + 1 < markers.size()) {
-            src_frame = (long)llrint(markers[i+1].time_seconds * sample_rate);
+            // Keep full precision, do not round yet
+            src_frame = markers[i+1].time_seconds * sample_rate;
         } else {
-            src_frame = total_frames;
+            src_frame = (double)total_frames;
         }
 
-        if (src_frame > total_frames) { cerr << "Error: Invalid time > file length." << endl; return 1; }
-        if (src_frame - prev_src_frame < 1) { cerr << "Error: Invalid time - distance <= 0." << endl; return 1; }
+        if (src_frame > (double)total_frames) { cerr << "Error: Invalid time > file length. Time: " << markers[i].time_str << " (Frame: " << fixed << setprecision(2) << src_frame << " > Total: " << total_frames << ")" << endl; return 1; }
+        // Use epsilon or small threshold for "distance <= 0" check if needed, but < 1.0 is safe for frames
+        if (src_frame - prev_src_frame < 1.0) { cerr << "Error: Invalid time - distance <= 0. Time: " << markers[i].time_str << " (Current: " << src_frame << " <= Prev: " << prev_src_frame << ")" << endl; return 1; }
 
         markers[i].source_frame = src_frame;
         double current_tgt = prev_tgt_frame;
@@ -404,15 +433,15 @@ int main(int argc, char* argv[]) {
              if (!markers[i].is_label_ref && !markers[i].is_log_sync) {
                 string dummy;
                 double tempo_val = parse_tempo_math(markers[i].tempo_str, dummy);
-                if (tempo_val > 9.99 || tempo_val <= 0) { cerr << "Error: Invalid tempo." << endl; return 1; }
+                if (tempo_val > 9.99 || tempo_val <= 0) { cerr << "Error: Invalid tempo value: " << tempo_val << " in line: " << markers[i].original_line << endl; return 1; }
 
-                double delta_src = (double)(src_frame - prev_src_frame);
+                double delta_src = src_frame - prev_src_frame; // No cast needed
                 double delta_tgt = delta_src / (tempo_val * settings.scale);
                 current_tgt += delta_tgt;
 
                 if (!markers[i].label_def.empty()) {
                     string lbl = markers[i].label_def;
-                    if (label_deltas.count(lbl)) { cerr << "Error: Label already exists." << endl; return 1; }
+                    if (label_deltas.count(lbl)) { cerr << "Error: Label already exists: " << lbl << " in line: " << markers[i].original_line << endl; return 1; }
                     label_deltas[lbl] = delta_tgt;
                     label_tempos[lbl] = markers[i].tempo_str;
                 }
@@ -432,22 +461,23 @@ int main(int argc, char* argv[]) {
     map<string, pair<long, long>> log_ref_map;
     if (!log_file_path.empty()) log_ref_map = load_log_file(log_file_path);
 
-    prev_src_frame = 0;
+    prev_src_frame = 0.0;
     prev_tgt_frame = 0.0;
     
     // Formatting helper
-    auto print_log_line = [&](string left_part, long p_src, double p_tgt) {
+    // FIX: Changed p_src from 'long' to 'double' to prevent implicit truncation
+    auto print_log_line = [&](string left_part, double p_src, double p_tgt) {
         int padding = 34 - (int)left_part.length();
         if (padding < 0) padding = 0;
         
         of_log << left_part << string(padding, ' ')
-               << setfill('0') << setw(9) << p_src << " "
+               << setfill('0') << setw(9) << llrint(p_src) << " " // FIX: Use llrint() here
                << setfill('0') << setw(9) << llrint(p_tgt) << " "
                << format_timestamp(p_tgt/sample_rate) << endl;
     };
 
     for (size_t i = 0; i < markers.size(); ++i) {
-        long src_frame = markers[i].source_frame;
+        double src_frame = markers[i].source_frame; // Now double
         double target_frame = 0;
         string left_part;
         
@@ -455,7 +485,7 @@ int main(int argc, char* argv[]) {
 
         if (markers[i].is_log_sync) {
             string log_time = markers[i].tempo_str;
-            if (log_ref_map.find(log_time) == log_ref_map.end()) { cerr << "Error: Time not found in log." << endl; return 1; }
+            if (log_ref_map.find(log_time) == log_ref_map.end()) { cerr << "Error: Time not found in log: " << log_time << " in line: " << markers[i].original_line << endl; return 1; }
             
             long curr_ref_frame = log_ref_map[log_time].first;
             long line_idx = log_ref_map[log_time].second;
@@ -490,7 +520,7 @@ int main(int argc, char* argv[]) {
 
         } else if (markers[i].is_label_ref) {
             string lbl = markers[i].tempo_str;
-            if (label_deltas.find(lbl) == label_deltas.end()) { cerr << "Error: Label does not exist." << endl; return 1; }
+            if (label_deltas.find(lbl) == label_deltas.end()) { cerr << "Error: Label does not exist: " << lbl << " referenced in line: " << markers[i].original_line << endl; return 1; }
             
             double lbl_delta = label_deltas[lbl];
             string lbl_tempo_str = label_tempos[lbl];
@@ -524,8 +554,14 @@ int main(int argc, char* argv[]) {
             print_log_line(left_part, prev_src_frame, prev_tgt_frame);
         }
 
-        of_tm << src_frame << " " << llrint(target_frame) << endl;
-        of_tm_p << (double)src_frame << " " << target_frame << endl;
+        // 1. Standard Timemap: Integers, Banker's Rounding (llrint)
+        of_tm << llrint(src_frame) << " " << llrint(target_frame) << endl;
+        
+        // 2. Precise Timemap: Doubles + RMS Override
+        // Output 3rd column: Only add the space if the override exists
+        of_tm_p << src_frame << " " << target_frame 
+                << (markers[i].rms_override.empty() ? "" : " " + markers[i].rms_override) 
+                << endl;
         
         prev_src_frame = src_frame;
         prev_tgt_frame = target_frame;
@@ -581,18 +617,32 @@ int main(int argc, char* argv[]) {
         
         double begin_target_frame_p = -1.0;
         bool first_p = true;
-        // Read both as double for precision preservation
-        double s_f_p, t_f_p;
         
-        // FIXED: Only read 2 columns (Source, Target) as generated by this parser
-        while (tm_p_in >> s_f_p >> t_f_p) { 
-            if (s_f_p >= begin_frame && s_f_p <= end_frame) {
+        double s_f_p, t_f_p;
+        string p_line;
+
+        while (getline(tm_p_in, p_line)) {
+            if (p_line.empty()) continue;
+            
+            stringstream p_ss(p_line);
+            string rms_col = ""; // Reset to empty
+            
+            // Read first two columns (doubles)
+            if (!(p_ss >> s_f_p >> t_f_p)) continue; 
+            
+            // Attempt to read 3rd column
+            p_ss >> rms_col; 
+
+            if (s_f_p >= (double)begin_frame && s_f_p <= (double)end_frame) {
                 if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
-                if (s_f_p == begin_frame) continue; 
+                if (abs(s_f_p - (double)begin_frame) < 1e-9) continue; // Float safe comparison for start
                 
-                // Write calculated relative frames
+                // Write calculated relative frames (doubles)
+                // Only print space if rms_col has content
                 tm_p_out << (s_f_p - (double)begin_frame) << " " 
-                         << (t_f_p - begin_target_frame_p) << endl; 
+                         << (t_f_p - begin_target_frame_p)
+                         << (rms_col.empty() ? "" : " " + rms_col) 
+                         << endl; 
             }
         }
         tm_p_in.close();

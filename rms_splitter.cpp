@@ -20,6 +20,7 @@ struct Section {
     long long end_warp = 0;
     double loudness_db = -144.0;
     bool is_loud = false;
+    int override_type = 0; // 0: None, 1: Force Loud, 2: Force Quiet
 };
 
 // Helper: Linear to dB
@@ -86,8 +87,7 @@ int main(int argc, char* argv[]) {
     
     std::cout << "Loaded: " << samplerate << "Hz, " << channels << "ch, " << total_frames << " frames." << std::endl;
 
-    // --- 2. PARSE TIMEMAP (Pre-Count Strategy) ---
-    // First, count how many points we have so we know when to stop.
+    // --- 2. PARSE TIMEMAP ---
     size_t total_points = count_valid_lines(map_path);
     std::cout << "Found " << total_points << " points in timemap." << std::endl;
 
@@ -103,9 +103,19 @@ int main(int argc, char* argv[]) {
         
         std::stringstream ss(line);
         double warp_time, orig_time;
+        std::string tag = "";
+
         if (ss >> warp_time >> orig_time) {
+            // Attempt to read optional 3rd column
+            if (!(ss >> tag)) tag = "";
+            
+            int current_override = 0;
+            if (tag.find("!loud") != std::string::npos || tag.find("!l") != std::string::npos) current_override = 1;
+            else if (tag.find("!quiet") != std::string::npos || tag.find("!q") != std::string::npos) current_override = 2;
+
             points_processed++;
             
+            // Note: Timemap precise uses doubles, but for splitting we must align to samples
             long long current_warp = std::llrint(warp_time);
             long long current_sample = std::llrint(orig_time);
             
@@ -114,6 +124,8 @@ int main(int argc, char* argv[]) {
                  if (!sections.empty()) {
                      sections.back().end_sample = current_sample;
                      sections.back().end_warp = current_warp;
+                     // Apply override to the section ending at this point
+                     sections.back().override_type = current_override;
                  }
             } else {
                 // Handle Header (0 to First Point)
@@ -122,19 +134,17 @@ int main(int argc, char* argv[]) {
                     header.start_sample = 0;
                     header.end_sample = current_sample;
                     header.end_warp = current_warp;
+                    header.override_type = current_override; // Apply to header section
                     sections.push_back(header);
                 }
                 first_point = false;
             }
 
             // 2. Start New Section?
-            // Only start a new section if this is NOT the last point.
-            // If it IS the last point, we just used it to close the previous section, 
-            // effectively stopping the map exactly where the timemap ends.
             if (points_processed < total_points) {
                 Section s;
                 s.start_sample = current_sample;
-                s.end_sample = total_frames; // Placeholder, will be updated next iter
+                s.end_sample = total_frames; // Placeholder
                 sections.push_back(s);
             }
         }
@@ -181,18 +191,31 @@ int main(int argc, char* argv[]) {
         }
 
         sec.loudness_db = linear_to_db(rms);
-        sec.is_loud = (sec.loudness_db > threshold_db);
+        
+        // --- OVERRIDE LOGIC ---
+        if (sec.override_type == 1) {
+            sec.is_loud = true;
+            std::cout << "  Override LOUD at " << format_time(sec.end_sample, samplerate) << std::endl;
+        } else if (sec.override_type == 2) {
+            sec.is_loud = false;
+            std::cout << "  Override QUIET at " << format_time(sec.end_sample, samplerate) << std::endl;
+        } else {
+            sec.is_loud = (sec.loudness_db > threshold_db);
+        }
     }
 
     // --- LOGIC: CARRYOVER STATE ---
-    // The final valid section (which now ends exactly at the last timemap point)
-    // should inherit the state of the one before it to preserve context.
+    // Inherit previous state ONLY if the current state doesn't have an explicit override.
     if (sections.size() >= 2) {
-        bool penultimate_state = sections[sections.size() - 2].is_loud;
-        sections.back().is_loud = penultimate_state;
-        std::cout << "Last section override: Inherited " 
-                  << (penultimate_state ? "LOUD" : "QUIET") 
-                  << " from previous section." << std::endl;
+        if (sections.back().override_type == 0) {
+            bool penultimate_state = sections[sections.size() - 2].is_loud;
+            sections.back().is_loud = penultimate_state;
+            std::cout << "Last section override: Inherited " 
+                      << (penultimate_state ? "LOUD" : "QUIET") 
+                      << " from previous section." << std::endl;
+        } else {
+             std::cout << "Last section override: Skipped (Explicit Tag Present)." << std::endl;
+        }
     }
 
     // --- 4. WRITE MAP FILE ---
@@ -257,16 +280,10 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < read_count; ++i) {
             long long global_pos = current_frame + i;
 
-            // Only advance if we haven't reached the last defined section
             if (section_idx < sections.size() - 1) {
                 if (global_pos >= sections[section_idx].end_sample) section_idx++;
             }
             
-            // Note: If global_pos is beyond the end of the last section (the rounding gap),
-            // section_idx stays at sections.size() - 1. 
-            // The audio will naturally continue using the state of the final section.
-
-            // Lookahead Ramping
             float target_gain;
             long long frames_until_next = -1;
             
