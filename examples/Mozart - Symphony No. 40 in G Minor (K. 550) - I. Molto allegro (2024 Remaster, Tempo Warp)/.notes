@@ -13,3 +13,7 @@ scale: 0.996477
 
 Cover: "Koyaanisqatsi" (1982)
 
+###
+
+loudness_split threshold: -26
+
