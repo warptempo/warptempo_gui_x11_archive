@@ -15,5 +15,5 @@ Cover: "Koyaanisqatsi" (1982)
 
 ###
 
-loudness_split threshold: -26
+rms_splitter threshold: -26
 
