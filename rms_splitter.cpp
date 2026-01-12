@@ -58,7 +58,6 @@ size_t count_valid_lines(const std::string& path) {
     size_t count = 0;
     while (std::getline(f, line)) {
         if (line.empty()) continue;
-        if (line.find("[") != std::string::npos) continue;
         count++;
     }
     return count;
@@ -100,7 +99,6 @@ int main(int argc, char* argv[]) {
     
     while (std::getline(map_file, line)) {
         if (line.empty()) continue;
-        if (line.find("[") != std::string::npos) continue; 
         
         std::stringstream ss(line);
         double warp_time, orig_time;
@@ -157,13 +155,15 @@ int main(int argc, char* argv[]) {
     std::cout << "Scanning loudness (RMS)..." << std::endl;
     
     // Cache: Label Name -> Is Loud (bool)
-    // Stores the decision of the FIRST occurrence of a label.
     std::map<std::string, bool> label_state_cache; 
 
     const int buffer_size = 4096;
     std::vector<float> read_buffer(buffer_size * channels);
     
-    for (auto& sec : sections) {
+    // UPDATED: Use indexed loop to allow access to previous section [i-1]
+    for (size_t i = 0; i < sections.size(); ++i) {
+        Section& sec = sections[i];
+
         // A. Always Scan RMS (So we get the real dB value)
         long long current = sec.start_sample;
         long long end = sec.end_sample;
@@ -178,8 +178,8 @@ int main(int argc, char* argv[]) {
                 long long frames_to_read = std::min((long long)buffer_size, end - current);
                 sf_count_t read_count = sf_readf_float(infile, read_buffer.data(), frames_to_read);
                 if (read_count == 0) break;
-                for (int i = 0; i < read_count * channels; ++i) {
-                    float val = read_buffer[i];
+                for (int k = 0; k < read_count * channels; ++k) {
+                    float val = read_buffer[k];
                     sum_squares += val * val;
                 }
                 total_samples += read_count * channels;
@@ -192,26 +192,35 @@ int main(int argc, char* argv[]) {
         
         // B. Apply Logic
         
-        // 1. Check for Explicit Local Override (Takes highest priority)
+        // 1. Explicit Local Override (Takes Highest Priority)
         if (sec.override_type == 1) {
             sec.is_loud = true;
         } else if (sec.override_type == 2) {
             sec.is_loud = false;
         } 
         else {
-            // 2. No Override -> Check Inheritance
-            bool has_cached_state = false;
-            if (!sec.label.empty() && sec.label != "____") {
+            bool decision_made = false;
+
+            // 2. Last Section Rule (Tail Inherits from Penultimate)
+            // This supercedes Label Inheritance.
+            if (i == sections.size() - 1 && i > 0) {
+                sec.is_loud = sections[i-1].is_loud;
+                sec.is_inherited = true;
+                decision_made = true;
+            }
+
+            // 3. Label Inheritance (Cache)
+            if (!decision_made && !sec.label.empty() && sec.label != "____") {
                 if (label_state_cache.count(sec.label)) {
                     // Inherit state from the first time we saw this label
                     sec.is_loud = label_state_cache[sec.label];
                     sec.is_inherited = true;
-                    has_cached_state = true;
+                    decision_made = true;
                 }
             }
             
-            // 3. No Inheritance -> Check Threshold (Standard RMS check)
-            if (!has_cached_state) {
+            // 4. Threshold (Standard RMS check)
+            if (!decision_made) {
                 sec.is_loud = (sec.loudness_db > threshold_db);
                 
                 // Save this decision to cache if it's a valid label

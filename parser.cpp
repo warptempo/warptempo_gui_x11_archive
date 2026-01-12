@@ -617,6 +617,22 @@ int main(int argc, char* argv[]) {
             } else {
                 ss_approx << base_display << "*" << fixed << setprecision(4) << multiplier;
             }
+            
+            // Validate final multiplier
+            double final_multiplier;
+            if (star_idx != string::npos) {
+                string scale_orig_str = lbl_tempo_str.substr(star_idx+1);
+                double s_val = stold(scale_orig_str);
+                final_multiplier = s_val * multiplier;
+            } else {
+                final_multiplier = multiplier;
+            }
+            
+            if (final_multiplier > 9.9999) {
+                cerr << "Error: Label tempo final multiplier greater than 9.9999 (" 
+                     << markers[i].original_line << ")." << endl;
+                return 1;
+            }
 
             left_part = display_time + "|" + ss_approx.str();
             print_log_line(left_part, prev_src_frame, prev_tgt_frame);
