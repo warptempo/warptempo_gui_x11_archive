@@ -5,6 +5,8 @@
 #include <sstream>
 #include <cmath>
 #include <map>
+#include <set>
+#include <regex>
 #include <iomanip>
 #include <algorithm>
 #include <cstdlib>
@@ -176,6 +178,22 @@ long get_log_next_frame(const string& log_filename, long current_line_idx) {
     return 0;
 }
 
+bool is_valid_time_format(const string& s) {
+    // Matches MM:SS.mmm (00-59 minutes, 00-59 seconds)
+    static const regex re("^([0-5][0-9]):([0-5][0-9])\\.[0-9]{3}$");
+    return regex_match(s, re);
+}
+
+bool is_valid_label_format(const string& s) {
+    // Matches a.01, b.2b, etc.
+    static const regex re("^[a-z]\\.[a-z0-9]{2}$");
+    return regex_match(s, re);
+}
+
+string get_label_error_msg(const string& line) {
+    return "Error: Invalid label - use a.01, b.2b, etc. First character must be a lowercase letter, followed by a period, then any two lowercase letters or digits. Use a hash symbol before the declaration of the label (ie, when the label is declared after a tempo value) to disable all warp markers with that label (" + line + ").";
+}
+
 // --- Main ---
 
 int main(int argc, char* argv[]) {
@@ -214,6 +232,8 @@ int main(int argc, char* argv[]) {
     // --- 1. Parse Warp Markers ---
     ifstream wmf(wm_file);
     if (!wmf.is_open()) { cerr << "Error: Cannot open warpmarkers file: " << wm_file << endl; return 1; }
+    
+    set<string> defined_labels; // Track labels to distinguish Def vs Ref in Col 2
 
     string line;
     while (getline(wmf, line)) {
@@ -222,75 +242,47 @@ int main(int argc, char* argv[]) {
         
         // --- RMS Override Tag Detection ---
         string rms_tag = "";
-        
-        // Check for tags (Longer versions first to avoid partial matches)
         if (t_line.find("!loud") != string::npos) {
-            rms_tag = "!loud";
-            size_t pos = t_line.find("!loud");
-            t_line.replace(pos, 5, ""); 
+            rms_tag = "!loud"; t_line.replace(t_line.find("!loud"), 5, ""); 
         } else if (t_line.find("!quiet") != string::npos) {
-            rms_tag = "!quiet";
-            size_t pos = t_line.find("!quiet");
-            t_line.replace(pos, 6, "");
+            rms_tag = "!quiet"; t_line.replace(t_line.find("!quiet"), 6, "");
         } else if (t_line.find("!l") != string::npos) {
-            rms_tag = "!loud";
-            size_t pos = t_line.find("!l");
-            t_line.replace(pos, 2, "");
+            rms_tag = "!loud"; t_line.replace(t_line.find("!l"), 2, "");
         } else if (t_line.find("!q") != string::npos) {
-            rms_tag = "!quiet";
-            size_t pos = t_line.find("!q");
-            t_line.replace(pos, 2, "");
+            rms_tag = "!quiet"; t_line.replace(t_line.find("!q"), 2, "");
         }
-        
-        // Clean up potentially created double spaces or trailing spaces
         t_line = trim_str(t_line);
-        
         size_t first_space = t_line.find(' ');
-        if (first_space != string::npos) {
-            t_line = t_line.substr(0, first_space);
-        }	
+        if (first_space != string::npos) t_line = t_line.substr(0, first_space);
 
-        // 1. Check for b= / begin_time=
-        if (t_line.rfind("begin_time=", 0) == 0) {
-            t_line = t_line.substr(11); // Strip prefix
-            begin_time_str = t_line;    // Capture for trim logic later
-        } else if (t_line.rfind("b=", 0) == 0) {
-            t_line = t_line.substr(2);  // Strip prefix
-            begin_time_str = t_line;    // Capture for trim logic later
+        bool is_begin_line = false;
+        bool is_end_line = false;
+
+        // Check for b= / begin_time=
+        if (t_line.rfind("begin_time=", 0) == 0) { 
+            begin_time_str = t_line.substr(11); 
+            is_begin_line = true; 
+        } else if (t_line.rfind("b=", 0) == 0) { 
+            begin_time_str = t_line.substr(2); 
+            is_begin_line = true; 
         }
 
-        // 2. Check for e= / end_time=
-        if (t_line.rfind("end_time=", 0) == 0) {
-            t_line = t_line.substr(9);  // Strip prefix
-            end_time_str = t_line;      // Capture for trim logic later
-        } else if (t_line.rfind("e=", 0) == 0) {
-            t_line = t_line.substr(2);  // Strip prefix
-            end_time_str = t_line;      // Capture for trim logic later
+        // Check for e= / end_time=
+        if (t_line.rfind("end_time=", 0) == 0) { 
+            end_time_str = t_line.substr(9); 
+            is_end_line = true; 
+        } else if (t_line.rfind("e=", 0) == 0) { 
+            end_time_str = t_line.substr(2); 
+            is_end_line = true; 
         }
         
-        // --- VALIDATION RULE ---
-        // Bash equiv: if [[ "$line" != ??:??.???*\|?.??* ]] && [[ "$line" != ??:??.???*\|'""""'* ]]; then continue
+        // --- BASIC LINE VALIDATION (Bash Equivalent) ---
         size_t pipe_pos = t_line.find('|');
         if (pipe_pos == string::npos) continue;
-
-        // 1. Check Timestamp Format (??:??.???*)
-        // Must be at least 9 chars long before the pipe, with colons/dots at specific indices
+        // Must be at least 9 chars long before pipe, specific chars at indices
         if (pipe_pos < 9 || t_line[2] != ':' || t_line[5] != '.') continue;
 
-        // 2. Check Tempo Format (?.??* OR """"*)
-        string rhs = t_line.substr(pipe_pos + 1);
-        
-        // Matches ?.??* (e.g. "1.00", "0.95"). Note: This filters out "10.00" as per your bash rule.
-        bool match_numeric = (rhs.length() >= 4 && rhs[1] == '.'); 
-        
-        // Matches """" (quoted quotes)
-        bool match_quoted = (rhs.find("\"\"\"\"") == 0);
-
-        if (!match_numeric && !match_quoted) continue;
-        // -----------------------
-
-        if (t_line.length() < 9 || t_line.find('|') == string::npos) continue;
-
+        // --- PARSE COLUMNS ---
         stringstream ss(t_line);
         string segment;
         vector<string> cols;
@@ -300,23 +292,95 @@ int main(int argc, char* argv[]) {
         string time_raw = cols[0];
         string tempo_raw = cols[1];
         string label_raw = (cols.size() > 2) ? cols[2] : "";
-        
+
+        // --- 1. HANDLE DISABLED LABELS (#) ---
+        // Logic: If label starts with # AND matches format -> Disable & Continue.
+        // If it starts with # but fails regex -> Fall through to trigger "Invalid label" error.
+        bool is_disabled_def = false;
         if (!label_raw.empty() && label_raw[0] == '#') {
-            disabled_labels.push_back(label_raw.substr(1));
-            continue;
+            string stripped = label_raw.substr(1);
+            if (is_valid_label_format(stripped)) {
+                disabled_labels.push_back(stripped);
+                defined_labels.insert(stripped); // Mark defined so references don't crash parser
+                continue; // Skip creating marker
+            }
         }
 
-        string time_base = time_raw.substr(0, 9);
-        if (parse_timestamp(time_base) < 0) { cerr << "Error: Invalid time format: " << time_base << " in line: " << line << endl; return 1; }
-        if (time_base == "00:00.000") has_zero_time = true;
+        // --- 2. VALIDATE TIME FORMAT (Bash: Line 24) ---
+        string time_initial = time_raw.substr(0, 9);
+        if (!is_valid_time_format(time_initial)) {
+            cerr << "Error: Invalid time format - use MM:SS.mmm (" << line << ")." << endl;
+            return 1;
+        }
 
+        if (time_initial == "00:00.000") has_zero_time = true;
+
+        // --- 3. VALIDATE LABEL DEFINITION (Bash: Line 38) ---
+        if (!label_raw.empty()) {
+            if (!is_valid_label_format(label_raw)) {
+                cerr << get_label_error_msg(line) << endl;
+                return 1;
+            }
+        }
+
+        // --- 4. COL 2 LOGIC (Reference vs Tempo) ---
+        bool is_tempo_log = (tempo_raw.find(':') != string::npos);
+        bool is_tempo_quoted = (tempo_raw == "\"\"\"\"");
+        bool is_tempo_numeric = (isdigit(tempo_raw[0]) || tempo_raw[0] == '.');
+
+        if (!is_tempo_log && !is_tempo_quoted && !is_tempo_numeric) {
+            // Case: Label Reference
+            // VALIDATE REFERENCE FORMAT (Bash: Line 36)
+            if (!is_valid_label_format(tempo_raw)) {
+                 cerr << get_label_error_msg(line) << endl;
+                 return 1;
+            }
+            // Check existence
+            if (defined_labels.find(tempo_raw) == defined_labels.end()) {
+                 cerr << "Error: Undefined label reference '" << tempo_raw << "' in line: " << line << endl;
+                 return 1;
+            }
+            if (label_raw.empty()) label_raw = tempo_raw;
+        }
+
+        if (!label_raw.empty()) defined_labels.insert(label_raw);
+        
+        // --- 5. REDUNDANCY CHECK (Skip if tempo == prev & no label) ---
+        
+        string effective_tempo = tempo_raw;
+        if (is_tempo_quoted) effective_tempo = previous_tempo;
+
+        if ((is_tempo_numeric || is_tempo_quoted) && effective_tempo == previous_tempo && time_initial != "00:00.000") {
+             // FIX: Only skip if the CURRENT line also has NO label. 
+             // If this line defines a label (e.g. a.01), we must keep it regardless of tempo redundancy.
+             if (label_raw.empty()) {
+                 if (!markers.empty()) {
+                     const WarpMarker& prev = markers.back();
+                     
+                     // Condition: 
+                     // 1. Previous marker was numeric 
+                     // 2. Previous marker had NO label definition
+                     // 3. Current line is NOT defining a start/end trim point
+                     if (prev.is_numeric && prev.label_def.empty() && !is_begin_line && !is_end_line) {
+                         continue; // SKIP REDUNDANT MARKER
+                     }
+                 }
+             }
+        }
+        
+        // --- PARSE TIMESTAMP (Offsets) ---
         double final_time_sec;
+        if (parse_timestamp(time_initial) < 0) { 
+             cerr << "Error: Invalid time format - use MM:SS.mmm (" << line << ")." << endl; 
+             return 1; 
+        }
+        
         if (time_raw.length() > 9) {
-            double base_sec = parse_timestamp(time_base);
+            double base_sec = parse_timestamp(time_initial);
             double offset = eval_math_string(time_raw.substr(9));
             final_time_sec = base_sec + offset;
         } else {
-            final_time_sec = parse_timestamp(time_base);
+            final_time_sec = parse_timestamp(time_initial);
         }
 
         WarpMarker wm;
@@ -328,22 +392,25 @@ int main(int argc, char* argv[]) {
         
         if (!label_raw.empty()) {
             size_t dot_pos = label_raw.find('.');
-            if (dot_pos != string::npos) {
-                wm.label_prefix = label_raw.substr(0, dot_pos);
-            } else {
-                wm.label_prefix = label_raw;
-            }
+            if (dot_pos != string::npos) wm.label_prefix = label_raw.substr(0, dot_pos);
+            else wm.label_prefix = label_raw;
         }
 
-        if (tempo_raw.find(':') != string::npos) {
-            if (log_file_path.empty()) { cerr << "Error: Log time found but no log file provided. Line: " << line << endl; return 1; }
-            if (time_base == "00:00.000") { cerr << "Error: Log time cannot be used in first time (00:00.000). Line: " << line << endl; return 1; }
+        if (is_tempo_log) {
+            if (log_file_path.empty()) { 
+                cerr << "Error: Log time found in second column but no log file provided (" << line << ")." << endl; 
+                return 1; 
+            }
+            if (time_initial == "00:00.000") { 
+                cerr << "Error: Log time cannot be used in second column in first time (" << line << ")." << endl; 
+                return 1; 
+            }
             wm.is_log_sync = true;
             wm.tempo_str = tempo_raw; 
-        } else if (tempo_raw == "\"\"\"\"") {
+        } else if (is_tempo_quoted) {
             wm.tempo_str = previous_tempo;
             wm.is_numeric = true; 
-        } else if (isdigit(tempo_raw[0]) || tempo_raw[0] == '.') {
+        } else if (is_tempo_numeric) {
             wm.tempo_str = tempo_raw;
             wm.is_numeric = true;
             previous_tempo = tempo_raw;
@@ -352,16 +419,7 @@ int main(int argc, char* argv[]) {
             wm.is_label_ref = true;
         }
         
-        if (!markers.empty()) {
-            WarpMarker& prev = markers.back();
-            if (prev.is_numeric && wm.is_numeric && 
-                wm.label_def.empty() && prev.label_def.empty() && 
-                wm.tempo_str == prev.tempo_str) {
-                continue;
-            }
-        }
-        
-       markers.push_back(wm);
+        markers.push_back(wm);
     }
     wmf.close();
 
@@ -433,9 +491,19 @@ int main(int argc, char* argv[]) {
              if (!markers[i].is_label_ref && !markers[i].is_log_sync) {
                 string dummy;
                 double tempo_val = parse_tempo_math(markers[i].tempo_str, dummy);
-                if (tempo_val > 9.99 || tempo_val <= 0) { cerr << "Error: Invalid tempo value: " << tempo_val << " in line: " << markers[i].original_line << endl; return 1; }
+                
+                // --- BASH EQUIVALENT ERROR CHECKS ---
+                if (tempo_val > 9.99) {
+                    cerr << "Error: Tempo greater than 9.99 (" << markers[i].original_line << ")." << endl;
+                    return 1;
+                }
+                if (tempo_val <= 0.0) {
+                    cerr << "Error: Tempo less than or equal to 0 (" << markers[i].original_line << ")." << endl;
+                    return 1;
+                }
+                // ------------------------------------
 
-                double delta_src = src_frame - prev_src_frame; // No cast needed
+                double delta_src = src_frame - prev_src_frame; 
                 double delta_tgt = delta_src / (tempo_val * settings.scale);
                 current_tgt += delta_tgt;
 
@@ -557,9 +625,11 @@ int main(int argc, char* argv[]) {
         // 1. Standard Timemap: Integers, Banker's Rounding (llrint)
         of_tm << llrint(src_frame) << " " << llrint(target_frame) << endl;
         
-        // 2. Precise Timemap: Doubles + RMS Override
-        // Output 3rd column: Only add the space if the override exists
-        of_tm_p << src_frame << " " << target_frame 
+        // 2. Precise Timemap: Doubles + Label (3rd) + RMS Override (4th)
+        // Default label to "____" if empty
+        string label_out = markers[i].label_def.empty() ? "____" : markers[i].label_def;
+
+        of_tm_p << src_frame << " " << target_frame << " " << label_out
                 << (markers[i].rms_override.empty() ? "" : " " + markers[i].rms_override) 
                 << endl;
         
@@ -625,22 +695,23 @@ int main(int argc, char* argv[]) {
             if (p_line.empty()) continue;
             
             stringstream p_ss(p_line);
-            string rms_col = ""; // Reset to empty
+            string label_col = "____";
+            string rms_col = ""; 
             
-            // Read first two columns (doubles)
-            if (!(p_ss >> s_f_p >> t_f_p)) continue; 
+            // Read first three columns: src, tgt, label
+            if (!(p_ss >> s_f_p >> t_f_p >> label_col)) continue; 
             
-            // Attempt to read 3rd column
+            // Attempt to read 4th column (optional rms)
             p_ss >> rms_col; 
 
             if (s_f_p >= (double)begin_frame && s_f_p <= (double)end_frame) {
                 if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
-                if (abs(s_f_p - (double)begin_frame) < 1e-9) continue; // Float safe comparison for start
+                if (abs(s_f_p - (double)begin_frame) < 1e-9) continue; // Float safe comparison
                 
-                // Write calculated relative frames (doubles)
-                // Only print space if rms_col has content
+                // Write calculated relative frames + label + optional rms
                 tm_p_out << (s_f_p - (double)begin_frame) << " " 
-                         << (t_f_p - begin_target_frame_p)
+                         << (t_f_p - begin_target_frame_p) << " "
+                         << label_col
                          << (rms_col.empty() ? "" : " " + rms_col) 
                          << endl; 
             }

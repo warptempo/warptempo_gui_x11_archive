@@ -12,15 +12,22 @@
 #include <algorithm>
 #include <sndfile.h>
 #include <iomanip>
+#include <map>
 #include <cstdio>
 
 struct Section {
     long long start_sample = 0;
     long long end_sample = 0;
     long long end_warp = 0;
+    std::string label = ""; 
     double loudness_db = -144.0;
     bool is_loud = false;
-    int override_type = 0; // 0: None, 1: Force Loud, 2: Force Quiet
+    
+    // 0: None, 1: Force Loud, 2: Force Quiet
+    int override_type = 0; 
+    
+    // Debug state for logging notes
+    bool is_inherited = false; 
 };
 
 // Helper: Linear to dB
@@ -29,26 +36,22 @@ double linear_to_db(double linear) {
     return 20.0 * log10(linear);
 }
 
-// Helper: Samples to MM:SS.mmm using built-in Banker's Rounding
+// Helper: Samples to MM:SS.mmm
 std::string format_time(long long samples, int samplerate) {
     double total_seconds = (double)samples / samplerate;
     int minutes = (int)(total_seconds / 60);
     double seconds = total_seconds - (minutes * 60);
     
-    // Banker's Rounding
+    // Banker's Rounding simulation
     seconds = std::rint(seconds * 1000.0) / 1000.0;
     
-    if (seconds >= 60.0) {
-        seconds -= 60.0;
-        minutes += 1;
-    }
-
+    if (seconds >= 60.0) { seconds -= 60.0; minutes += 1; }
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%02d:%06.3f", minutes, seconds);
     return std::string(buffer);
 }
 
-// Helper: Count valid data lines in the file
+// Helper: Count lines
 size_t count_valid_lines(const std::string& path) {
     std::ifstream f(path);
     std::string line;
@@ -62,7 +65,7 @@ size_t count_valid_lines(const std::string& path) {
 }
 
 int main(int argc, char* argv[]) {
-    // --- ARGUMENT CHECK ---
+    // --- ARGS ---
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <wav> <timemap> [ramp_ms] [thresh_db]" << std::endl;
         return 1;
@@ -73,7 +76,7 @@ int main(int argc, char* argv[]) {
     double ramp_ms = (argc >= 4) ? std::stod(argv[3]) : 30.0;
     double threshold_db = (argc >= 5) ? std::stod(argv[4]) : -26.0;
 
-    // --- 1. LOAD AUDIO INFO ---
+    // --- 1. LOAD AUDIO ---
     SF_INFO sfinfo;
     SNDFILE* infile = sf_open(wav_path.c_str(), SFM_READ, &sfinfo);
     if (!infile) {
@@ -89,8 +92,6 @@ int main(int argc, char* argv[]) {
 
     // --- 2. PARSE TIMEMAP ---
     size_t total_points = count_valid_lines(map_path);
-    std::cout << "Found " << total_points << " points in timemap." << std::endl;
-
     std::vector<Section> sections;
     std::ifstream map_file(map_path);
     std::string line;
@@ -103,118 +104,121 @@ int main(int argc, char* argv[]) {
         
         std::stringstream ss(line);
         double warp_time, orig_time;
-        std::string tag = "";
+        std::string label_in = "";
+        std::string tag_in = "";
 
+        // Format: WARP SAMPLE LABEL [OVERRIDE]
         if (ss >> warp_time >> orig_time) {
-            // Attempt to read optional 3rd column
-            if (!(ss >> tag)) tag = "";
+            if (!(ss >> label_in)) label_in = "____";
+            ss >> tag_in;
             
             int current_override = 0;
-            if (tag.find("!loud") != std::string::npos || tag.find("!l") != std::string::npos) current_override = 1;
-            else if (tag.find("!quiet") != std::string::npos || tag.find("!q") != std::string::npos) current_override = 2;
+            if (tag_in.find("!loud") != std::string::npos || tag_in.find("!l") != std::string::npos) current_override = 1;
+            else if (tag_in.find("!quiet") != std::string::npos || tag_in.find("!q") != std::string::npos) current_override = 2;
 
             points_processed++;
-            
-            // Note: Timemap precise uses doubles, but for splitting we must align to samples
             long long current_warp = std::llrint(warp_time);
             long long current_sample = std::llrint(orig_time);
             
-            // 1. Close the previous section (if any)
+            // Close previous section
             if (!first_point) {
                  if (!sections.empty()) {
                      sections.back().end_sample = current_sample;
                      sections.back().end_warp = current_warp;
-                     // Apply override to the section ending at this point
                      sections.back().override_type = current_override;
+                     sections.back().label = label_in;
                  }
             } else {
-                // Handle Header (0 to First Point)
+                // Header (0 to First Point)
                 if (current_sample > 0) {
                     Section header;
                     header.start_sample = 0;
                     header.end_sample = current_sample;
                     header.end_warp = current_warp;
-                    header.override_type = current_override; // Apply to header section
+                    header.override_type = current_override;
+                    header.label = label_in;
                     sections.push_back(header);
                 }
                 first_point = false;
             }
 
-            // 2. Start New Section?
+            // Start New Section
             if (points_processed < total_points) {
                 Section s;
                 s.start_sample = current_sample;
-                s.end_sample = total_frames; // Placeholder
+                s.end_sample = total_frames; 
                 sections.push_back(s);
             }
         }
     }
     map_file.close();
 
-    std::cout << "Parsed " << sections.size() << " sections." << std::endl;
-
-    // --- 3. ANALYZE LOUDNESS (RMS) ---
+    // --- 3. ANALYZE LOUDNESS (RMS) & APPLY LOGIC ---
     std::cout << "Scanning loudness (RMS)..." << std::endl;
     
+    // Cache: Label Name -> Is Loud (bool)
+    // Stores the decision of the FIRST occurrence of a label.
+    std::map<std::string, bool> label_state_cache; 
+
     const int buffer_size = 4096;
     std::vector<float> read_buffer(buffer_size * channels);
     
     for (auto& sec : sections) {
+        // A. Always Scan RMS (So we get the real dB value)
         long long current = sec.start_sample;
         long long end = sec.end_sample;
-        
         if (end > total_frames) end = total_frames;
-        if (current >= end) continue;
-
+        
         double sum_squares = 0.0;
         long long total_samples = 0;
 
-        sf_seek(infile, current, SEEK_SET);
-        
-        while (current < end) {
-            long long frames_to_read = std::min((long long)buffer_size, end - current);
-            sf_count_t read_count = sf_readf_float(infile, read_buffer.data(), frames_to_read);
-            
-            if (read_count == 0) break;
-
-            for (int i = 0; i < read_count * channels; ++i) {
-                float val = read_buffer[i];
-                sum_squares += val * val;
+        if (current < end) {
+            sf_seek(infile, current, SEEK_SET);
+            while (current < end) {
+                long long frames_to_read = std::min((long long)buffer_size, end - current);
+                sf_count_t read_count = sf_readf_float(infile, read_buffer.data(), frames_to_read);
+                if (read_count == 0) break;
+                for (int i = 0; i < read_count * channels; ++i) {
+                    float val = read_buffer[i];
+                    sum_squares += val * val;
+                }
+                total_samples += read_count * channels;
+                current += read_count;
             }
-            total_samples += read_count * channels;
-            current += read_count;
         }
 
-        double rms = 0.0;
-        if (total_samples > 0) {
-            rms = std::sqrt(sum_squares / total_samples);
-        }
-
+        double rms = (total_samples > 0) ? std::sqrt(sum_squares / total_samples) : 0.0;
         sec.loudness_db = linear_to_db(rms);
         
-        // --- OVERRIDE LOGIC ---
+        // B. Apply Logic
+        
+        // 1. Check for Explicit Local Override (Takes highest priority)
         if (sec.override_type == 1) {
             sec.is_loud = true;
-            std::cout << "  Override LOUD at " << format_time(sec.end_sample, samplerate) << std::endl;
         } else if (sec.override_type == 2) {
             sec.is_loud = false;
-            std::cout << "  Override QUIET at " << format_time(sec.end_sample, samplerate) << std::endl;
-        } else {
-            sec.is_loud = (sec.loudness_db > threshold_db);
-        }
-    }
-
-    // --- LOGIC: CARRYOVER STATE ---
-    // Inherit previous state ONLY if the current state doesn't have an explicit override.
-    if (sections.size() >= 2) {
-        if (sections.back().override_type == 0) {
-            bool penultimate_state = sections[sections.size() - 2].is_loud;
-            sections.back().is_loud = penultimate_state;
-            std::cout << "Last section override: Inherited " 
-                      << (penultimate_state ? "LOUD" : "QUIET") 
-                      << " from previous section." << std::endl;
-        } else {
-             std::cout << "Last section override: Skipped (Explicit Tag Present)." << std::endl;
+        } 
+        else {
+            // 2. No Override -> Check Inheritance
+            bool has_cached_state = false;
+            if (!sec.label.empty() && sec.label != "____") {
+                if (label_state_cache.count(sec.label)) {
+                    // Inherit state from the first time we saw this label
+                    sec.is_loud = label_state_cache[sec.label];
+                    sec.is_inherited = true;
+                    has_cached_state = true;
+                }
+            }
+            
+            // 3. No Inheritance -> Check Threshold (Standard RMS check)
+            if (!has_cached_state) {
+                sec.is_loud = (sec.loudness_db > threshold_db);
+                
+                // Save this decision to cache if it's a valid label
+                if (!sec.label.empty() && sec.label != "____") {
+                    label_state_cache[sec.label] = sec.is_loud;
+                }
+            }
         }
     }
 
@@ -224,47 +228,46 @@ int main(int argc, char* argv[]) {
     out_map << std::fixed << std::setprecision(4);
     
     for (const auto& sec : sections) {
+        double out_db = sec.loudness_db;
+        
         out_map << sec.end_warp << " " 
                 << sec.end_sample << " " 
                 << format_time(sec.start_sample, samplerate) << " "
-                << sec.loudness_db << " " 
-                << (sec.is_loud ? "LOUD" : "QUIET") << "\n";
+                << out_db << " " 
+                << (sec.label.empty() ? "____" : sec.label) << " "
+                << (sec.is_loud ? "LOUD" : "QUIET");
+        
+        // Append Note
+        if (sec.override_type != 0) {
+            out_map << " [RMS Override]";
+        } else if (sec.is_inherited) {
+            out_map << " [Inherited]";
+        }
+        
+        out_map << "\n";
     }
     out_map.close();
     std::cout << "Map saved: " << out_map_path << std::endl;
 
-
     // --- 5. SPLIT AUDIO ---
     std::cout << "Splitting (Ramp: " << ramp_ms << "ms)..." << std::endl;
-
+    
     std::string input_path = argv[1];
     std::string dir = "";
     std::string filename = input_path;
-    
     size_t last_slash = input_path.find_last_of("/\\");
     if (last_slash != std::string::npos) {
         dir = input_path.substr(0, last_slash + 1); 
         filename = input_path.substr(last_slash + 1);
     }
-    
     std::string name_loud = dir + "channel=loud;" + filename;
     std::string name_quiet = dir + "channel=quiet;" + filename;
 
-    std::cout << "Writing to: " << name_loud << std::endl;
-
     SF_INFO out_info = sfinfo; 
-    
     SNDFILE* out_loud = sf_open(name_loud.c_str(), SFM_WRITE, &out_info);
     SNDFILE* out_quiet = sf_open(name_quiet.c_str(), SFM_WRITE, &out_info);
 
-    if (!out_loud || !out_quiet) {
-        std::cerr << "Error creating output files." << std::endl;
-        sf_close(infile);
-        return 1;
-    }
-
     long long ramp_frames = static_cast<long long>((ramp_ms / 1000.0) * samplerate);
-    
     sf_seek(infile, 0, SEEK_SET);
     
     long long current_frame = 0;
@@ -279,7 +282,6 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < read_count; ++i) {
             long long global_pos = current_frame + i;
-
             if (section_idx < sections.size() - 1) {
                 if (global_pos >= sections[section_idx].end_sample) section_idx++;
             }
@@ -306,10 +308,8 @@ int main(int argc, char* argv[]) {
                 quiet_buffer[i * channels + c] = sample * (1.0f - target_gain);
             }
         }
-
         sf_writef_float(out_loud, loud_buffer.data(), read_count);
         sf_writef_float(out_quiet, quiet_buffer.data(), read_count);
-        
         current_frame += read_count;
     }
 

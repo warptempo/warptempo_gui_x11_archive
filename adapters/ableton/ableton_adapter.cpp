@@ -390,7 +390,7 @@ int main(int argc, char* argv[]) {
     xml_out.close();
 
     cout << "[Adapter] Compressing project file..." << endl;
-    string gzip_cmd = "gzip -c \"" + xml_file + "\" > \"" + als_file + "\"";
+    string gzip_cmd = "gzip -n -c \"" + xml_file + "\" > \"" + als_file + "\"";
     system(gzip_cmd.c_str());
     
     remove(xml_file.c_str());

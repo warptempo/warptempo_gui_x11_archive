@@ -146,6 +146,9 @@ if [[ $validation_errors -gt 0 ]]; then
 	exit 1
 fi
 
+#Compiler
+CXX="${CXX:-g++}"
+
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
 if [[ "$engine" == rubberband ]]; then
@@ -176,7 +179,7 @@ if [[ "$engine" == ableton ]]; then
 
 	if [[ ! -f "$ableton_adapter_binary" ]] || [[ "$ableton_adapter_source" -nt "$ableton_adapter_binary" ]]; then
 		echo "Compiling ableton adapter..."
-		g++ -O3 -o "$ableton_adapter_binary" "$ableton_adapter_source"
+		"$CXX" -O3 -o "$ableton_adapter_binary" "$ableton_adapter_source"
 	fi
 	ableton_adapter_path="$ableton_adapter_binary"
 	
@@ -186,7 +189,7 @@ if [[ "$engine" == ableton ]]; then
 
 	if [[ ! -f "$rms_splitter_binary" ]] || [[ "$rms_splitter_source" -nt "$rms_splitter_binary" ]]; then
 		echo "Compiling rms splitter..."
-		g++ -O3 -o "$rms_splitter_binary" "$rms_splitter_source" -lsndfile
+		"$CXX" -O3 -o "$rms_splitter_binary" "$rms_splitter_source" -lsndfile
 	fi
 fi
 requirement_errors=0
@@ -295,7 +298,7 @@ parser_binary="$script_dir/parser"
 
 if [[ ! -f "$parser_binary" ]] || [[ "$parser_source" -nt "$parser_binary" ]]; then
 	echo "Compiling parser..."
-	g++ -O3 -o "$parser_binary" "$parser_source"
+	"$CXX" -O3 -o "$parser_binary" "$parser_source"
 fi
 
 # Run Parser
