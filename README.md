@@ -41,7 +41,7 @@ make
 
 Once compiled, you can use engine=bungee, engine=stretch or engine=soundtouch in your .settings file.
 
-For best timing accuracy, engine=ableton is recommended. Once rendered in Ableton, the output can be mastered in any DAW or CLI tool. To improve sound quality, `rms_splitter` is provided - pass the Ableton output and use the two split bands (quiet and loud) to apply separate mastering profiles (requires `libsndfile`).
+For best timing accuracy, engine=ableton is recommended. Once rendered in Ableton, the output can be mastered in any DAW or CLI tool. To improve sound quality, `rms_splitter` is provided - pass the Ableton output and use the two split bands (quiet and loud) to apply separate mastering profiles (requires `libsndfile`). The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-Q 4, and Pro-L 2 plug-ins. 
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
