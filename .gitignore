@@ -4,7 +4,6 @@
 # Compiled Binaries
 parser
 rms_splitter
-ableton_adapter
 
 # Bungee Adapter Build Artifacts
 adapters/bungee/build/
@@ -17,4 +16,8 @@ adapters/stretch/signalsmith-*/
 # SoundTouch Adapter Build Artifacts
 adapters/soundtouch/build/
 
+# MIDI Adapter Build Artifacts
+adapters/midi/midifile
+adapters/midi/midi_adapter
+adapters/midi/build/
 
