@@ -320,11 +320,24 @@ elif [[ "$engine" == midi ]]; then
 	ppq=30000
 	# Run midi_adapter
 	mv .$md5-timemap-precise .timemap-precise
-	if [[ -f .$md5-trimmed.wav ]]; then
-		mv .$md5-trimmed.wav .trimmed.wav
-	fi
 	"$midi_adapter_path" .timemap-precise .midi.mid "$sample_rate" "$base_bpm" "$ppq"
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
+	
+	if [[ -f .$md5-trimmed.wav ]]; then
+		mv .$md5-trimmed.wav .trimmed.wav
+	elif [[ "${audio_input,,}" != *.wav ]]; then
+		if [[ -f "${audio_input%.*}.wav" ]]; then
+			fmt=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_fmt -of default=noprint_wrappers=1:nokey=1 "${audio_input%.*}.wav")
+			if [[ "$fmt" != "flt" ]]; then
+				echo "File exists but is $fmt (not 32-bit float). Removing and re-rendering as 32-bit float."
+				rm "${audio_input%.*}.wav"
+				ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+			fi
+		elif [[ ! -f "${audio_input%.*}.wav" ]]; then
+			ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+		fi
+	fi
+	
 	exit
 elif [[ "$engine" == none ]]; then
 	# Save timemap

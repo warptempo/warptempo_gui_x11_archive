@@ -228,11 +228,47 @@ int main(int argc, char* argv[]) {
     vector<WarpMarker> markers;
     bool has_zero_time = false;
 
-    // --- 1. Parse Warp Markers ---
     ifstream wmf(wm_file);
     if (!wmf.is_open()) { cerr << "Error: Cannot open warpmarkers file: " << wm_file << endl; return 1; }
     
     set<string> defined_labels; // Track labels to distinguish Def vs Ref in Col 2
+
+    // =========================================================
+    // [NEW] PRE-SCAN PASS: Find all forward-declared labels
+    // =========================================================
+    string pre_scan_line;
+    while (getline(wmf, pre_scan_line)) {
+        string t_line = trim_str(pre_scan_line);
+        if (t_line.empty()) continue;
+        
+        // Strip text after space (same as main logic)
+        size_t first_space = t_line.find(' ');
+        if (first_space != string::npos) t_line = t_line.substr(0, first_space);
+
+        // Check for columns
+        if (t_line.find('|') == string::npos) continue;
+
+        stringstream ss(t_line);
+        string segment;
+        vector<string> cols;
+        while(getline(ss, segment, '|')) cols.push_back(segment);
+
+        // Check Column 3 for Label Definition
+        if (cols.size() > 2 && !cols[2].empty()) {
+            string lbl = cols[2];
+            // Handle disabled labels (#a.01) by stripping # for the definition check
+            if (lbl[0] == '#') lbl = lbl.substr(1);
+            
+            if (is_valid_label_format(lbl)) {
+                defined_labels.insert(lbl);
+            }
+        }
+    }
+
+    // Reset file stream for the main parsing pass
+    wmf.clear();
+    wmf.seekg(0);
+    // =========================================================
 
     string line;
     while (getline(wmf, line)) {
