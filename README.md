@@ -5,7 +5,7 @@ Requirements:
 bc ffmpeg ffprobe jq sox yt-dlp
 ```
 
-Additionally, `rubberband`, `bungee`, `stretch` or `soundtouch` are required for rendering output, or use engine=ableton to produce an Ableton Live Set. The default is engine=rubberband. 
+Additionally, `rubberband`, `bungee`, `stretch` or `soundtouch` are required for rendering output, or use engine=ableton to produce an Ableton Live Set (todo: update to reflect ableton engine replaced with general midi engine). The default is engine=rubberband. 
 
 To use the script, clone this repository and run `warptempo` within one of the example projects. 
 
