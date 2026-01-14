@@ -16,7 +16,6 @@ using namespace std;
 struct TimePoint {
     double src_frame;
     double tgt_frame;
-    string label;
 };
 
 int main(int argc, char* argv[]) {
@@ -33,7 +32,6 @@ int main(int argc, char* argv[]) {
     int tpq = (argc > 5) ? stoi(argv[5]) : 30000;
 
     // 1. Read the Precision Timemap
-    // Format: src_frame tgt_frame label [rms]
     vector<TimePoint> points;
     ifstream infile(input_path);
     if (!infile.is_open()) {
@@ -43,11 +41,14 @@ int main(int argc, char* argv[]) {
 
     string line;
     while (getline(infile, line)) {
+        if (line.empty()) continue;
         stringstream ss(line);
         double s, t;
-        string l, rms;
-        if (ss >> s >> t >> l) {
-            points.push_back({s, t, l});
+        string l = ""; // Default to empty string
+        
+        // UPDATED: Check for 2 columns (Source, Target) only
+        if (ss >> s >> t) {
+            points.push_back({s, t});
         }
     }
     infile.close();
@@ -63,7 +64,7 @@ int main(int argc, char* argv[]) {
     if (points[0].src_frame > 0.001) {
         cout << "Fixing missing start: Inserting {0, 0} before " << points[0].src_frame << endl;
         // Insert a virtual start point at the beginning of the vector
-        points.insert(points.begin(), {0.0, 0.0, "Start_Fix"});
+        points.insert(points.begin(), {0.0, 0.0});
     }
     // ---------------------------------------------
 
@@ -115,38 +116,38 @@ int main(int argc, char* argv[]) {
         midifile.addTempo(0, tick, new_bpm);
     }
 
-    // 4. Add Safety/End Marker
-    // To ensure the last segment holds its tempo or returns to normal
+    // 4. Finalize & Add Dummy Note
+    // ---------------------------------------------------------
     TimePoint& last = points.back();
-    double last_seconds = last.src_frame / sample_rate;
-    int last_tick = (int)(last_seconds * (base_bpm / 60.0) * tpq);
     
-    // Reset to exactly Base BPM at the end of the file
+    // Use llrint to ensure the final file length matches the loop's rounding logic
+    double last_frame_rounded = (double)llrint(last.src_frame);
+    double last_seconds = last_frame_rounded / sample_rate;
+    int last_tick = (int)llrint(last_seconds * (base_bpm / 60.0) * tpq);
+    
+    // A. Reset Tempo at the very end (Clean exit)
     midifile.addTempo(0, last_tick, base_bpm);
     
-    // --- NEW: ADD DUMMY NOTE TO TRACK 1 ---
-    // This creates a silent note spanning the entire length of the audio.
-    // It forces Ableton to see the file size and might fix the DP truncation bug.
+    // B. (Safety Buffer Removed) 
+    // We rely on the Dummy Note below to define the file length.
     
-    midifile.addTrack(1); // Ensure we have a second track (Track 1)
-    
+    // C. Add Dummy Note to Track 1 (For Ableton)
+    // This forces the DAW to recognize the full duration without adding extra silence.
+    midifile.addTrack(1); 
     int channel = 0;
     int note = 60;    // C3
-    int velocity = 1; // Near silent
+    int velocity = 127; // Near silent
     
-    // Note On at Tick 0
     midifile.addNoteOn(1, 0, channel, note, velocity);
-    
-    // Note Off at the exact end of the audio (last_tick)
     midifile.addNoteOff(1, last_tick, channel, note, 0);
     
-    cout << "Added dummy note on Track 1 (Duration: " << last_tick << " ticks)" << endl;
+    cout << "Added dummy note on Track 1. Total Length: " << last_tick << " ticks." << endl;
 
     // 5. Write File
     midifile.sortTracks();
     midifile.write(output_path);
 
     cout << "Successfully wrote: " << output_path << endl;
-
+ 
     return 0;
 }

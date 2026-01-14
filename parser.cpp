@@ -20,7 +20,6 @@ struct WarpMarker {
     string tempo_str;
     string label_def;
     string label_prefix;
-    string rms_override;
     
     double time_seconds;
     double source_frame; // Calculated input frame
@@ -240,17 +239,6 @@ int main(int argc, char* argv[]) {
         string t_line = trim_str(line);
         if (t_line.empty()) continue;
         
-        // --- RMS Override Tag Detection ---
-        string rms_tag = "";
-        if (t_line.find("!loud") != string::npos) {
-            rms_tag = "!loud"; t_line.replace(t_line.find("!loud"), 5, ""); 
-        } else if (t_line.find("!quiet") != string::npos) {
-            rms_tag = "!quiet"; t_line.replace(t_line.find("!quiet"), 6, "");
-        } else if (t_line.find("!l") != string::npos) {
-            rms_tag = "!loud"; t_line.replace(t_line.find("!l"), 2, "");
-        } else if (t_line.find("!q") != string::npos) {
-            rms_tag = "!quiet"; t_line.replace(t_line.find("!q"), 2, "");
-        }
         t_line = trim_str(t_line);
         size_t first_space = t_line.find(' ');
         if (first_space != string::npos) t_line = t_line.substr(0, first_space);
@@ -262,18 +250,22 @@ int main(int argc, char* argv[]) {
         if (t_line.rfind("begin_time=", 0) == 0) { 
             begin_time_str = t_line.substr(11); 
             is_begin_line = true; 
+            t_line = t_line.substr(11); // [FIX] Strip prefix so line can be parsed
         } else if (t_line.rfind("b=", 0) == 0) { 
             begin_time_str = t_line.substr(2); 
             is_begin_line = true; 
+            t_line = t_line.substr(2); // [FIX] Strip prefix
         }
 
         // Check for e= / end_time=
         if (t_line.rfind("end_time=", 0) == 0) { 
             end_time_str = t_line.substr(9); 
             is_end_line = true; 
+            t_line = t_line.substr(9); // [FIX] Strip prefix
         } else if (t_line.rfind("e=", 0) == 0) { 
             end_time_str = t_line.substr(2); 
             is_end_line = true; 
+            t_line = t_line.substr(2); // [FIX] Strip prefix
         }
         
         // --- BASIC LINE VALIDATION (Bash Equivalent) ---
@@ -388,7 +380,6 @@ int main(int argc, char* argv[]) {
         wm.time_str = time_raw; 
         wm.time_seconds = final_time_sec;
         wm.label_def = label_raw;
-        wm.rms_override = rms_tag;
         
         if (!label_raw.empty()) {
             size_t dot_pos = label_raw.find('.');
@@ -525,6 +516,13 @@ int main(int argc, char* argv[]) {
     ofstream of_tm_p(precise_timemap_file);
     of_tm_p << fixed << setprecision(16); // 16 is optimal for double precision
     
+    // [NEW] Explicitly write the 00:00.000 point to the maps
+    // Since we validated has_zero_time earlier, markers[0] is guaranteed to be 0.0
+    if (!markers.empty()) {
+        of_tm << "0 0" << endl;
+        of_tm_p << "0.0 0.0" << endl;
+    }
+    
     ofstream of_log(log_output_file);
     map<string, pair<long, long>> log_ref_map;
     if (!log_file_path.empty()) log_ref_map = load_log_file(log_file_path);
@@ -641,13 +639,9 @@ int main(int argc, char* argv[]) {
         // 1. Standard Timemap: Integers, Banker's Rounding (llrint)
         of_tm << llrint(src_frame) << " " << llrint(target_frame) << endl;
         
-        // 2. Precise Timemap: Doubles + Label (3rd) + RMS Override (4th)
-        // Default label to "____" if empty
-        string label_out = markers[i].label_def.empty() ? "____" : markers[i].label_def;
-
-        of_tm_p << src_frame << " " << target_frame << " " << label_out
-                << (markers[i].rms_override.empty() ? "" : " " + markers[i].rms_override) 
-                << endl;
+        // 2. Precise Timemap: Doubles ONLY (Reverted)
+        // UPDATED: Remove label and RMS logic
+        of_tm_p << src_frame << " " << target_frame << endl;
         
         prev_src_frame = src_frame;
         prev_tgt_frame = target_frame;
@@ -685,7 +679,6 @@ int main(int argc, char* argv[]) {
         while (tm_in >> s_f >> t_f) {
             if (s_f >= begin_frame && s_f <= end_frame) {
                 if (begin_target_frame == -1) begin_target_frame = t_f;
-                if (s_f == begin_frame) continue; 
                 tm_out << (s_f - begin_frame) << " " << (t_f - begin_target_frame) << endl;
             }
         }
@@ -711,25 +704,16 @@ int main(int argc, char* argv[]) {
             if (p_line.empty()) continue;
             
             stringstream p_ss(p_line);
-            string label_col = "____";
-            string rms_col = ""; 
             
-            // Read first three columns: src, tgt, label
-            if (!(p_ss >> s_f_p >> t_f_p >> label_col)) continue; 
-            
-            // Attempt to read 4th column (optional rms)
-            p_ss >> rms_col; 
+            // UPDATED: Read only two columns
+            if (!(p_ss >> s_f_p >> t_f_p)) continue; 
 
             if (s_f_p >= (double)begin_frame && s_f_p <= (double)end_frame) {
                 if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
-                if (abs(s_f_p - (double)begin_frame) < 1e-9) continue; // Float safe comparison
                 
-                // Write calculated relative frames + label + optional rms
+                // UPDATED: Write only two columns
                 tm_p_out << (s_f_p - (double)begin_frame) << " " 
-                         << (t_f_p - begin_target_frame_p) << " "
-                         << label_col
-                         << (rms_col.empty() ? "" : " " + rms_col) 
-                         << endl; 
+                         << (t_f_p - begin_target_frame_p) << endl; 
             }
         }
         tm_p_in.close();

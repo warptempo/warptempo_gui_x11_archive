@@ -1,0 +1,26 @@
+#!/bin/bash
+#run only from terminal
+if [ ! -t 0 ]; then exit; fi
+shopt -s nocaseglob
+set -e
+export LC_ALL=C
+
+if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
+	echo "Trim rendered MIDI file."
+	echo
+	echo "   Usage: "$(basename "$0")" <rendered_midi>"
+	echo
+	echo "The default input is Untitled.wav."
+	exit
+fi
+
+rendered_midi="${1:-Untitled.wav}"
+
+if [[ -f .settings ]]; then
+	. .settings
+else
+	title="${rendered_midi%.wav}-trimmed.wav"
+fi
+
+ffmpeg -i "$rendered_midi" -to "$(ffmpeg -i "$rendered_midi" -af "silencedetect=noise=-200dB:d=0" -f null - 2>&1 | grep silence_start | tail -n 1 | awk '{print $5}')" -c copy "$title.wav"
+

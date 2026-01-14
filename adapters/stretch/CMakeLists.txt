@@ -22,7 +22,7 @@ if(NOT STRETCH_INCLUDE_DIR)
     message(FATAL_ERROR "\n\n"
         "-----------------------------------------------------------------\n"
         " Error: 'signalsmith-stretch' repository not found.\n"
-        " Please run the following command in this directory:\n\n"
+        " Please run the following command in the 'adapters/stretch' folder:\n\n"
         "   git clone https://github.com/Signalsmith-Audio/signalsmith-stretch.git\n"
         "-----------------------------------------------------------------\n"
     )
@@ -34,7 +34,7 @@ if(NOT IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/signalsmith-linear")
     message(FATAL_ERROR "\n\n"
         "-----------------------------------------------------------------\n"
         " Error: 'signalsmith-linear' repository not found.\n"
-        " Please run the following command in this directory:\n\n"
+        " Please run the following command in the 'adapters/stretch' folder:\n\n"
         "   git clone https://github.com/Signalsmith-Audio/linear.git signalsmith-linear\n"
         "-----------------------------------------------------------------\n"
     )

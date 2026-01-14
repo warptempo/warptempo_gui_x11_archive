@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Check if Bungee library exists
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bungee/CMakeLists.txt")
-    message(FATAL_ERROR "\n\nBungee library not found!\nPlease run the following command inside the 'bungee_adapter' folder:\n\n    git clone --recurse-submodules https://github.com/bungee-audio-stretch/bungee.git\n")
+    message(FATAL_ERROR "\n\nBungee library not found!\nPlease run the following command inside the 'adapters/bungee' folder:\n\n    git clone --recurse-submodules https://github.com/bungee-audio-stretch/bungee.git\n")
 endif()
 
 add_subdirectory(bungee EXCLUDE_FROM_ALL)

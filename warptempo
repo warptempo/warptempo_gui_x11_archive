@@ -127,7 +127,7 @@ fi
 
 # Validate engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(ableton bungee soundtouch stretch rubberband none)
+	supported_engines=(rubberband bungee stretch soundtouch midi none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -172,24 +172,10 @@ if [[ "$engine" == soundtouch ]]; then
 		echo "Error: SoundTouch adapter not found at $soundtouch_adapter_path" && ((requirement_errors++))
 	fi
 fi
-if [[ "$engine" == ableton ]]; then
-	# Ableton Adapter
-	ableton_adapter_source="$script_dir/adapters/ableton/ableton_adapter.cpp"
-	ableton_adapter_binary="$script_dir/adapters/ableton/ableton_adapter"
-
-	if [[ ! -f "$ableton_adapter_binary" ]] || [[ "$ableton_adapter_source" -nt "$ableton_adapter_binary" ]]; then
-		echo "Compiling ableton adapter..."
-		"$CXX" -O3 -o "$ableton_adapter_binary" "$ableton_adapter_source"
-	fi
-	ableton_adapter_path="$ableton_adapter_binary"
-	
-	# RMS Splitter
-	rms_splitter_source="$script_dir/rms_splitter.cpp"
-	rms_splitter_binary="$script_dir/rms_splitter"
-
-	if [[ ! -f "$rms_splitter_binary" ]] || [[ "$rms_splitter_source" -nt "$rms_splitter_binary" ]]; then
-		echo "Compiling rms splitter..."
-		"$CXX" -O3 -o "$rms_splitter_binary" "$rms_splitter_source" -lsndfile
+if [[ "$engine" == midi ]]; then
+	midi_adapter_path="$script_dir/adapters/midi/build/midi_adapter"
+	if [[ ! -x "$midi_adapter_path" ]]; then
+		echo "Error: MIDI adapter not found at $midi_adapter_path" && ((requirement_errors++))
 	fi
 fi
 requirement_errors=0
@@ -318,6 +304,7 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == rubberband ]]; then
+	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
 elif [[ "$engine" == bungee ]]; then
@@ -328,10 +315,15 @@ elif [[ "$engine" == stretch ]]; then
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 elif [[ "$engine" == soundtouch ]]; then
 	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
-elif [[ "$engine" == ableton ]]; then
-	# Run ableton_adapter
-	"$ableton_adapter_path" "$audio_input" .$md5-timemap-precise $md5 "$script_dir"
+elif [[ "$engine" == midi ]]; then
+	base_bpm="$(echo "$sample_rate*.002" | bc -l)"
+	ppq=30000
+	# Run midi_adapter
 	mv .$md5-timemap-precise .timemap-precise
+	if [[ -f .$md5-trimmed.wav ]]; then
+		mv .$md5-trimmed.wav .trimmed.wav
+	fi
+	"$midi_adapter_path" .timemap-precise .midi.mid "$sample_rate" "$base_bpm" "$ppq"
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 elif [[ "$engine" == none ]]; then

@@ -5,11 +5,17 @@ Requirements:
 bc ffmpeg ffprobe jq sox yt-dlp
 ```
 
-Additionally, `rubberband`, `bungee`, `stretch` or `soundtouch` are required for rendering output, or use engine=ableton to produce an Ableton Live Set (todo: update to reflect ableton engine replaced with general midi engine). The default is engine=rubberband. 
+Additionally, `rubberband`, `bungee`, `stretch` or `soundtouch` are required for rendering audio output, or use engine=midi to produce a MIDI file which can be opened in a DAW. The default is engine=rubberband. 
 
 To use the script, clone this repository and run `warptempo` within one of the example projects. 
 
 To compile an adapter, install `cmake`, `libsndfile`, and `gcc` or `clang`. 
+
+For `midi`, run:
+```
+cd scripts/adapters/midi
+git clone https://github.com/craigsapp/midifile.git
+```
 
 For `bungee`, run:
 ```
@@ -39,9 +45,11 @@ cmake ..
 make
 ```
 
-Once compiled, you can use engine=bungee, engine=stretch or engine=soundtouch in your .settings file.
+Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=soundtouch in the .settings file.
 
-For best timing accuracy, engine=ableton is recommended. Once rendered in Ableton, the output can be mastered in any DAW or CLI tool. To improve sound quality, `rms_splitter` is provided - pass the Ableton output and use the two split bands (quiet and loud) to apply separate mastering profiles (requires `libsndfile`). The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-Q 4, and Pro-L 2 plug-ins. 
+The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then clear all markers in Sample and manually set the tempo for the file to the base bpm given by midi_adapter via warptempo. Then import the MIDI clip onto Ableton Live and render. The trimmidi script will remove additional silence at the end of the rendered file. 
+
+For limiting, FabFilter Pro-L2 is recommended. Settings: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). VST presets exported from REAPER and Ableton are provided in the presets folder.
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
