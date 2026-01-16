@@ -22,5 +22,10 @@ else
 	title="${rendered_midi%.wav}-trimmed.wav"
 fi
 
-ffmpeg -i "$rendered_midi" -to "$(ffmpeg -i "$rendered_midi" -af "silencedetect=noise=-200dB:d=0" -f null - 2>&1 | grep silence_start | tail -n 1 | awk '{print $5}')" -c copy "$title.wav"
+ffmpeg -i "$rendered_midi" -to "$(ffmpeg -i "$rendered_midi" -af "silencedetect=noise=-200dB:d=0" -f null - 2>&1 | grep silence_start | tail -n 1 | awk '{print $5}')" -c copy ".32-bit unmastered -6dB - $title.wav"
+
+#ffmpeg -i ".32-$title.wav" -c:a pcm_s24le "$title.wav"
+
+
+
 
