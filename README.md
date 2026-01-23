@@ -49,7 +49,7 @@ Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=
 
 The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. The trimmidi script will remove additional silence at the end of the rendered file. 
 
-For limiting, FabFilter Pro-L2 is recommended. Settings: disable true peak limiting and oversampling, gain +0.1dB, style modern, lookahead 0.1ms, attack 250ms, release 50ms, stereo link transients 10%, output level -0.1dB (Pro-L2 defines these terms differently than alimiter - see the [manual](https://www.fabfilter.com/downloads/pdf/help/ffprol2-manual.pdf)). VST presets exported from REAPER and Ableton are provided in the presets folder.
+The Ableton mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-Q 4, Pro-C 2 and Pro-L 2 plug-ins. 
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  

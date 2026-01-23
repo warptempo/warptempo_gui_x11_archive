@@ -10,11 +10,11 @@ if [[ "$1" == help ]] || [[ "$1" == -h ]] || [[ "$1" == --help ]]; then
 	echo
 	echo "   Usage: "$(basename "$0")" <rendered_midi>"
 	echo
-	echo "The default input is Untitled.wav."
+	echo "The default input is \"unmastered Project/unmastered.wav\"."
 	exit
 fi
 
-rendered_midi="${1:-Untitled.wav}"
+rendered_midi="${1:-"unmastered Project/unmastered.wav"}"
 
 if [[ -f .settings ]]; then
 	. .settings
