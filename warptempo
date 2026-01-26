@@ -314,13 +314,13 @@ elif [[ "$engine" == stretch ]]; then
 	# Run stretch_adapter
 	"$stretch_adapter_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
 elif [[ "$engine" == soundtouch ]]; then
-	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap-precise
+	"$soundtouch_adapter_path" "$audio_input" .$md5-tmp.wav .$md5-timemap
 elif [[ "$engine" == midi ]]; then
 	# Run midi_adapter
 	base_bpm="$(echo "$sample_rate*.002" | bc -l)"
 	ppq=30000
-	mv .$md5-timemap-precise .timemap-precise
-	"$midi_adapter_path" .timemap-precise .midi.mid "$sample_rate" "$base_bpm" "$ppq"
+	mv .$md5-timemap-midi .timemap-midi
+	"$midi_adapter_path" .timemap-midi .midi.mid "$base_bpm" "$ppq"
 	if [[ -f .$md5-trimmed.wav ]]; then
 		mv .$md5-trimmed.wav .trimmed.wav
 	elif [[ "${audio_input,,}" != *.wav ]]; then
@@ -340,7 +340,7 @@ elif [[ "$engine" == midi ]]; then
 elif [[ "$engine" == none ]]; then
 	# Save timemap
 	mv .$md5-timemap .timemap
-	mv .$md5-timemap-precise .timemap-precise
+	mv .$md5-timemap-midi .timemap-midi
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 fi

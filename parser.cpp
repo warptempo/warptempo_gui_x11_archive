@@ -218,7 +218,12 @@ int main(int argc, char* argv[]) {
     if (settings.title.empty()) { cerr << "Error: Title required in settings file: " << set_file << endl; return 1; }
 
     string timemap_file = "." + md5 + "-timemap";
-    string precise_timemap_file = "." + md5 + "-timemap-precise";
+    
+    // [NEW] Tempomap for MIDI Adapter (Time + Multiplier)
+    string tempomap_file = "." + md5 + "-timemap-midi";
+    ofstream of_tempo(tempomap_file);
+    of_tempo << fixed << setprecision(16);
+    
     string log_output_file = settings.title + ".log";
 
     string begin_time_str = "";
@@ -497,6 +502,9 @@ int main(int argc, char* argv[]) {
 
     double prev_src_frame = 0.0; // Changed to double
     double prev_tgt_frame = 0.0;
+    
+    // [NEW] Track the last used multiplier
+    double last_valid_multiplier = 1.0;
 
     for (size_t i = 0; i < markers.size(); ++i) {
         double src_frame; // Changed to double
@@ -549,14 +557,11 @@ int main(int argc, char* argv[]) {
 
     // --- 4. Pass 2: Generate Timemap & Logs ---
     ofstream of_tm(timemap_file);
-    ofstream of_tm_p(precise_timemap_file);
-    of_tm_p << fixed << setprecision(16); // 16 is optimal for double precision
     
     // [NEW] Explicitly write the 00:00.000 point to the maps
     // Since we validated has_zero_time earlier, markers[0] is guaranteed to be 0.0
     if (!markers.empty()) {
         of_tm << "0 0" << endl;
-        of_tm_p << "0.0 0.0" << endl;
     }
     
     ofstream of_log(log_output_file);
@@ -672,16 +677,33 @@ int main(int argc, char* argv[]) {
             print_log_line(left_part, prev_src_frame, prev_tgt_frame);
         }
 
-        // 1. Standard Timemap: Integers, Banker's Rounding (llrint)
-        of_tm << llrint(src_frame) << " " << llrint(target_frame) << endl;
+        // [NEW] Calculate and write effective multiplier for MIDI
+        double seg_src_dur = src_frame - prev_src_frame;
+        double seg_tgt_dur = target_frame - prev_tgt_frame;
         
-        // 2. Precise Timemap: Doubles ONLY (Reverted)
-        // UPDATED: Remove label and RMS logic
-        of_tm_p << src_frame << " " << target_frame << endl;
+        if (seg_tgt_dur > 0.000001) {
+            double effective_multiplier = seg_src_dur / seg_tgt_dur;
+            
+            // [NEW] Update tracker
+            last_valid_multiplier = effective_multiplier;
+            
+            // [FIXED] Use TARGET time (Output Time), not Source Time
+            // The MIDI events must align with the warped audio timeline.
+            double seg_start_time = prev_tgt_frame / (double)sample_rate;
+            of_tempo << seg_start_time << " " << effective_multiplier << endl;
+        }
+
+        // 1. Standard Timemap
+        of_tm << llrint(src_frame) << " " << llrint(target_frame) << endl;
         
         prev_src_frame = src_frame;
         prev_tgt_frame = target_frame;
     }
+    
+    // [FIX] Write the final end time to the MIDI tempomap
+    // This provides the "stop" point so the adapter can calculate the duration of the last segment.
+    double final_tgt_sec = prev_tgt_frame / (double)sample_rate;
+    of_tempo << final_tgt_sec << " " << last_valid_multiplier << endl;
 
     string end_time_display;
     if (!end_time_str.empty()) {
@@ -696,7 +718,7 @@ int main(int argc, char* argv[]) {
     print_log_line(end_time_display, prev_src_frame, prev_tgt_frame);
 
     of_tm.close();
-    of_tm_p.close();
+    of_tempo.close(); // [NEW]
     of_log.close();
 
     // --- 5. Post-Process Trim on Timemap ---
@@ -705,16 +727,21 @@ int main(int argc, char* argv[]) {
         long end_frame = (!end_time_str.empty()) ? 
                          (long)llrint(parse_timestamp(end_time_str) * sample_rate) : total_frames;
         
-        // Standard Timemap Trim
+        // [Existing Standard Timemap Trim Logic...]
         ifstream tm_in(timemap_file);
         string tm_trimmed_file = timemap_file + "-trimmed";
         ofstream tm_out(tm_trimmed_file);
         
         long begin_target_frame = -1;
+        long end_target_frame = -1; // [FIX 1: Declare this]
+        
         long s_f, t_f;
         while (tm_in >> s_f >> t_f) {
             if (s_f >= begin_frame && s_f <= end_frame) {
                 if (begin_target_frame == -1) begin_target_frame = t_f;
+                
+                end_target_frame = t_f; // [FIX 2: Update this every iteration]
+                
                 tm_out << (s_f - begin_frame) << " " << (t_f - begin_target_frame) << endl;
             }
         }
@@ -724,39 +751,58 @@ int main(int argc, char* argv[]) {
         remove(timemap_file.c_str());
         rename(tm_trimmed_file.c_str(), timemap_file.c_str());
         
-        // Precise Timemap Trim
-        ifstream tm_p_in(precise_timemap_file);
-        string tm_p_trimmed_file = precise_timemap_file + "-trimmed";
-        ofstream tm_p_out(tm_p_trimmed_file);
-        tm_p_out << fixed << setprecision(16);
-        
-        double begin_target_frame_p = -1.0;
-        bool first_p = true;
-        
-        double s_f_p, t_f_p;
-        string p_line;
+        // [FIXED] Tempomap Trim (Using Calculated Target Times)
+        if (begin_target_frame != -1) {
+            double begin_target_sec = begin_target_frame / (double)sample_rate;
+            double end_target_sec = (end_target_frame != -1) ? (end_target_frame / (double)sample_rate) : (total_frames / (double)sample_rate);
 
-        while (getline(tm_p_in, p_line)) {
-            if (p_line.empty()) continue;
+            ifstream tp_in(tempomap_file);
+            string tp_trimmed_file = tempomap_file + "-trimmed";
+            ofstream tp_out(tp_trimmed_file);
+            tp_out << fixed << setprecision(16);
             
-            stringstream p_ss(p_line);
+            double t_sec, m_val;
+            double active_multiplier = 1.0; // Default state
+            bool start_point_written = false;
             
-            // UPDATED: Read only two columns
-            if (!(p_ss >> s_f_p >> t_f_p)) continue; 
-
-            if (s_f_p >= (double)begin_frame && s_f_p <= (double)end_frame) {
-                if (first_p) { begin_target_frame_p = t_f_p; first_p = false; }
-                
-                // UPDATED: Write only two columns
-                tm_p_out << (s_f_p - (double)begin_frame) << " " 
-                         << (t_f_p - begin_target_frame_p) << endl; 
+            while (tp_in >> t_sec >> m_val) {
+                // 1. Track the tempo active JUST BEFORE our cut point
+                if (t_sec < begin_target_sec) {
+                    active_multiplier = m_val;
+                } 
+                // 2. Process points inside the trim range
+                else if (t_sec <= end_target_sec) {
+                    
+                    // If the first point in range is NOT at the very start (gap),
+                    // we must backfill 0.0 with the last known active multiplier.
+                    if (!start_point_written) {
+                        if (t_sec > begin_target_sec) {
+                            tp_out << "0.0 " << active_multiplier << endl;
+                        }
+                        start_point_written = true;
+                    }
+                    
+                    // Shift time by start offset
+                    tp_out << (t_sec - begin_target_sec) << " " << m_val << endl;
+                    
+                    // Update active state (in case we have multiple points)
+                    active_multiplier = m_val;
+                }
             }
+            
+            // 3. Handle Empty Range / Constant Tempo Segment
+            // If no points fell within the range (e.g. trimming the middle of a long segment),
+            // we must explicitly write the active multiplier at 0.0.
+            if (!start_point_written) {
+                 tp_out << "0.0 " << active_multiplier << endl;
+            }
+            
+            tp_in.close();
+            tp_out.close();
+            
+            remove(tempomap_file.c_str());
+            rename(tp_trimmed_file.c_str(), tempomap_file.c_str());
         }
-        tm_p_in.close();
-        tm_p_out.close();
-        
-        remove(precise_timemap_file.c_str());
-        rename(tm_p_trimmed_file.c_str(), precise_timemap_file.c_str());
         
         cout << "AUDIO_INPUT_UPDATED=." << md5 << "-trimmed.wav" << endl;
     }

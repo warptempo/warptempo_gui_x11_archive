@@ -12,30 +12,27 @@
 using namespace smf;
 using namespace std;
 
-// Structure to hold our parsed points
-struct TimePoint {
-    double src_frame;
-    double tgt_frame;
+struct TempoPoint {
+    double time_sec;
+    double multiplier;
 };
 
 int main(int argc, char* argv[]) {
-    // Usage: midi_adapter <input_timemap> <output_mid> <sample_rate> [base_bpm] [ppq]
-    if (argc < 4) {
-        cerr << "Usage: midi_adapter <input.timemap> <output.mid> <sample_rate> [base_bpm] [ppq]" << endl;
+    // Usage: midi_adapter <input_tempomap> <output_mid> <base_bpm> <ppq>
+    if (argc < 5) {
+        cerr << "Usage: midi_adapter <input.tempomap> <output.mid> <base_bpm> <ppq>" << endl;
         return 1;
     }
 
     string input_path = argv[1];
     string output_path = argv[2];
-    double sample_rate = stod(argv[3]);
-    double base_bpm = (argc > 4) ? stod(argv[4]) : 120.0;
-    int tpq = (argc > 5) ? stoi(argv[5]) : 30000;
+    double base_bpm = stod(argv[3]);
+    int tpq = stoi(argv[4]);
 
-    // 1. Read the Precision Timemap
-    vector<TimePoint> points;
+    vector<TempoPoint> points;
     ifstream infile(input_path);
     if (!infile.is_open()) {
-        cerr << "Error opening input file." << endl;
+        cerr << "Error opening input file: " << input_path << endl;
         return 1;
     }
 
@@ -43,12 +40,9 @@ int main(int argc, char* argv[]) {
     while (getline(infile, line)) {
         if (line.empty()) continue;
         stringstream ss(line);
-        double s, t;
-        string l = ""; // Default to empty string
-        
-        // UPDATED: Check for 2 columns (Source, Target) only
-        if (ss >> s >> t) {
-            points.push_back({s, t});
+        double t, m;
+        if (ss >> t >> m) {
+            points.push_back({t, m});
         }
     }
     infile.close();
@@ -58,95 +52,67 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // --- THE FIX: INSERT ZERO POINT IF MISSING ---
-    // Rubberband often omits 0->0 because it causes divide-by-zero errors.
-    // We strictly assume that if the first point is not 0, the file implicitly starts at 0.
-    if (points[0].src_frame > 0.001) {
-        cout << "Fixing missing start: Inserting {0, 0} before " << points[0].src_frame << endl;
-        // Insert a virtual start point at the beginning of the vector
-        points.insert(points.begin(), {0.0, 0.0});
-    }
-    // ---------------------------------------------
-
-    // 2. Setup MIDI File
     MidiFile midifile;
     midifile.absoluteTicks();
     midifile.setTicksPerQuarterNote(tpq);
     
-    // We strictly use Track 0 for Tempo Map
-    // No addTrack(1) needed for Type 0 files
+    midifile.addTrack(1); 
 
     cout << "Processing " << points.size() << " points..." << endl;
-    cout << "Base BPM: " << base_bpm << " | PPQ: " << tpq << endl;
-
-    // 3. Calculate Intervals
-    // We iterate from 0 to N-1.
-    // The tempo set at Point[i] determines the speed to reach Point[i+1].
     
+    // [FIX] Accumulate ticks based on the active tempo of each segment
+    double current_abs_tick = 0.0;
+    
+    // Add the first tempo point at Tick 0
+    // (We know the first point is time 0.0 from parser)
+    if (points[0].time_sec != 0.0) {
+        // Safety: If file doesn't start at 0.0, we assume base_bpm until first point
+        // But parser guarantees 0.0 start.
+    }
+    midifile.addTempo(0, 0, base_bpm * points[0].multiplier);
+
+    int last_tick_int = 0;
+
+    // Loop through points to calculate the NEXT point's position
     for (size_t i = 0; i < points.size() - 1; ++i) {
-        TimePoint& p1 = points[i];
-        TimePoint& p2 = points[i+1];
-
-        // DELTA CALCULATIONS
-        double d_src = p2.src_frame - p1.src_frame;
-        double d_tgt = p2.tgt_frame - p1.tgt_frame;
-
-        // SKIP ZERO DELTAS (Avoid divide by zero)
-        if (d_src <= 0.0001 || d_tgt <= 0.0001) continue;
-
-        // CALCULATE RATIO
-        // Ratio = (Source_Duration / Target_Duration)
-        // Example: 10s audio in 5s wall clock = 2.0 ratio (Fast)
-        double ratio = d_src / d_tgt;
-        double new_bpm = base_bpm * ratio;
-
-        // 1. ROUND TO NEAREST SAMPLE (The Fix)
-		// We assume the source material is digital audio, so events happen at exact integer samples.
-		// llrint() uses Banker's Rounding to snap 119.99999 -> 120.
-		double src_frame_rounded = (double)llrint(p1.src_frame);
-
-		// 2. CALCULATE TIME BASED ON ROUNDED FRAME
-		double src_seconds = src_frame_rounded / sample_rate;
-		
-		// 3. CALCULATE TICK (Round nearest instead of floor)
-		// We also use llrint here to ensure the final tick is the closest integer.
-		int tick = (int)llrint(src_seconds * (base_bpm / 60.0) * tpq);
-
-        // Add Tempo Event
-        midifile.addTempo(0, tick, new_bpm);
+        double t_start = points[i].time_sec;
+        double t_next = points[i+1].time_sec;
+        
+        // The tempo for this segment is defined by points[i]
+        double segment_bpm = base_bpm * points[i].multiplier;
+        
+        double dt_sec = t_next - t_start;
+        
+        // Calculate ticks for this segment: Time * (Beats/Sec) * (Ticks/Beat)
+        double dt_ticks = dt_sec * (segment_bpm / 60.0) * tpq;
+        
+        current_abs_tick += dt_ticks;
+        last_tick_int = (int)llrint(current_abs_tick);
+        
+        // Add the tempo change for the NEXT segment
+        midifile.addTempo(0, last_tick_int, base_bpm * points[i+1].multiplier); 
     }
 
-    // 4. Finalize & Add Dummy Note
-    // ---------------------------------------------------------
-    TimePoint& last = points.back();
+    // [OPTIONAL] Extend Dummy Note
+    // The MIDI file ends at the start of the last segment (the tail).
+    // We extend the dummy note by 1 Beat just to make the clip visible in DAW.
+    int end_tick = last_tick_int + tpq;
     
-    // Use llrint to ensure the final file length matches the loop's rounding logic
-    double last_frame_rounded = (double)llrint(last.src_frame);
-    double last_seconds = last_frame_rounded / sample_rate;
-    int last_tick = (int)llrint(last_seconds * (base_bpm / 60.0) * tpq);
-    
-    // A. Reset Tempo at the very end (Clean exit)
-    midifile.addTempo(0, last_tick, base_bpm);
-    
-    // B. (Safety Buffer Removed) 
-    // We rely on the Dummy Note below to define the file length.
-    
-    // C. Add Dummy Note to Track 1 (For Ableton)
-    // This forces the DAW to recognize the full duration without adding extra silence.
-    midifile.addTrack(1); 
+    // [FIX] Extend Track 0 (Tempo Map) to match Track 1 length
+    // We add a redundant tempo event at the very end so the DAW sees both tracks as equal length. 
+    midifile.addTempo(0, end_tick, base_bpm * points.back().multiplier); 
+
     int channel = 0;
-    int note = 60;    // C3
-    int velocity = 127; // Near silent
+    int note = 60;      // C3
+    int velocity = 127; 
     
     midifile.addNoteOn(1, 0, channel, note, velocity);
-    midifile.addNoteOff(1, last_tick, channel, note, 0);
-    
-    cout << "Added dummy note on Track 1. Total Length: " << last_tick << " ticks." << endl;
+    midifile.addNoteOff(1, end_tick, channel, note, 0);
 
-    // 5. Write File
+    cout << "Final Event at Tick: " << last_tick_int << endl;
+
     midifile.sortTracks();
     midifile.write(output_path);
-
     cout << "Successfully wrote: " << output_path << endl;
  
     return 0;

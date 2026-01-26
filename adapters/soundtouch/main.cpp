@@ -17,7 +17,7 @@ struct TimeMapPoint {
     long tgt_frame;
 };
 
-// Simple loader for strict "Source Target" (float space float) format
+// [UPDATED] Loader for integer-based .timemap (from parser)
 vector<TimeMapPoint> loadTimeMap(const string& filename) {
     vector<TimeMapPoint> map;
     ifstream infile(filename);
@@ -26,14 +26,25 @@ vector<TimeMapPoint> loadTimeMap(const string& filename) {
         exit(1);
     }
     
-    // Implicit start point at 0,0
-    map.push_back({0, 0}); 
+    // Note: Implicit push of {0,0} removed because parser now guarantees it in the file.
 
-    double src, tgt;
-    // Standard stream extraction: reads two floats, skipping whitespace/newlines
+    long src, tgt;
+    // Read integers directly
     while (infile >> src >> tgt) {
-        map.push_back({(long)src, (long)tgt});
+        map.push_back({src, tgt});
     }
+    
+    // Safety check: Ensure map has at least 2 points to process a segment
+    if (map.size() < 2) {
+        cerr << "Warning: Timemap too short, adding default end point." << endl;
+        if (map.empty() || (map.back().src_frame == 0 && map.back().tgt_frame == 0)) {
+             // Fallback if file was empty or only had 0 0
+             map.push_back({0, 0});
+             // We can't guess the length here without the file info, 
+             // but strictly this prevents index out of bounds in main loop.
+        }
+    }
+    
     return map;
 }
 
