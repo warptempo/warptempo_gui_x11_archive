@@ -560,9 +560,7 @@ int main(int argc, char* argv[]) {
     
     // [NEW] Explicitly write the 00:00.000 point to the maps
     // Since we validated has_zero_time earlier, markers[0] is guaranteed to be 0.0
-    if (!markers.empty()) {
-        of_tm << "0 0" << endl;
-    }
+    of_tm << "0 0" << endl;
     
     ofstream of_log(log_output_file);
     map<string, pair<long, long>> log_ref_map;
