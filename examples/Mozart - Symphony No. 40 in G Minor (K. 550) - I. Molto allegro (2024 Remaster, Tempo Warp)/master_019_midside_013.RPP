@@ -1,4 +1,4 @@
-<REAPER_PROJECT 0.1 "7.59/linux-x86_64" 1769912380 0
+<REAPER_PROJECT 0.1 "7.60/linux-x86_64" 1770255501 0
   <NOTES 0 2
   >
   RIPPLE 0 0
@@ -19,8 +19,8 @@
   VIDEO_CONFIG 0 0 256
   PANMODE 3
   PANLAWFLAGS 3
-  CURSOR 447.57428675171008
-  ZOOM 50.4743026324304 22122 0
+  CURSOR 64.80008284453054
+  ZOOM 9.13579078934724 0 0
   VZOOMEX 18.97222137 0
   USE_REC_CFG 0
   RECMODE 1
@@ -84,107 +84,121 @@
   MASTER_FX 1
   MASTER_SEL 0
   <MASTERFXLIST
-    WNDRECT 429 153 906 327
-    SHOW 0
-    LASTSEL 0
+    WNDRECT 727 434 906 361
+    SHOW 2
+    LASTSEL 1
     DOCKED 0
     BYPASS 0 0 0
-    <JS "Stereo Width Toggle" ""
-      31.62 100 94 200 0.92 50 1 0.63 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    <JS "Stereo Level Automation" ""
+      10 1000 0 0 -7.25 -0.48 0 - 0 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     >
-    FLOATPOS 529 382 773 266
-    FXID {0A564237-3CE7-2010-7083-C2E8007FABB9}
-    <PARMENV 6 0 1 0.5 "BINARY TOGGLE / Stereo Width Ramper"
-      EGUID {729F7D87-093C-3493-23CC-F6A2E432E32A}
+    FLOATPOS 0 0 0 0
+    FXID {5256F234-BF84-33F3-F391-635D43235B75}
+    <PARMENV 7 0 1 0.5 "ACTION / Stereo Level Automation"
+      EGUID {A8F7AEAF-0B82-E651-0727-5E10FCFFAC81}
       ACT 1 -1
       VIS 1 1 1
-      LANEHEIGHT 116 0
+      LANEHEIGHT 0 0
+      ARM 1
+      DEFSHAPE 1 -1 -1
+      PT 0 1 1
+      PT 0 0 1
+      PT 0 1 1
+      PT 0 0 1
+      PT 19.03114263 1 1
+      PT 23.53989059 0 1
+      PT 32.07195664 1 1
+      PT 48.40290164 0 1
+      PT 70.85607659 1 1
+      PT 82.52592366 0 1
+      PT 87.69299108 1 1
+      PT 91.53115985 0 1
+      PT 96.66537492 1 1
+      PT 113.23469127 0 1
+      PT 131.35902448 1 1
+      PT 135.89509656 0 1
+      PT 144.37479546 1 1
+      PT 160.68746467 0 1
+      PT 183.15245864 1 1
+      PT 194.78145468 0 1
+      PT 199.99900573 1 1
+      PT 203.84264484 0 1
+      PT 208.97602098 1 1
+      PT 228.86096429 0 1
+      PT 241.83495105 1 1
+      PT 267.18273851 0 1
+      PT 283.30480385 1 1
+      PT 292.41714195 0 1
+      PT 312.7589247 1 1
+      PT 317.31632592 0 1
+      PT 325.79730552 1 1
+      PT 363.64025896 0 1
+      PT 386.01254217 1 1
+      PT 403.20260321 0 1
+      PT 408.36985905 1 1
+      PT 412.26832323 0 1
+      PT 417.35313379 1 1
+      PT 417.353789 1 1
+      PT 417.35444421 1 1
+      PT 429.79887136 0 1
+      PT 439.547656 1 1
+    >
+    WAK 0 0
+    BYPASS 1 0 0
+    <JS "Stereo Level Automation" ""
+      10 1000 0 0 -10 0 0 - 0 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    >
+    FLOATPOS 0 0 0 0
+    FXID {2625B7C8-AFDC-A8D5-F8C2-756B951CF0AB}
+    <PARMENV 7 0 1 0.5 "ACTION / Stereo Level Automation"
+      EGUID {5CC4E42E-50E3-5754-1552-7CFABE8D2BFB}
+      ACT 1 -1
+      VIS 1 1 1
+      LANEHEIGHT 0 0
       ARM 1
       DEFSHAPE 1 -1 -1
       PT 0 0 1
-      PT 19.01754929 0 1
-      PT 19.02116927 1 1
-      PT 22.89 1 1
-      PT 23.14 1 1
-      PT 23.16 0 1
-      PT 32.07576146 1 1
-      PT 47.30451643 1 1
-      PT 47.34489587 1 1
-      PT 47.35499073 1 1
-      PT 48.05658354 0 1
-      PT 70.8176105 1 1
-      PT 79.76962816 1 1
-      PT 79.79094174 1 1
-      PT 79.80515079 1 1
-      PT 81.95071792 0 1
-      PT 87.70192035 0 1
-      PT 87.70225106 1 1
-      PT 91.00898973 1 1
-      PT 91.02319879 1 1
-      PT 91.03740784 0 1
-      PT 96.69542256 1 1
-      PT 112.97 1 1
-      PT 112.99 0 1
-      PT 131.32717996 0 1
-      PT 131.34138901 1 1
-      PT 135.28627335 1 1
-      PT 135.56388201 1 1
-      PT 135.57397687 0 1
-      PT 144.38211054 0 1
-      PT 144.38468236 1 1
-      PT 160.23601314 1 1
-      PT 160.29178621 1 1
-      PT 160.3754458 0 1
-      PT 183.10296942 0 1
-      PT 183.15874249 1 1
-      PT 192.61227685 1 1
-      PT 192.66804992 1 1
-      PT 192.72382298 0 1
-      PT 199.9961842 0 1
-      PT 200.00335612 1 1
-      PT 203.71520465 1 1
-      PT 203.72941371 0 1
-      PT 208.95124099 0 1
-      PT 208.96545004 1 1
-      PT 227.64325129 1 1
-      PT 227.65746035 0 1
-      PT 241.84792819 0 1
-      PT 241.85510011 1 1
-      PT 267.04678018 1 1
-      PT 267.08640431 0 1
-      PT 267.14584049 0 1
-      PT 283.36976382 0 1
-      PT 283.37693574 1 1
-      PT 291.6335488 1 1
-      PT 291.67317293 0 1
-      PT 312.72363682 0 1
-      PT 312.73373168 1 1
-      PT 312.74382654 1 1
-      PT 317.32979288 0 1
-      PT 325.78707215 0 1
-      PT 325.79069213 1 1
-      PT 362.15699482 1 1
-      PT 362.64272213 1 1
-      PT 364.03076545 1 1
-      PT 364.04086031 0 1
-      PT 386.02446973 0 1
-      PT 386.03867878 1 1
-      PT 387.72907332 1 1
-      PT 400.76066396 1 1
-      PT 400.83916751 0 1
-      PT 408.37196627 0 1
-      PT 408.37453809 1 1
-      PT 408.42340272 1 1
-      PT 411.77583432 1 1
-      PT 411.79017816 0 1
-      PT 417.35200276 0 1
-      PT 417.35917468 0 1
-      PT 417.36634661 1 1
-      PT 430.11322726 0 1
-      PT 439.55402718 0 1
-      PT 439.556599 1 1
-      PT 457.14351257 1 1 0 1
-      PT 457.1831367 0 1 0 1
+      PT 0 1 1 0 1
+      PT 0 0 1 0 1
+      PT 0 1 1 0 1
+      PT 0 0 1 0 1
+      PT 19.03114263 1 1 0 1
+      PT 23.53989059 0 1 0 1
+      PT 32.07195664 1 1 0 1
+      PT 48.40290164 0 1 0 1
+      PT 70.85607659 1 1 0 1
+      PT 82.52592366 0 1 0 1
+      PT 87.69299108 1 1 0 1
+      PT 91.53115985 0 1 0 1
+      PT 96.66537492 1 1 0 1
+      PT 113.23469127 0 1 0 1
+      PT 131.35902448 1 1 0 1
+      PT 135.89509656 0 1 0 1
+      PT 144.37479546 1 1 0 1
+      PT 160.68746467 0 1 0 1
+      PT 183.15245864 1 1 0 1
+      PT 194.78145468 0 1 0 1
+      PT 199.99900573 1 1 0 1
+      PT 203.84264484 0 1 0 1
+      PT 208.97602098 1 1 0 1
+      PT 228.86096429 0 1 0 1
+      PT 241.83495105 1 1 0 1
+      PT 267.18273851 0 1 0 1
+      PT 283.30480385 1 1 0 1
+      PT 292.41714195 0 1 0 1
+      PT 312.7589247 1 1 0 1
+      PT 317.31632592 0 1 0 1
+      PT 325.79730552 1 1 0 1
+      PT 363.64025896 0 1 0 1
+      PT 386.01254217 1 1 0 1
+      PT 403.20260321 0 1 0 1
+      PT 408.36985905 1 1 0 1
+      PT 412.26832323 0 1 0 1
+      PT 417.35313379 1 1 0 1
+      PT 417.353789 1 1 0 1
+      PT 417.35444421 1 1 0 1
+      PT 429.79887136 0 1 0 1
+      PT 439.547656 1 1 0 1
     >
     WAK 0 0
     BYPASS 0 0 0
@@ -248,7 +262,7 @@
     SEL 0
     REC 0 0 1 0 0 0 0 0
     VU 64
-    TRACKHEIGHT 0 0 0 0 0 0 0
+    TRACKHEIGHT 323 0 0 0 0 0 0
     INQ 0 0 0 0.5 100 0 0 100
     NCHAN 2
     FX 1
@@ -472,239 +486,6 @@
       FLOATPOS 0 0 0 0
       FXID {9EA734B3-04DD-3667-8C63-666DE3616B55}
       WAK 0 0
-    >
-  >
-  <TRACK {21A71CC6-7CA8-06F3-036F-DCB03FF47016}
-    NAME serato-u
-    PEAKCOL 16576
-    BEAT -1
-    AUTOMODE 0
-    PANLAWFLAGS 3
-    VOLPAN 1 0 -1 -1 1
-    MUTESOLO 1 0 0
-    IPHASE 0
-    PLAYOFFS 0 1
-    ISBUS 0 0
-    BUSCOMP 0 0 0 0 0
-    SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
-    FIXEDLANES 9 0 0 0 0
-    LANEREC -1 -1 -1 0
-    SEL 0
-    REC 0 0 1 0 0 0 0 0
-    VU 64
-    TRACKHEIGHT 0 0 0 0 0 0 0
-    INQ 0 0 0 0.5 100 0 0 100
-    NCHAN 2
-    FX 1
-    TRACKID {21A71CC6-7CA8-06F3-036F-DCB03FF47016}
-    PERF 0
-    MIDIOUT -1
-    MAINSEND 1 0
-    <ITEM
-      POSITION 0
-      SNAPOFFS 0
-      LENGTH 455.71020849362446
-      LOOP 1
-      ALLTAKES 0
-      FADEIN 1 0 0 1 0 0 0
-      FADEOUT 1 0 0 1 0 0 0
-      MUTE 0 0
-      SEL 0
-      IGUID {D400BD40-BCB2-D382-2FCC-5F365AEC5620}
-      IID 44
-      NAME ".32-bit unmastered -6dB - Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp).wav"
-      VOLPAN 1 0 1.995262 -1
-      SOFFS 0
-      PLAYRATE 1 1 0 -1 0 0.0025
-      CHANMODE 0
-      GUID {09C35A91-1C8F-A5AA-35E5-EC71414F7822}
-      <SOURCE WAVE
-        FILE "Media/.32-bit unmastered -6dB - Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp).wav"
-      >
-      <EXT
-        ORIGINAL_FILENAME "/home/b/.warptempo/tmp/550 - 1/.32-bit unmastered -6dB - Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp).wav"
-      >
-    >
-  >
-  <TRACK {E0FBEF21-F8A5-B06F-D6A6-51F850BD76F8}
-    NAME soundtouch
-    PEAKCOL 16576
-    BEAT -1
-    AUTOMODE 0
-    PANLAWFLAGS 3
-    VOLPAN 1 0 -1 -1 1
-    MUTESOLO 1 0 0
-    IPHASE 0
-    PLAYOFFS 0 1
-    ISBUS 0 0
-    BUSCOMP 0 0 0 0 0
-    SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
-    FIXEDLANES 9 0 0 0 0
-    LANEREC -1 -1 -1 0
-    SEL 0
-    REC 0 0 1 0 0 0 0 0
-    VU 64
-    TRACKHEIGHT 0 0 0 0 0 0 0
-    INQ 0 0 0 0.5 100 0 0 100
-    NCHAN 2
-    FX 1
-    TRACKID {E0FBEF21-F8A5-B06F-D6A6-51F850BD76F8}
-    PERF 0
-    MIDIOUT -1
-    MAINSEND 1 0
-    <ITEM
-      POSITION 0
-      SNAPOFFS 0
-      LENGTH 455.71479497540128
-      LOOP 1
-      ALLTAKES 0
-      FADEIN 1 0 0 1 0 0 0
-      FADEOUT 1 0 0 1 0 0 0
-      MUTE 0 0
-      SEL 0
-      IGUID {258D4A6A-C538-44C8-50BC-70B3A6175C7E}
-      IID 40
-      NAME soundtouch.wav
-      VOLPAN 1 0 1 -1
-      SOFFS 0
-      PLAYRATE 1 1 0 -1 0 0.0025
-      CHANMODE 0
-      GUID {498182B6-F138-D9D0-2C86-712EB846B8A9}
-      <SOURCE WAVE
-        FILE "Media/soundtouch.wav"
-      >
-      <EXT
-        ORIGINAL_FILENAME "/home/b/.warptempo/tmp/550 - 1/test-files/soundtouch.wav"
-      >
-    >
-  >
-  <TRACK {636886F4-0359-7D8F-054E-C39EAA5FF87D}
-    NAME ableton
-    PEAKCOL 16576
-    BEAT -1
-    AUTOMODE 0
-    PANLAWFLAGS 3
-    VOLPAN 1 0 -1 -1 1
-    MUTESOLO 1 0 0
-    IPHASE 0
-    PLAYOFFS 0 1
-    ISBUS 1 1
-    BUSCOMP 0 0 0 0 0
-    SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
-    FIXEDLANES 9 0 0 0 0
-    LANEREC -1 -1 -1 0
-    SEL 0
-    REC 0 0 1 0 0 0 0 0
-    VU 64
-    TRACKHEIGHT 0 0 0 0 0 0 0
-    INQ 0 0 0 0.5 100 0 0 100
-    NCHAN 2
-    FX 1
-    TRACKID {636886F4-0359-7D8F-054E-C39EAA5FF87D}
-    PERF 0
-    MIDIOUT -1
-    MAINSEND 1 0
-    <ITEM
-      POSITION 0
-      SNAPOFFS 0
-      LENGTH 455.71242973858455
-      LOOP 1
-      ALLTAKES 0
-      FADEIN 1 0 0 1 0 0 0
-      FADEOUT 1 0 0 1 0 0 0
-      MUTE 0 0
-      SEL 0
-      IGUID {0D84860E-80DA-757D-82A1-5FD03AF49897}
-      IID 41
-      NAME ableton.wav
-      VOLPAN 1 0 1 -1
-      SOFFS 0
-      PLAYRATE 1 1 0 -1 0 0.0025
-      CHANMODE 0
-      GUID {ABC1DBA0-19BD-2CA2-AAC4-14EB927ED47B}
-      <SOURCE WAVE
-        FILE "Media/ableton.wav"
-      >
-      <EXT
-        ORIGINAL_FILENAME "/home/b/.warptempo/tmp/550 - 1/test-files/ableton.wav"
-      >
-    >
-  >
-  <TRACK {1D27999E-4A3C-BDFB-5DA0-A4FB1D5D17FB}
-    NAME bungee_pro_end
-    PEAKCOL 16576
-    BEAT -1
-    AUTOMODE 0
-    PANLAWFLAGS 3
-    VOLPAN 1 0 -1 -1 1
-    MUTESOLO 1 0 0
-    IPHASE 0
-    PLAYOFFS 0 1
-    ISBUS 0 0
-    BUSCOMP 0 0 0 0 0
-    SHOWINMIX 1 0.6667 0.5 1 0.5 0 0 0 0
-    FIXEDLANES 9 0 0 0 0
-    LANEREC -1 -1 -1 0
-    SEL 0
-    REC 0 0 1 0 0 0 0 0
-    VU 64
-    TRACKHEIGHT 0 0 0 0 0 0 0
-    INQ 0 0 0 0.5 100 0 0 100
-    NCHAN 2
-    FX 1
-    TRACKID {1D27999E-4A3C-BDFB-5DA0-A4FB1D5D17FB}
-    PERF 0
-    MIDIOUT -1
-    MAINSEND 1 0
-    <ITEM
-      POSITION 30.2847738035329
-      SNAPOFFS 0
-      LENGTH 18.97487153894906
-      LOOP 0
-      ALLTAKES 0
-      FADEIN 1 0 0 1 0 0 0
-      FADEOUT 1 0 0 1 0 0 0
-      MUTE 0 0
-      SEL 0
-      IGUID {669A385E-06FA-B288-4626-2399466EDF7C}
-      IID 8
-      NAME bungee_pro_begin.wav
-      VOLPAN 1 0 1 -1
-      SOFFS 0
-      PLAYRATE 1 1 0 -1 0 0.0025
-      CHANMODE 0
-      GUID {3E7BD9EE-1369-B1E2-75AC-53CE11F74C39}
-      <SOURCE WAVE
-        FILE "Media/bungee_pro_begin.wav"
-      >
-      <EXT
-        ORIGINAL_FILENAME "/home/b/.warptempo/tmp/550 - 1/test-files/bungee_pro_begin.wav"
-      >
-    >
-    <ITEM
-      POSITION 96.7300000005627
-      SNAPOFFS 0
-      LENGTH 17.10849073183931
-      LOOP 0
-      ALLTAKES 0
-      FADEIN 1 0 0 1 0 0 0
-      FADEOUT 1 0 0 1 0 0 0
-      MUTE 0 0
-      SEL 0
-      IGUID {B754097B-3B3C-08F8-7860-697990C3B714}
-      IID 7
-      NAME bungee_pro_end.wav
-      VOLPAN 1 0 1 -1
-      SOFFS 0
-      PLAYRATE 1 1 0 -1 0 0.0025
-      CHANMODE 0
-      GUID {70889AC3-A948-E069-8EAC-D0590B8FD658}
-      <SOURCE WAVE
-        FILE "Media/bungee_pro_end.wav"
-      >
-      <EXT
-        ORIGINAL_FILENAME "/home/b/.warptempo/tmp/550 - 1/test-files/bungee_pro_end.wav"
-      >
     >
   >
 >
