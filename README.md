@@ -49,7 +49,7 @@ Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=
 
 The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. The trimmidi script will remove additional silence at the end of the rendered file. 
 
-The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-Q 4, Pro-R 2, Pro-C 2 and Pro-L 2 plug-ins.
+The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-Q 4, Pro-R 2, Pro-C 2 and Pro-L 2 plugins, as well as Linux Studio Plugins' Clipper Stereo.
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
