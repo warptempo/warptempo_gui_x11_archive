@@ -1,4 +1,4 @@
-<REAPER_PROJECT 0.1 "7.61/linux-x86_64" 1771630370 0
+<REAPER_PROJECT 0.1 "7.61/linux-x86_64" 1771647883 0
   <NOTES 0 2
   >
   RIPPLE 0 0
@@ -438,7 +438,7 @@
     MIDIOUT -1
     MAINSEND 1 0
     <FXCHAIN
-      WNDRECT 722 21 906 186
+      WNDRECT 722 42 906 183
       SHOW 0
       LASTSEL 2
       DOCKED 0
@@ -474,7 +474,7 @@
       WAK 0 0
       BYPASS 0 0 0
       <JS utility/volume ""
-        -22 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+        -22.22 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
       >
       FLOATPOS 0 0 0 0
       FXID {2F622083-14C2-55F7-FB57-EEDB504478C9}
