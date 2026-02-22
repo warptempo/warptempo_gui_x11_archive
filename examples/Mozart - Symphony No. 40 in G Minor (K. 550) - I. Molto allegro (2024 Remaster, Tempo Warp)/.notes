@@ -4,7 +4,7 @@ warptempo: half note = 110 in 2/2 (220bpm)
 
 ###
 
-warptempo_basetemposcale 00:02.442 00:14.965 36 220
+warptempo_basetemposcale 00:02.432 00:14.955 36 220
 ratio: 1.27549074074074074074
 base_tempo: 1.28
 scale: 0.996477
@@ -13,3 +13,6 @@ scale: 0.996477
 
 Cover: "Koyaanisqatsi" (1982)
 
+###
+
+Warp marker delay for YouTube Opus = 10ms
