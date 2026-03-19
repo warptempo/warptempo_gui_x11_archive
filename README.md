@@ -49,7 +49,18 @@ Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=
 
 The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. The trimmidi script will remove additional silence at the end of the rendered file. 
 
-The REAPER mastering project is included, and uses FabFilter's Pro-Q 4, Pro-MB and Pro-L 2 plugins. It is recommended to use an EQ-matching algorithm to reference soundtouch's output for accuracy. 
+The REAPER mastering project is included, and uses FabFilter's Pro-Q 4, Pro-MB and Pro-L 2 plugins. It is recommended to use the algorithm in the `eqmatch` folder to reference the source track's eq profile for accuracy. It will output a REAPER lua script in the same folder as the source track. 
+
+For `eqmatch`, run one of the following:
+```
+cd scripts/eqmatch
+git clone https://github.com/hayguen/pffft.git
+sudo pacman -S libsndfile libebur128 pkgconf # Arch Linux
+sudo apt install libsndfile1-dev libebur128-dev pkg-config # Debian / WSL
+brew install libsndfile libebur128 pkg-config # MacOS
+```
+
+Then compile.
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  

@@ -320,6 +320,7 @@ elif [[ "$engine" == midi ]]; then
 	base_bpm="$(echo "$sample_rate*.002" | bc -l)"
 	ppq=30000
 	mv .$md5-timemap-midi .timemap-midi
+	mv .$md5-timemap .timemap
 	"$midi_adapter_path" .timemap-midi .midi.mid "$base_bpm" "$ppq"
 	if [[ -f .$md5-trimmed.wav ]]; then
 		mv .$md5-trimmed.wav .trimmed.wav
