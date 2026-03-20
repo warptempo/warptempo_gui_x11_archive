@@ -8,7 +8,7 @@
 #include <sstream>
 #include <sndfile.h>
 #include <ebur128.h>
-#include "pffft.h"
+#include <fftw3.h> // Swapped to native FFTW3
 
 // --- Configuration Constants ---
 const double ATTACK_TOLERANCE_LU = 3.0;      
@@ -19,7 +19,10 @@ const size_t TOP_X_CHUNKS = 10;
 const double SERATO_DETECTION_THRESH_LU = 1.0; 
 const double SERATO_MAKEUP_GAIN_DB = 6.0;
 const int FFT_SIZE = 8192; 
-const int NUM_BANDS = 10; // Logarithmic macro-bands
+
+// --- Filter Topology Settings ---
+const double SMOOTHING_OCTAVES = 1.0 / 3.0; 
+const int CURVE_RESOLUTION = 500; // High-res points for the SVG
 
 // --- Data Structures ---
 struct AcousticBlock {
@@ -213,7 +216,6 @@ int main(int argc, char* argv[]) {
     });
     size_t keep_count = std::min<size_t>(TOP_X_CHUNKS, final_blocks.size());
     final_blocks.resize(keep_count);
-    for (size_t i = 0; i < final_blocks.size(); ++i) final_blocks[i].id = i + 1;
 
     // ========================================================================
     // PHASE 2: Serato Headroom Detection
@@ -233,23 +235,28 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
-    // PHASE 3: PFFFT Preparation & Chunk Processing Loop
+    // PHASE 3: FFTW3 Preparation & Chunk Processing Loop (Native Double Precision)
     // ========================================================================
-    std::cout << "\n[Phase 3] Running Hanning-Windowed PFFFT Engine (" << FFT_SIZE << " bins)...\n";
+    std::cout << "\n[Phase 3] Running Hanning-Windowed FFTW3 Engine (" << FFT_SIZE << " bins)...\n";
     
-    PFFFT_Setup* pffft_setup = pffft_new_setup(FFT_SIZE, PFFFT_REAL);
-    float* src_fft_input  = (float*)pffft_aligned_malloc(FFT_SIZE * sizeof(float));
-    float* src_fft_output = (float*)pffft_aligned_malloc(FFT_SIZE * sizeof(float));
-    float* tgt_fft_input  = (float*)pffft_aligned_malloc(FFT_SIZE * sizeof(float));
-    float* tgt_fft_output = (float*)pffft_aligned_malloc(FFT_SIZE * sizeof(float));
+    // Allocate native 64-bit double arrays
+    double* src_in = fftw_alloc_real(FFT_SIZE);
+    fftw_complex* src_out = fftw_alloc_complex(FFT_SIZE / 2 + 1);
+    double* tgt_in = fftw_alloc_real(FFT_SIZE);
+    fftw_complex* tgt_out = fftw_alloc_complex(FFT_SIZE / 2 + 1);
 
-    std::vector<double> src_psd_accumulator(FFT_SIZE / 2, 0.0);
-    std::vector<double> tgt_psd_accumulator(FFT_SIZE / 2, 0.0);
+    // FFTW_MEASURE actually runs a micro-benchmark to find the absolute fastest SIMD vectorization path for your CPU
+    std::cout << "          Measuring optimal SIMD execution plan...\n";
+    fftw_plan src_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, src_in, src_out, FFTW_MEASURE);
+    fftw_plan tgt_plan = fftw_plan_dft_r2c_1d(FFT_SIZE, tgt_in, tgt_out, FFTW_MEASURE);
+
+    std::vector<double> src_psd(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> tgt_psd(FFT_SIZE / 2 + 1, 0.0);
     size_t total_windows = 0;
 
-    std::vector<float> hanning(FFT_SIZE);
+    std::vector<double> hanning(FFT_SIZE);
     for (int i = 0; i < FFT_SIZE; ++i) {
-        hanning[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (FFT_SIZE - 1)));
+        hanning[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
     }
 
     std::vector<float> src_read_buf(FFT_SIZE * src_sfinfo.channels);
@@ -264,25 +271,25 @@ int main(int argc, char* argv[]) {
             sf_seek(src_infile, s_frame, SEEK_SET);
             sf_readf_float(src_infile, src_read_buf.data(), FFT_SIZE);
             for (int i = 0; i < FFT_SIZE; ++i) {
-                float mono = (src_read_buf[i*src_sfinfo.channels] + src_read_buf[i*src_sfinfo.channels + 1]) * 0.5f;
-                src_fft_input[i] = mono * hanning[i];
+                double mono = (src_read_buf[i*src_sfinfo.channels] + src_read_buf[i*src_sfinfo.channels + 1]) * 0.5;
+                src_in[i] = mono * hanning[i];
             }
 
             sf_seek(tgt_infile, static_cast<sf_count_t>(t_start), SEEK_SET);
             sf_readf_float(tgt_infile, tgt_read_buf.data(), FFT_SIZE);
             for (int i = 0; i < FFT_SIZE; ++i) {
-                float mono = (tgt_read_buf[i*tgt_sfinfo.channels] + tgt_read_buf[i*tgt_sfinfo.channels + 1]) * 0.5f;
-                tgt_fft_input[i] = (mono * target_gain_multiplier) * hanning[i];
+                double mono = (tgt_read_buf[i*tgt_sfinfo.channels] + tgt_read_buf[i*tgt_sfinfo.channels + 1]) * 0.5;
+                tgt_in[i] = (mono * target_gain_multiplier) * hanning[i];
             }
 
-            pffft_transform_ordered(pffft_setup, src_fft_input, src_fft_output, nullptr, PFFFT_FORWARD);
-            pffft_transform_ordered(pffft_setup, tgt_fft_input, tgt_fft_output, nullptr, PFFFT_FORWARD);
+            fftw_execute(src_plan);
+            fftw_execute(tgt_plan);
 
-            for (int k = 0; k < FFT_SIZE / 2; ++k) {
-                float s_re = src_fft_output[2*k], s_im = src_fft_output[2*k+1];
-                float t_re = tgt_fft_output[2*k], t_im = tgt_fft_output[2*k+1];
-                src_psd_accumulator[k] += (s_re*s_re + s_im*s_im);
-                tgt_psd_accumulator[k] += (t_re*t_re + t_im*t_im);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+                double s_re = src_out[k][0], s_im = src_out[k][1];
+                double t_re = tgt_out[k][0], t_im = tgt_out[k][1];
+                src_psd[k] += (s_re*s_re + s_im*s_im);
+                tgt_psd[k] += (t_re*t_re + t_im*t_im);
             }
             
             total_windows++;
@@ -291,236 +298,208 @@ int main(int argc, char* argv[]) {
     }
 
     // ========================================================================
-    // PHASE 4: 10-Band Macro Grouping & Universal Mozart Floor
+    // PHASE 4: 1/3 Octave Gaussian Smoothing Engine
     // ========================================================================
-    std::cout << "[Phase 4] Applying 10-Band Logarithmic Grouping & Universal Mozart Floor...\n";
+    std::cout << "[Phase 4] Calculating Raw Delta and 1/3 Octave Smoothed Trend Line...\n";
     
-    double macro_freqs[NUM_BANDS];
-    std::vector<double> band_deltas(NUM_BANDS, 0.0);
-    double bin_width = static_cast<double>(src_sfinfo.samplerate) / FFT_SIZE;
-
-    double log_min = std::log10(20.0);
-    double log_max = std::log10(20000.0);
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        macro_freqs[i] = std::pow(10.0, log_min + i * (log_max - log_min) / (NUM_BANDS - 1));
-    }
-
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        double f_center = macro_freqs[i];
-        double f_low = (i == 0) ? 20.0 : std::pow(10.0, (std::log10(macro_freqs[i-1]) + std::log10(f_center)) / 2.0);
-        double f_high = (i == NUM_BANDS - 1) ? 20000.0 : std::pow(10.0, (std::log10(f_center) + std::log10(macro_freqs[i+1])) / 2.0);
-        
-        int bin_start = std::max(1, static_cast<int>(f_low / bin_width));
-        int bin_end = std::min(FFT_SIZE / 2 - 1, static_cast<int>(f_high / bin_width));
-        
-        double src_sum = 0.0, tgt_sum = 0.0;
-        int count = 0;
-        for (int k = bin_start; k <= bin_end; ++k) {
-            src_sum += src_psd_accumulator[k];
-            tgt_sum += tgt_psd_accumulator[k];
-            count++;
-        }
-        
-        if (count > 0 && tgt_sum > 0 && src_sum > 0) {
-            double src_db = 10.0 * std::log10((src_sum / count) / total_windows);
-            double tgt_db = 10.0 * std::log10((tgt_sum / count) / total_windows);
-            band_deltas[i] = src_db - tgt_db; 
+    std::vector<double> raw_delta_db(FFT_SIZE / 2 + 1, 0.0);
+    double bin_hz_width = static_cast<double>(src_sfinfo.samplerate) / FFT_SIZE;
+    double nyquist = src_sfinfo.samplerate / 2.0;
+    
+    for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+        if (src_psd[k] > 0 && tgt_psd[k] > 0) {
+            double src_db = 10.0 * std::log10((src_psd[k] / total_windows));
+            double tgt_db = 10.0 * std::log10((tgt_psd[k] / total_windows));
+            raw_delta_db[k] = src_db - tgt_db;
         }
     }
 
-    // The Universal Mozart Floor: 20Hz noise bin overwritten with a 0.5dB protective cut relative to 43Hz
-    band_deltas[0] = band_deltas[1] - 0.5;
+    raw_delta_db[FFT_SIZE / 2] = 0.0; 
+
+    double sigma_octaves = SMOOTHING_OCTAVES / 2.355;
+    std::vector<Point> smoothed_curve;
+    double log_min = std::log10(10.0); 
+    double log_max = std::log10(nyquist); 
+
+    for (int i = 0; i < CURVE_RESOLUTION; ++i) {
+        double current_target_hz = std::pow(10.0, log_min + i * (log_max - log_min) / (CURVE_RESOLUTION - 1));
+        double weight_sum = 0.0, delta_sum = 0.0;
+
+        for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+            double bin_hz = k * bin_hz_width;
+            if (bin_hz < 10.0) continue; 
+
+            double octave_distance = std::log2(bin_hz / current_target_hz);
+            double weight = std::exp(-0.5 * std::pow(octave_distance / sigma_octaves, 2.0));
+            
+            if (weight < 0.001) continue; 
+            weight_sum += weight;
+            delta_sum += weight * raw_delta_db[k];
+        }
+        double final_db = (weight_sum > 0.0) ? (delta_sum / weight_sum) : 0.0;
+        smoothed_curve.push_back({current_target_hz, final_db});
+    }
+
+    // NEW: Custom Parabolic Knee to preserve the exact anchor value
+    double low_cutoff_hz = 32.7; // Mozart C-Extension limit
+    double anchor_db = 0.0;
+    
+    for (size_t i = 0; i < smoothed_curve.size() - 1; ++i) {
+        if (smoothed_curve[i].x <= low_cutoff_hz && smoothed_curve[i+1].x >= low_cutoff_hz) {
+            double t = (low_cutoff_hz - smoothed_curve[i].x) / (smoothed_curve[i+1].x - smoothed_curve[i].x);
+            anchor_db = smoothed_curve[i].y + t * (smoothed_curve[i+1].y - smoothed_curve[i].y);
+            break;
+        }
+    }
+
+    double taper_start_hz = nyquist - 100.0;
+
+    for (auto& pt : smoothed_curve) {
+        if (pt.x < low_cutoff_hz) {
+            double octaves_below = std::log2(low_cutoff_hz / pt.x);
+            // Parabolic easing for the first half-octave to create a smooth knee
+            if (octaves_below < 0.5) {
+                pt.y = anchor_db - (12.0 * octaves_below * octaves_below);
+            } else {
+                // Seamless linear 12dB/octave slope beyond the knee
+                pt.y = anchor_db - (12.0 * octaves_below - 3.0);
+            }
+        } else if (pt.x > taper_start_hz) {
+            // Gibbs Minimal Taper
+            double taper_ratio = (nyquist - pt.x) / 100.0;
+            pt.y *= std::max(0.0, std::min(1.0, taper_ratio));
+        }
+    }
 
     // ========================================================================
-    // PHASE 5: SVG Rendering
+    // PHASE 5: Linear Phase FIR Impulse Response Generation
     // ========================================================================
+    std::cout << "\n======================================================\n";
+    std::cout << "[Phase 5] Generating Linear Phase FIR Impulse Response...\n";
+    std::cout << "======================================================\n";
+
+    fftw_complex* ir_freq = fftw_alloc_complex(FFT_SIZE / 2 + 1);
+    double* ir_time = fftw_alloc_real(FFT_SIZE);
+    fftw_plan ir_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, ir_freq, ir_time, FFTW_ESTIMATE);
+
+    for (int k = 0; k <= FFT_SIZE / 2; ++k) {
+        double bin_hz = k * bin_hz_width;
+        double target_db = 0.0;
+
+        if (k == 0) {
+            target_db = -100.0; // Absolute DC silence
+        } else if (k == FFT_SIZE / 2) {
+            target_db = 0.0; // Gibbs Anchor at Nyquist
+        } else if (bin_hz < 10.0) {
+            // Apply the exact same parabolic/linear math to the raw bins below 10Hz
+            double octaves_below = std::log2(low_cutoff_hz / bin_hz);
+            if (octaves_below < 0.5) {
+                target_db = anchor_db - (12.0 * octaves_below * octaves_below);
+            } else {
+                target_db = anchor_db - (12.0 * octaves_below - 3.0);
+            }
+        } else {
+            auto it = std::lower_bound(smoothed_curve.begin(), smoothed_curve.end(), bin_hz, 
+                [](const Point& p, double hz) { return p.x < hz; });
+            
+            if (it == smoothed_curve.begin()) target_db = it->y;
+            else if (it == smoothed_curve.end()) target_db = smoothed_curve.back().y;
+            else {
+                auto prev = it - 1;
+                double t = (bin_hz - prev->x) / (it->x - prev->x);
+                target_db = prev->y + t * (it->y - prev->y);
+            }
+        }
+
+        double linear_gain = std::pow(10.0, target_db / 20.0);
+        ir_freq[k][0] = linear_gain; 
+        ir_freq[k][1] = 0.0; 
+    }
+
+    fftw_execute(ir_plan);
+
+    std::vector<float> final_ir(FFT_SIZE, 0.0f);
+    for (int i = 0; i < FFT_SIZE; ++i) {
+        double raw_sample = ir_time[i] / FFT_SIZE; 
+        int shifted_idx = (i + FFT_SIZE / 2) % FFT_SIZE;
+        double window = 0.5 * (1.0 - std::cos(2.0 * M_PI * shifted_idx / (FFT_SIZE - 1)));
+        final_ir[shifted_idx] = static_cast<float>(raw_sample * window);
+    }
+
     std::string output_dir = src_wav_file;
     size_t last_slash = output_dir.find_last_of("/\\");
     if (last_slash != std::string::npos) output_dir = output_dir.substr(0, last_slash) + "/";
     else output_dir = "";
 
-    std::string svg_path = output_dir + "eq_match_curve.svg";
-    std::cout << "[Phase 5] Writing 1600x800 Bezier Vector Map to: " << svg_path << "\n";
+    std::string ir_path = output_dir + "ideal_match_ir.wav";
+    
+    SF_INFO ir_info;
+    ir_info.samplerate = src_sfinfo.samplerate;
+    ir_info.channels = 1; 
+    ir_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+    
+    SNDFILE* ir_outfile = sf_open(ir_path.c_str(), SFM_WRITE, &ir_info);
+    if (ir_outfile) {
+        sf_writef_float(ir_outfile, final_ir.data(), FFT_SIZE);
+        sf_close(ir_outfile);
+        std::cout << "          -> Linear Phase IR written to: " << ir_path << "\n";
+    }
+
+    // ========================================================================
+    // PHASE 6: High-Resolution SVG Rendering
+    // ========================================================================
+    std::string svg_path = output_dir + "ideal_trend_curve.svg";
+    std::cout << "[Phase 6] Writing High-Resolution Ideal Curve to: " << svg_path << "\n";
 
     std::ofstream svg(svg_path);
-    svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1600 800\" style=\"background-color:#1e1e1e;\">\n";
-    svg << "  <line x1=\"0\" y1=\"400\" x2=\"1600\" y2=\"400\" stroke=\"#ffffff\" stroke-width=\"2\" opacity=\"0.5\" />\n";
-    svg << "  <line x1=\"0\" y1=\"200\" x2=\"1600\" y2=\"200\" stroke=\"#888888\" stroke-width=\"1\" stroke-dasharray=\"6\" opacity=\"0.3\" />\n";
-    svg << "  <line x1=\"0\" y1=\"600\" x2=\"1600\" y2=\"600\" stroke=\"#888888\" stroke-width=\"1\" stroke-dasharray=\"6\" opacity=\"0.3\" />\n";
+    svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1600 850\" font-family=\"sans-serif\">\n";
+    svg << "  <rect width=\"1600\" height=\"850\" fill=\"#1e1e1e\" />\n";
+    
+    auto get_x = [nyquist](double hz) { return 1600.0 * (std::log10(hz) - std::log10(10.0)) / (std::log10(nyquist) - std::log10(10.0)); };
+    auto get_y = [](double db) { return 400.0 - (std::max(-4.0, std::min(4.0, db)) * 100.0); };
 
-    std::vector<Point> pts(NUM_BANDS);
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        double f = macro_freqs[i];
-        double db = std::max(-3.0, std::min(3.0, band_deltas[i])); 
-        pts[i].x = 1600.0 * (std::log10(f) - std::log10(20.0)) / (std::log10(20000.0) - std::log10(20.0));
-        pts[i].y = 400.0 - (db * (400.0 / 3.0));
+    for (int db = -4; db <= 4; ++db) {
+        double y = get_y(db);
+        if (db == 0) {
+            svg << "  <line x1=\"0\" y1=\"" << y << "\" x2=\"1600\" y2=\"" << y << "\" stroke=\"#ffffff\" stroke-width=\"2\" opacity=\"0.6\" />\n";
+            svg << "  <text x=\"10\" y=\"" << (y - 5) << "\" fill=\"#ffffff\" font-size=\"14\" font-weight=\"bold\">0 dB</text>\n";
+        } else {
+            svg << "  <line x1=\"0\" y1=\"" << y << "\" x2=\"1600\" y2=\"" << y << "\" stroke=\"#888888\" stroke-width=\"1\" stroke-dasharray=\"4\" opacity=\"0.3\" />\n";
+            std::string sign = (db > 0) ? "+" : "";
+            svg << "  <text x=\"10\" y=\"" << (y - 5) << "\" fill=\"#888888\" font-size=\"12\">" << sign << db << " dB</text>\n";
+        }
     }
 
-    svg << "  <path d=\"M " << pts[0].x << "," << pts[0].y << " ";
-    for (int i = 0; i < NUM_BANDS - 1; ++i) {
-        double dx = pts[i+1].x - pts[i].x;
-        double cp1x = pts[i].x + (dx / 3.0);
-        double cp1y = pts[i].y;
-        double cp2x = pts[i+1].x - (dx / 3.0);
-        double cp2y = pts[i+1].y;
-        svg << "C " << cp1x << "," << cp1y << " " << cp2x << "," << cp2y << " " << pts[i+1].x << "," << pts[i+1].y << " ";
+    double freqs[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+    for (double f : freqs) {
+        if (f > nyquist) continue;
+        double x = get_x(f);
+        svg << "  <line x1=\"" << x << "\" y1=\"0\" x2=\"" << x << "\" y2=\"800\" stroke=\"#888888\" stroke-width=\"1\" opacity=\"0.15\" />\n";
+        std::string label = (f >= 1000) ? std::to_string((int)(f/1000)) + "k" : std::to_string((int)f);
+        svg << "  <text x=\"" << x << "\" y=\"830\" fill=\"#888888\" font-size=\"14\" text-anchor=\"middle\">" << label << "</text>\n";
     }
-    svg << "\" fill=\"none\" stroke=\"#00ffff\" stroke-width=\"4\" stroke-linejoin=\"round\" />\n";
 
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        svg << "  <circle cx=\"" << pts[i].x << "\" cy=\"" << pts[i].y << "\" r=\"5\" fill=\"#00ffff\" />\n";
-        double y_txt = (pts[i].y <= 400.0) ? pts[i].y - 15.0 : pts[i].y + 25.0;
-        svg << "  <text x=\"" << pts[i].x << "\" y=\"" << y_txt << "\" fill=\"#ffffff\" font-family=\"sans-serif\" font-size=\"14\" text-anchor=\"middle\">"
-            << std::fixed << std::setprecision(0) << macro_freqs[i] << " Hz | ";
-        if (band_deltas[i] > 0) svg << "+";
-        svg << std::fixed << std::setprecision(2) << band_deltas[i] << " dB</text>\n";
+    svg << "  <polyline fill=\"none\" stroke=\"#666666\" stroke-width=\"1\" stroke-linejoin=\"round\" opacity=\"0.6\" points=\"";
+    for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+        double bin_hz = k * bin_hz_width;
+        if (bin_hz < 10.0 || bin_hz > nyquist) continue;
+        svg << std::fixed << std::setprecision(2) << get_x(bin_hz) << "," << get_y(raw_delta_db[k]) << " ";
     }
+    svg << "\" />\n";
+
+    svg << "  <polyline fill=\"none\" stroke=\"#00ffff\" stroke-width=\"4\" stroke-linejoin=\"round\" opacity=\"0.9\" points=\"";
+    for (const auto& pt : smoothed_curve) {
+        svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
+    }
+    svg << "\" />\n";
     svg << "</svg>\n";
     svg.close();
 
-    // ========================================================================
-    // PHASE 6: Translation Engine (Pro-Q 4 Parameter Terminal Output)
-    // ========================================================================
-    std::cout << "\n======================================================\n";
-    std::cout << " FABFILTER PRO-Q 4 PARAMETER MAP\n";
-    std::cout << "======================================================\n";
-    std::cout << std::left << std::setw(12) << "[Type]"
-              << std::setw(12) << "[Freq]"
-              << std::setw(12) << "[Gain]"
-              << std::setw(10) << "[Q]"
-              << std::setw(12) << "[Slope]" << "\n";
-    std::cout << "------------------------------------------------------\n";
-
-    // Store nodes for Phase 7 Lua generation
-    struct EqNode { int band; std::string type; double freq; double gain; double q; std::string slope; };
-    std::vector<EqNode> parsed_nodes;
-
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        std::string type = "Bell";
-        double q = 1.0;
-        std::string slope = "12 dB/oct"; 
-        double target_freq = macro_freqs[i];
-
-        if (i == 0) {
-            type = "Bell";
-            q = 2.0; 
-            slope = "48 dB/oct"; 
-        } else if (i == 1) {
-            type = "Low Shelf";
-            q = 1.0; 
-            target_freq = macro_freqs[i] * 2.0; // The Exact Shelf Formula (One-Octave Half-Gain Point)
-        } else if (i == NUM_BANDS - 1) {
-            type = "High Shelf";
-            q = 1.0;
-        } else {
-            double prev_delta = std::abs(band_deltas[i] - band_deltas[i-1]);
-            double next_delta = std::abs(band_deltas[i] - band_deltas[i+1]);
-            double sharpness = prev_delta + next_delta;
-            q = std::max(0.5, std::min(2.5, 0.5 + (sharpness * 2.0)));
-        }
-
-        parsed_nodes.push_back({i + 1, type, target_freq, band_deltas[i], q, slope});
-
-        std::string gain_str = (band_deltas[i] >= 0 ? "+" : "") + std::to_string(band_deltas[i]);
-        gain_str = gain_str.substr(0, gain_str.find('.') + 3) + " dB";
-
-        std::cout << std::left << std::setw(12) << type
-                  << std::setw(12) << (std::to_string(static_cast<int>(target_freq)) + " Hz")
-                  << std::setw(12) << gain_str
-                  << std::setw(10) << std::fixed << std::setprecision(2) << q
-                  << std::setw(12) << slope << "\n";
-    }
-    std::cout << "======================================================\n\n";
-
-    // ========================================================================
-    // PHASE 7: Native Reaper Lua Automation Script Generation
-    // ========================================================================
-    std::string lua_path = output_dir + "apply_eq_match.lua";
-    std::cout << "[Phase 7] Generating Reaper Automation Script: " << lua_path << "\n";
-
-    std::ofstream lua(lua_path);
-    lua << R"(-- Auto-generated Pro-Q 4 Match Script
-local track = reaper.GetSelectedTrack(0, 0)
-if not track then
-    reaper.ShowConsoleMsg("Error: No track selected in Reaper.\n")
-    return
-end
-
-local fx_idx = -1
-for i = 0, reaper.TrackFX_GetCount(track) - 1 do
-    local _, name = reaper.TrackFX_GetFXName(track, i)
-    if name:match("Pro%-Q 4") then
-        fx_idx = i
-        break
-    end
-end
-
-if fx_idx == -1 then
-    reaper.ShowConsoleMsg("Error: 'Pro-Q 4' not found in the selected track's FX chain.\n")
-    return
-end
-
-local param_map = {}
-local num_params = reaper.TrackFX_GetNumParams(track, fx_idx)
-for i = 0, num_params - 1 do
-    local _, name = reaper.TrackFX_GetParamName(track, fx_idx, i)
-    param_map[name] = i
-end
-
-local function set_param(name, val)
-    local idx = param_map[name]
-    if idx then
-        reaper.TrackFX_SetParamNormalized(track, fx_idx, idx, val)
-    end
-end
-
--- Normalization Math
-local function norm_freq(f) return math.log(f / 10.0) / math.log(30000.0 / 10.0) end
-local function norm_gain(g) return (g + 30.0) / 60.0 end
-local function norm_q(q) return math.log(q / 0.025) / math.log(40.0 / 0.025) end
-
-local shapes = { ["Bell"] = 0.0, ["Low Shelf"] = 1.0/9.0, ["High Shelf"] = 3.0/9.0 }
-
-local eq_nodes = {
-)";
-
-    for (const auto& n : parsed_nodes) {
-        lua << "    { band = " << n.band 
-            << ", type = \"" << n.type 
-            << "\", freq = " << std::fixed << std::setprecision(2) << n.freq 
-            << ", gain = " << n.gain 
-            << ", q = " << n.q << " },\n";
-    }
-
-    lua << R"(}
-
-reaper.Undo_BeginBlock()
-
-for _, n in ipairs(eq_nodes) do
-    local prefix = "Band " .. n.band .. " "
-    
-    -- Enable Band
-    set_param(prefix .. "Used", 1.0)
-    
-    -- Apply Normalized Values
-    set_param(prefix .. "Frequency", norm_freq(n.freq))
-    set_param(prefix .. "Gain", norm_gain(n.gain))
-    set_param(prefix .. "Q", norm_q(n.q))
-    set_param(prefix .. "Shape", shapes[n.type])
-end
-
-reaper.Undo_EndBlock("Apply Pro-Q 4 Eq Match", -1)
-reaper.ShowConsoleMsg("Successfully applied " .. #eq_nodes .. " nodes to Pro-Q 4.\n")
-)";
-
-    lua.close();
-    std::cout << "Done! Drag 'apply_eq_match.lua' into your Reaper action list to execute.\n";
-
-    // Cleanup
-    pffft_aligned_free(src_fft_input); pffft_aligned_free(src_fft_output);
-    pffft_aligned_free(tgt_fft_input); pffft_aligned_free(tgt_fft_output);
-    pffft_destroy_setup(pffft_setup);
+    fftw_destroy_plan(ir_plan); fftw_free(ir_freq); fftw_free(ir_time);
+    fftw_destroy_plan(src_plan); fftw_destroy_plan(tgt_plan);
+    fftw_free(src_in); fftw_free(src_out); fftw_free(tgt_in); fftw_free(tgt_out);
     sf_close(src_infile); sf_close(tgt_infile);
 
+    std::cout << "\nBuild successful. Linear Phase IR generated.\n";
     return 0;
 }
