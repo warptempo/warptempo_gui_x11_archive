@@ -112,13 +112,14 @@ double map_source_to_target(size_t src_frame, const std::vector<ParentChunk>& pa
 
 int main(int argc, char* argv[]) {
     if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] << " <timemap_file> <source_wav> <target_wav>\n";
+        std::cerr << "Usage: " << argv[0] << " <timemap_file> <source_wav> <target_wav> [low_cutoff_hz]\n";
         return 1;
     }
 
     std::string map_file = argv[1];
     std::string src_wav_file = argv[2];
     std::string tgt_wav_file = argv[3];
+    double low_cutoff_hz = (argc >= 5) ? std::stod(argv[4]) : 32.7;
 
     SF_INFO src_sfinfo, tgt_sfinfo;
     src_sfinfo.format = 0; tgt_sfinfo.format = 0;
@@ -341,7 +342,6 @@ int main(int argc, char* argv[]) {
     }
 
     // NEW: Custom Parabolic Knee to preserve the exact anchor value
-    double low_cutoff_hz = 32.7; // Mozart C-Extension limit
     double anchor_db = 0.0;
     
     for (size_t i = 0; i < smoothed_curve.size() - 1; ++i) {
@@ -426,29 +426,23 @@ int main(int argc, char* argv[]) {
         final_ir[shifted_idx] = static_cast<float>(raw_sample * window);
     }
 
-    std::string output_dir = src_wav_file;
-    size_t last_slash = output_dir.find_last_of("/\\");
-    if (last_slash != std::string::npos) output_dir = output_dir.substr(0, last_slash) + "/";
-    else output_dir = "";
-
-    std::string ir_path = output_dir + "ideal_match_ir.wav";
-    
-    SF_INFO ir_info;
-    ir_info.samplerate = src_sfinfo.samplerate;
-    ir_info.channels = 1; 
-    ir_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-    
-    SNDFILE* ir_outfile = sf_open(ir_path.c_str(), SFM_WRITE, &ir_info);
-    if (ir_outfile) {
-        sf_writef_float(ir_outfile, final_ir.data(), FFT_SIZE);
-        sf_close(ir_outfile);
-        std::cout << "          -> Linear Phase IR written to: " << ir_path << "\n";
+    std::string tgt_dir = tgt_wav_file;
+    std::string tgt_filename = tgt_wav_file;
+    size_t last_slash = tgt_wav_file.find_last_of("/\\");
+    if (last_slash != std::string::npos) {
+        tgt_dir = tgt_wav_file.substr(0, last_slash) + "/";
+        tgt_filename = tgt_wav_file.substr(last_slash + 1);
+    } else {
+        tgt_dir = "";
     }
+    
+    // We skip writing ideal_match_ir.wav to disk entirely. Phase 7 uses final_ir from memory.
+    std::cout << "          -> Linear Phase IR generated in memory.\n";
 
     // ========================================================================
     // PHASE 6: High-Resolution SVG Rendering
     // ========================================================================
-    std::string svg_path = output_dir + "ideal_trend_curve.svg";
+    std::string svg_path = tgt_dir + "eqmatch_curve.svg";
     std::cout << "[Phase 6] Writing High-Resolution Ideal Curve to: " << svg_path << "\n";
 
     std::ofstream svg(svg_path);
@@ -501,5 +495,146 @@ int main(int argc, char* argv[]) {
     sf_close(src_infile); sf_close(tgt_infile);
 
     std::cout << "\nBuild successful. Linear Phase IR generated.\n";
+    
+    // ========================================================================
+    // PHASE 7: Native Overlap-Add Fast Convolution Engine (True Stereo)
+    // ========================================================================
+    std::cout << "\n======================================================\n";
+    std::cout << "[Phase 7] Executing Native Overlap-Add Convolution...\n";
+    std::cout << "======================================================\n";
+
+    const int CONV_BLOCK_SIZE = 8192;
+    const int CONV_IR_SIZE = FFT_SIZE; // 8192
+    const int OVERLAP_SIZE = CONV_IR_SIZE - 1; // 8191
+    const int CONV_FFT_SIZE = 16384; 
+
+    double* conv_in = fftw_alloc_real(CONV_FFT_SIZE);
+    fftw_complex* conv_out = fftw_alloc_complex(CONV_FFT_SIZE / 2 + 1);
+    fftw_plan plan_fwd = fftw_plan_dft_r2c_1d(CONV_FFT_SIZE, conv_in, conv_out, FFTW_ESTIMATE);
+    
+    fftw_complex* conv_ir_cmplx = fftw_alloc_complex(CONV_FFT_SIZE / 2 + 1);
+    double* ir_pad_in = fftw_alloc_real(CONV_FFT_SIZE);
+    fftw_plan plan_ir_fwd = fftw_plan_dft_r2c_1d(CONV_FFT_SIZE, ir_pad_in, conv_ir_cmplx, FFTW_ESTIMATE);
+
+    double* ifft_in_real = fftw_alloc_real(CONV_FFT_SIZE);
+    fftw_plan plan_inv = fftw_plan_dft_c2r_1d(CONV_FFT_SIZE, conv_out, ifft_in_real, FFTW_ESTIMATE);
+
+    std::fill_n(ir_pad_in, CONV_FFT_SIZE, 0.0);
+    for (int i = 0; i < CONV_IR_SIZE; ++i) ir_pad_in[i] = final_ir[i];
+    fftw_execute(plan_ir_fwd);
+
+    std::string target_in_file = tgt_wav_file; 
+    std::string final_out_file = tgt_dir + "eqmatch_" + tgt_filename;
+
+    SF_INFO in_info;
+    SNDFILE* in_wav = sf_open(target_in_file.c_str(), SFM_READ, &in_info);
+    if (!in_wav) {
+        std::cerr << "Error: Could not open target file " << target_in_file << " for convolution.\n";
+        return 1;
+    }
+
+    SF_INFO out_info = in_info; 
+    SNDFILE* out_wav = sf_open(final_out_file.c_str(), SFM_WRITE, &out_info);
+
+    // Independent multi-channel buffers
+    std::vector<std::vector<float>> overlap_buffers(in_info.channels, std::vector<float>(OVERLAP_SIZE, 0.0f));
+    std::vector<std::vector<float>> channel_write_buffers(in_info.channels, std::vector<float>(CONV_BLOCK_SIZE, 0.0f));
+    
+    std::vector<float> conv_read_buffer(in_info.channels * CONV_BLOCK_SIZE, 0.0f);
+    std::vector<float> interleaved_write_buffer(in_info.channels * CONV_BLOCK_SIZE, 0.0f);
+    
+    int frames_to_skip = 4096; 
+    const float NOISE_FLOOR_GATE = 1e-10f; 
+    
+    sf_count_t read_count;
+    std::cout << "          -> Processing independent channels. Latency compensation: " << frames_to_skip << " frames...\n";
+
+    while ((read_count = sf_readf_float(in_wav, conv_read_buffer.data(), CONV_BLOCK_SIZE)) > 0) {
+        
+        // Process each channel completely independently
+        for (int ch = 0; ch < in_info.channels; ++ch) {
+            std::fill_n(conv_in, CONV_FFT_SIZE, 0.0);
+            
+            // Extract just this channel's samples
+            for (int i = 0; i < read_count; ++i) {
+                conv_in[i] = conv_read_buffer[i * in_info.channels + ch];
+            }
+
+            fftw_execute(plan_fwd);
+
+            for (int k = 0; k <= CONV_FFT_SIZE / 2; ++k) {
+                double real_audio = conv_out[k][0], imag_audio = conv_out[k][1];
+                double real_ir = conv_ir_cmplx[k][0], imag_ir = conv_ir_cmplx[k][1];
+                
+                conv_out[k][0] = (real_audio * real_ir) - (imag_audio * imag_ir);
+                conv_out[k][1] = (real_audio * imag_ir) + (imag_audio * real_ir);
+            }
+
+            fftw_execute(plan_inv);
+
+            for (int i = 0; i < CONV_BLOCK_SIZE; ++i) {
+                double sample = (ifft_in_real[i] / CONV_FFT_SIZE) + (i < OVERLAP_SIZE ? overlap_buffers[ch][i] : 0.0);
+                channel_write_buffers[ch][i] = static_cast<float>(sample);
+            }
+
+            for (int i = 0; i < OVERLAP_SIZE; ++i) {
+                overlap_buffers[ch][i] = static_cast<float>(ifft_in_real[CONV_BLOCK_SIZE + i] / CONV_FFT_SIZE);
+            }
+        }
+
+        // Weave the processed channels back together into a stereo interleaved array
+        for (int i = 0; i < read_count; ++i) {
+            for (int ch = 0; ch < in_info.channels; ++ch) {
+                interleaved_write_buffer[i * in_info.channels + ch] = channel_write_buffers[ch][i];
+            }
+        }
+
+        int write_offset_frames = 0;
+        int write_len_frames = read_count; 
+
+        if (frames_to_skip > 0) {
+            if (frames_to_skip >= write_len_frames) {
+                frames_to_skip -= write_len_frames;
+                write_len_frames = 0; 
+            } else {
+                write_offset_frames = frames_to_skip;
+                write_len_frames -= frames_to_skip;
+                frames_to_skip = 0;
+            }
+        }
+
+        if (write_len_frames > 0) {
+            sf_writef_float(out_wav, &interleaved_write_buffer[write_offset_frames * in_info.channels], write_len_frames);
+        }
+    }
+
+    int valid_tail_frames = OVERLAP_SIZE;
+    while (valid_tail_frames > 0) {
+        float max_val = 0.0f;
+        for(int ch = 0; ch < in_info.channels; ++ch) {
+            max_val = std::max(max_val, std::abs(overlap_buffers[ch][valid_tail_frames - 1]));
+        }
+        if (max_val >= NOISE_FLOOR_GATE) break;
+        valid_tail_frames--;
+    }
+
+    if (valid_tail_frames > 0) {
+        std::vector<float> tail_out(valid_tail_frames * in_info.channels);
+        for (int i = 0; i < valid_tail_frames; ++i) {
+            for (int ch = 0; ch < in_info.channels; ++ch) {
+                tail_out[i * in_info.channels + ch] = overlap_buffers[ch][i];
+            }
+        }
+        sf_writef_float(out_wav, tail_out.data(), valid_tail_frames);
+        std::cout << "          -> -200dB Gate engaged. Drained " << valid_tail_frames << " tail frames.\n";
+    }
+
+    fftw_destroy_plan(plan_fwd); fftw_destroy_plan(plan_inv); fftw_destroy_plan(plan_ir_fwd);
+    fftw_free(conv_in); fftw_free(conv_out); fftw_free(ifft_in_real);
+    fftw_free(conv_ir_cmplx); fftw_free(ir_pad_in);
+    sf_close(in_wav); sf_close(out_wav);
+
+    std::cout << "\n[Success] Final Master written to: " << final_out_file << "\n";
+    
     return 0;
 }

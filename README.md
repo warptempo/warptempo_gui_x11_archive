@@ -47,9 +47,9 @@ make
 
 Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=soundtouch in the .settings file.
 
-The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. The trimmidi script will remove additional silence at the end of the rendered file. 
+The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. 
 
-The REAPER mastering project is included, and uses FabFilter's Pro-L 2 plugin and the algorithm in the `eqmatch` folder to reference the source track's eq profile. It outputs an impulse response file that can be used with ReaVerb to EQ match the output a tempo warping algorithm to the sound profile of the source audio. 
+Once an audio output has been rendered, it is recommended to use the included `eqmatch` algorithm to generate a linear phase, impulse response-based EQ curve that approximates the spectral characteristics of the original in relation to the output. The algorithm also applies that curve to the output and trims initial latency caused by the convolution as well as the additional end silence generated as a byproduct of the MIDI rendering workflow.
 
 For `eqmatch`, run one of the following:
 ```
@@ -59,6 +59,8 @@ brew install libsndfile libebur128 fftw pkg-config # MacOS
 ```
 
 Then compile.
+
+The REAPER mastering project is included, and uses FabFilter's Pro-L 2 plugin. 
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
