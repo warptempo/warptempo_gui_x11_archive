@@ -112,7 +112,7 @@ double map_source_to_target(size_t src_frame, const std::vector<ParentChunk>& pa
 int main(int argc, char* argv[]) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0] << " <timemap_file> <source_wav> <target_wav> [routing_mode 0-2] [wet_percent 0-100] [low_cutoff_hz]\n";
-        std::cerr << "  routing_mode: 0 = Dual Mono, 1 = Linked Stereo (Default), 2 = Mid/Side\n";
+        std::cerr << "  routing_mode: 0 = Dual Mono, 1 = Linked Stereo, 2 = Mid/Side (Default)\n";
         std::cerr << "  SVG Graph: Cyan = Channel 1 (Mid/Left/Linked), Magenta = Channel 2 (Side/Right)\n";
         return 1;
     }
@@ -120,7 +120,7 @@ int main(int argc, char* argv[]) {
     std::string map_file = argv[1];
     std::string src_wav_file = argv[2];
     std::string tgt_wav_file = argv[3];
-    int routing_mode = (argc >= 5) ? std::stoi(argv[4]) : 1; 
+    int routing_mode = (argc >= 5) ? std::stoi(argv[4]) : 2;
     double wet_percent = (argc >= 6) ? std::stod(argv[5]) : 100.0;
     double low_cutoff_hz = (argc >= 7) ? std::stod(argv[6]) : 32.7;
 
@@ -238,16 +238,12 @@ int main(int argc, char* argv[]) {
     double tgt_global_lufs = 0.0, tgt_global_rms = 0.0;
     calculate_metrics(tgt_infile, 0, tgt_sfinfo.frames, tgt_sfinfo.channels, tgt_sfinfo.samplerate, tgt_global_lufs, tgt_global_rms);
     
-    double target_gain_multiplier = 1.0;
     double lufs_difference = src_global_lufs - tgt_global_lufs;
+    double target_gain_multiplier = std::pow(10.0, lufs_difference / 20.0);
     
-    if (lufs_difference >= SERATO_DETECTION_THRESH_LU) {
-        target_gain_multiplier = std::pow(10.0, lufs_difference / 20.0);
-        std::cout << "=> Headroom drop detected. Applying exact x" << std::fixed << std::setprecision(3) 
-                  << target_gain_multiplier << " (+" << lufs_difference << " dB) makeup gain to target.\n";
-    } else {
-        std::cout << "=> Tracks are gain-matched. No makeup gain required.\n";
-    }
+    std::cout << "=> Applying exact x" << std::fixed << std::setprecision(3) 
+              << target_gain_multiplier << " (" << (lufs_difference >= 0 ? "+" : "") 
+              << lufs_difference << " dB) makeup gain to target.\n";
 
     // ========================================================================
     // PHASE 3: Multi-Channel FFTW3 Analysis Loop
@@ -491,8 +487,33 @@ int main(int argc, char* argv[]) {
         for (const auto& pt : smoothed_curve[1]) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
         svg << "\" />\n";
     }
+    
+    // --- HUD AND LEGEND GENERATION ---
+    std::string mode_str, legend_str;
+    if (routing_mode == 0) {
+        mode_str = "Dual Mono";
+        legend_str = "Cyan: Left | Magenta: Right";
+    } else if (routing_mode == 2) {
+        mode_str = "Mid/Side";
+        legend_str = "Cyan: Mid | Magenta: Side";
+    } else {
+        mode_str = "Linked Stereo";
+        legend_str = "Cyan: Linked (L+R)";
+    }
 
-    svg << "</svg>\n";
+    // Line 1: Mode & Wet/Dry
+    svg << "  <text x=\"1580\" y=\"30\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
+        << "Mode: " << mode_str << " (" << std::fixed << std::setprecision(1) << wet_percent << "% Wet)</text>\n";
+
+    // Line 2: Headroom Makeup
+    svg << "  <text x=\"1580\" y=\"50\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
+        << "Target Makeup: " << (lufs_difference >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << lufs_difference << " dB</text>\n";
+
+    // Line 3: Color Legend
+    svg << "  <text x=\"1580\" y=\"70\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
+        << "Legend: " << legend_str << "</text>\n";
+
+    svg << "</svg>\n";    
     svg.close();
 
     // Clean up Phase 3/5 FFTW memory
