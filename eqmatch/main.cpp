@@ -16,7 +16,6 @@ const double RELEASE_TOLERANCE_LU = 8.0;
 const double MIN_GAP_SEC = 0.5;              
 const double MIN_PHRASE_SEC = 5.0;           
 const size_t TOP_X_CHUNKS = 10;               
-const double SERATO_DETECTION_THRESH_LU = 1.0; 
 const int FFT_SIZE = 8192; 
 
 // --- Filter Topology Settings ---
@@ -111,18 +110,16 @@ double map_source_to_target(size_t src_frame, const std::vector<ParentChunk>& pa
 
 int main(int argc, char* argv[]) {
     if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] << " <timemap_file> <source_wav> <target_wav> [routing_mode 0-2] [wet_percent 0-100] [low_cutoff_hz]\n";
-        std::cerr << "  routing_mode: 0 = Dual Mono, 1 = Linked Stereo, 2 = Mid/Side (Default)\n";
-        std::cerr << "  SVG Graph: Cyan = Channel 1 (Mid/Left/Linked), Magenta = Channel 2 (Side/Right)\n";
+        std::cerr << "Usage: " << argv[0] << " <timemap_file> <source_wav> <target_wav> [crossover_hz=150.0]\n";
+        std::cerr << "  Architecture: Classical Edition (LR24 M/S -> Linked Stereo Crossover)\n";
+        std::cerr << "  SVG Graph: Cyan = Mid/LP | Magenta = Side/LP | Yellow = Linked/HP\n";
         return 1;
     }
 
     std::string map_file = argv[1];
     std::string src_wav_file = argv[2];
     std::string tgt_wav_file = argv[3];
-    int routing_mode = (argc >= 5) ? std::stoi(argv[4]) : 2;
-    double wet_percent = (argc >= 6) ? std::stod(argv[5]) : 100.0;
-    double low_cutoff_hz = (argc >= 7) ? std::stod(argv[6]) : 32.7;
+    double crossover_hz = (argc >= 5) ? std::stod(argv[4]) : 150.0;
 
     SF_INFO src_sfinfo, tgt_sfinfo;
     src_sfinfo.format = 0; tgt_sfinfo.format = 0;
@@ -137,14 +134,17 @@ int main(int argc, char* argv[]) {
     std::cout << "Opened Target: " << tgt_sfinfo.samplerate << "Hz, " << tgt_sfinfo.channels << " channels.\n";
 
     if (src_sfinfo.channels == 1 || tgt_sfinfo.channels == 1) {
-        routing_mode = 1; 
-        std::cout << "=> Mono file detected. Forcing routing_mode to Linked Stereo (1).\n";
-    } else {
-        std::cout << "=> Routing Mode: " << (routing_mode == 0 ? "Dual Mono (Unlinked)" : (routing_mode == 2 ? "Mid/Side" : "Linked Stereo")) << "\n";
+        std::cerr << "Error: This architecture requires stereo files for Mid/Side spatial crossover processing.\n";
+        return 1;
     }
-    
-    std::cout << "=> Wet/Dry Mix: " << wet_percent << "%\n";
-    std::cout << "=> Low Cutoff (HPF): " << low_cutoff_hz << " Hz\n";
+
+    // --- Apply Mathematical Guardrails ---
+    double nyquist = src_sfinfo.samplerate / 2.0;
+    crossover_hz = std::max(40.0, crossover_hz); // Floor Crossover at 40 Hz
+    crossover_hz = std::min(nyquist - 20.0, crossover_hz); // Ceiling below safety taper
+
+    std::cout << "=> Architecture: LR24 Spatial Crossover (Mid/Side -> Linked Stereo)\n";
+    std::cout << "=> Crossover Point: " << crossover_hz << " Hz\n";
 
     std::ifstream file(map_file);
     if (!file.is_open()) { std::cerr << "Error: Could not open timemap.\n"; return 1; }
@@ -246,19 +246,27 @@ int main(int argc, char* argv[]) {
               << lufs_difference << " dB) makeup gain to target.\n";
 
     // ========================================================================
-    // PHASE 3: Multi-Channel FFTW3 Analysis Loop
+    // PHASE 3: Multi-Channel FFTW3 Analysis Loop (Hardcoded 3-Curve)
     // ========================================================================
-    std::cout << "\n[Phase 3] Running Hanning-Windowed FFTW3 Engine (" << FFT_SIZE << " bins)...\n";
+    std::cout << "\n[Phase 3] Running 4-Channel FFTW3 Engine (" << FFT_SIZE << " bins)...\n";
     
-    // Shared plan for memory efficiency: execute sequentially for each channel
     double* fft_in = fftw_alloc_real(FFT_SIZE);
     fftw_complex* fft_out = fftw_alloc_complex(FFT_SIZE / 2 + 1);
     fftw_plan plan_r2c = fftw_plan_dft_r2c_1d(FFT_SIZE, fft_in, fft_out, FFTW_MEASURE);
 
-    std::vector<std::vector<double>> src_psd(2, std::vector<double>(FFT_SIZE / 2 + 1, 0.0));
-    std::vector<std::vector<double>> tgt_psd(2, std::vector<double>(FFT_SIZE / 2 + 1, 0.0));
-    size_t total_windows = 0;
+    std::vector<double> src_psd_l(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> src_psd_r(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> src_psd_mid(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> src_psd_side(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> src_psd_linked(FFT_SIZE / 2 + 1, 0.0);
 
+    std::vector<double> tgt_psd_l(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> tgt_psd_r(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> tgt_psd_mid(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> tgt_psd_side(FFT_SIZE / 2 + 1, 0.0);
+    std::vector<double> tgt_psd_linked(FFT_SIZE / 2 + 1, 0.0);
+
+    size_t total_windows = 0;
     std::vector<double> hanning(FFT_SIZE);
     for (int i = 0; i < FFT_SIZE; ++i) hanning[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (FFT_SIZE - 1)));
 
@@ -277,66 +285,86 @@ int main(int argc, char* argv[]) {
             sf_seek(tgt_infile, static_cast<sf_count_t>(t_start), SEEK_SET);
             sf_readf_float(tgt_infile, tgt_read_buf.data(), FFT_SIZE);
 
-            // Process SRC Channels
-            for (int ch = 0; ch < 2; ++ch) {
-                for (int i = 0; i < FFT_SIZE; ++i) {
-                    double l = src_read_buf[i * src_sfinfo.channels];
-                    double r = src_sfinfo.channels > 1 ? src_read_buf[i * src_sfinfo.channels + 1] : l;
-                    double val = 0.0;
-                    
-                    if (routing_mode == 0) val = (ch == 0) ? l : r; // Dual
-                    else if (routing_mode == 1) val = (l + r) * 0.5; // Linked
-                    else val = (ch == 0) ? (l + r) * 0.5 : (l - r) * 0.5; // M/S
-                    
-                    fft_in[i] = val * hanning[i];
-                }
-                fftw_execute(plan_r2c);
-                for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd[ch][k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
-            }
+            // PROCESS SOURCE FILE (4 FFTs)
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = src_read_buf[i * src_sfinfo.channels] * hanning[i]; // L
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd_l[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
 
-            // Process TGT Channels
-            for (int ch = 0; ch < 2; ++ch) {
-                for (int i = 0; i < FFT_SIZE; ++i) {
-                    double l = tgt_read_buf[i * tgt_sfinfo.channels] * target_gain_multiplier;
-                    double r = (tgt_sfinfo.channels > 1 ? tgt_read_buf[i * tgt_sfinfo.channels + 1] : tgt_read_buf[i * tgt_sfinfo.channels]) * target_gain_multiplier;
-                    double val = 0.0;
-                    
-                    if (routing_mode == 0) val = (ch == 0) ? l : r; 
-                    else if (routing_mode == 1) val = (l + r) * 0.5; 
-                    else val = (ch == 0) ? (l + r) * 0.5 : (l - r) * 0.5; 
-                    
-                    fft_in[i] = val * hanning[i];
-                }
-                fftw_execute(plan_r2c);
-                for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd[ch][k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = src_read_buf[i * src_sfinfo.channels + 1] * hanning[i]; // R
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd_r[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            for (int i = 0; i < FFT_SIZE; ++i) { // Mid
+                fft_in[i] = 0.5 * (src_read_buf[i * src_sfinfo.channels] + src_read_buf[i * src_sfinfo.channels + 1]) * hanning[i];
             }
-            
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd_mid[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            for (int i = 0; i < FFT_SIZE; ++i) { // Side
+                fft_in[i] = 0.5 * (src_read_buf[i * src_sfinfo.channels] - src_read_buf[i * src_sfinfo.channels + 1]) * hanning[i];
+            }
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd_side[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            // PROCESS TARGET FILE (4 FFTs)
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * tgt_sfinfo.channels] * target_gain_multiplier * hanning[i]; // Tgt L
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_l[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * tgt_sfinfo.channels + 1] * target_gain_multiplier * hanning[i]; // Tgt R
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_r[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            for (int i = 0; i < FFT_SIZE; ++i) { // Tgt Mid
+                double l = tgt_read_buf[i * tgt_sfinfo.channels] * target_gain_multiplier;
+                double r = tgt_read_buf[i * tgt_sfinfo.channels + 1] * target_gain_multiplier;
+                fft_in[i] = 0.5 * (l + r) * hanning[i];
+            }
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_mid[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
+            for (int i = 0; i < FFT_SIZE; ++i) { // Tgt Side
+                double l = tgt_read_buf[i * tgt_sfinfo.channels] * target_gain_multiplier;
+                double r = tgt_read_buf[i * tgt_sfinfo.channels + 1] * target_gain_multiplier;
+                fft_in[i] = 0.5 * (l - r) * hanning[i];
+            }
+            fftw_execute(plan_r2c);
+            for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_side[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
+
             total_windows++;
             s_frame += hop_size;
         }
     }
 
+    // True Phase-Agnostic Linked PSDs (Averaging Power)
+    for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+        src_psd_linked[k] = (src_psd_l[k] + src_psd_r[k]) * 0.5;
+        tgt_psd_linked[k] = (tgt_psd_l[k] + tgt_psd_r[k]) * 0.5;
+    }
+
+    std::vector<std::vector<double>> src_psd = {src_psd_mid, src_psd_side, src_psd_linked};
+    std::vector<std::vector<double>> tgt_psd = {tgt_psd_mid, tgt_psd_side, tgt_psd_linked};
+
     // ========================================================================
-    // PHASE 4: 1/3 Octave Gaussian Smoothing Engine
+    // PHASE 4: 1/3 Octave Smoothing & Priority-Routed C1 Spline Matrix
     // ========================================================================
-    std::cout << "[Phase 4] Calculating Raw Delta and 1/3 Octave Smoothed Trend Lines...\n";
+    std::cout << "[Phase 4] Calculating 1/3 Octave Smoothed Trend Lines and Dynamic Matrix...\n";
     
-    std::vector<std::vector<double>> raw_delta_db(2, std::vector<double>(FFT_SIZE / 2 + 1, 0.0));
-    std::vector<std::vector<Point>> smoothed_curve(2);
-    std::vector<double> anchor_db(2, 0.0);
+    int num_curves = 3;
+    std::vector<std::vector<double>> raw_delta_db(num_curves, std::vector<double>(FFT_SIZE / 2 + 1, 0.0));
+    std::vector<std::vector<Point>> smoothed_curve(num_curves);
     
     double bin_hz_width = static_cast<double>(src_sfinfo.samplerate) / FFT_SIZE;
-    double nyquist = src_sfinfo.samplerate / 2.0;
     double sigma_octaves = SMOOTHING_OCTAVES / 2.355;
     double log_min = std::log10(10.0); 
     double log_max = std::log10(nyquist); 
-    double taper_start_hz = nyquist - 100.0;
 
-    for (int ch = 0; ch < 2; ++ch) {
+    for (int ch = 0; ch < num_curves; ++ch) {
         for (int k = 1; k <= FFT_SIZE / 2; ++k) {
             if (src_psd[ch][k] > 0 && tgt_psd[ch][k] > 0) {
                 double src_db = 10.0 * std::log10((src_psd[ch][k] / total_windows));
                 double tgt_db = 10.0 * std::log10((tgt_psd[ch][k] / total_windows));
+                // FIXED: Source minus Target (Correct EQ Match polarity for cutting artifacts)
                 raw_delta_db[ch][k] = src_db - tgt_db;
             }
         }
@@ -361,35 +389,108 @@ int main(int argc, char* argv[]) {
             smoothed_curve[ch].push_back({current_target_hz, final_db});
         }
 
-        for (size_t i = 0; i < smoothed_curve[ch].size() - 1; ++i) {
-            if (smoothed_curve[ch][i].x <= low_cutoff_hz && smoothed_curve[ch][i+1].x >= low_cutoff_hz) {
-                double t = (low_cutoff_hz - smoothed_curve[ch][i].x) / (smoothed_curve[ch][i+1].x - smoothed_curve[ch][i].x);
-                anchor_db[ch] = smoothed_curve[ch][i].y + t * (smoothed_curve[ch][i+1].y - smoothed_curve[ch][i].y);
-                break;
+        // --- Tangent Extension Artifact Suppressor (Two-Factor Auth) ---
+        int num_pts = smoothed_curve[ch].size();
+        std::vector<double> drop_slope(num_pts - 1, 0.0);
+        
+        // 1. Calculate continuous High-to-Low trajectory (dB/octave)
+        for (int i = 0; i < num_pts - 1; ++i) {
+            double y_low = smoothed_curve[ch][i].y;
+            double y_high = smoothed_curve[ch][i+1].y;
+            double x_low = smoothed_curve[ch][i].x;
+            double x_high = smoothed_curve[ch][i+1].x;
+            
+            // Negative slope = curve is falling as we evaluate High -> Low
+            drop_slope[i] = (y_low - y_high) / std::log2(x_high / x_low);
+        }
+
+        // 2. High-to-Low Sweep (Evaluated from Nyquist down to DC)
+        double current_steepest_slope = 0.0;
+        int current_inflection_idx = -1;
+
+        for (int i = num_pts - 2; i >= 0; --i) {
+            // Only arm the system below the crossover (prevent midrange false positives)
+            if (smoothed_curve[ch][i].x > crossover_hz) continue;
+
+            // Track the steepest negative slope (the inflection point)
+            if (drop_slope[i] < current_steepest_slope) {
+                current_steepest_slope = drop_slope[i];
+                current_inflection_idx = i;
+            }
+
+            // Trigger: The curve bottoms out and attempts to rise
+            if (drop_slope[i] > 0) {
+                
+                // Two-Factor Authentication for the Phase-Vocoder Null:
+                // 1. Did it fall aggressively? (Slope <= -9.0 dB/octave)
+                // 2. Did it dig a meaningful hole? (Depth <= -1.5 dB)
+                bool is_aggressive = (current_steepest_slope <= -9.0);
+                bool is_deep = false;
+                
+                if (current_inflection_idx != -1) {
+                    is_deep = (smoothed_curve[ch][current_inflection_idx].y <= -1.5);
+                }
+
+                if (is_aggressive && is_deep) {
+                    // ARTIFACT CONFIRMED! Lock the Tangent.
+                    double x_trigger = smoothed_curve[ch][current_inflection_idx].x;
+                    double y_trigger = smoothed_curve[ch][current_inflection_idx].y;
+                    double S_locked = current_steepest_slope;
+
+                    // Execute tangent extension for all frequencies strictly below the inflection point
+                    for (int j = current_inflection_idx - 1; j >= 0; --j) {
+                        double x_below = std::log2(x_trigger / smoothed_curve[ch][j].x);
+                        smoothed_curve[ch][j].y = y_trigger + (S_locked * x_below);
+                    }
+                    
+                    break; // Sub-bass is locked. Stop evaluating this channel.
+                } else {
+                    // Natural wobble or shallow dip. Reset trackers to look for the next drop.
+                    current_steepest_slope = 0.0;
+                    current_inflection_idx = -1;
+                }
             }
         }
 
+        // 3. Execution Engine: LF Subtractive Limit & Nyquist Taper
         for (auto& pt : smoothed_curve[ch]) {
-            if (pt.x < low_cutoff_hz) {
-                double octaves_below = std::log2(low_cutoff_hz / pt.x);
-                if (octaves_below < 0.5) pt.y = anchor_db[ch] - (12.0 * octaves_below * octaves_below);
-                else pt.y = anchor_db[ch] - (12.0 * octaves_below - 3.0);
-            } else if (pt.x > taper_start_hz) {
-                double taper_ratio = (nyquist - pt.x) / 100.0;
+            
+            // Protect sub-bass headroom by clamping positive boosts below a static 60 Hz boundary.
+            // This prevents sub clipping while letting the mids and highs breathe freely.
+            if (pt.x <= 60.0) {
+                pt.y = std::min(pt.y, 0.0); 
+            }
+
+            // Razor-thin 20 Hz Nyquist safety taper
+            if (pt.x > nyquist - 20.0) {
+                double taper_ratio = (nyquist - pt.x) / 20.0;
                 pt.y *= std::max(0.0, std::min(1.0, taper_ratio));
             }
         }
     }
 
     // ========================================================================
-    // PHASE 5: Linear Phase FIR Impulse Response Generation
+    // PHASE 5: Linear Phase FIR Impulse Response Generation w/ LR24 Crossover
     // ========================================================================
     std::cout << "\n======================================================\n";
     std::cout << "[Phase 5] Generating Multi-Channel Linear Phase FIRs...\n";
     std::cout << "======================================================\n";
 
-    fftw_plan ir_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, fft_out, fft_in, FFTW_ESTIMATE); // Reuse arrays
+    fftw_plan ir_plan = fftw_plan_dft_c2r_1d(FFT_SIZE, fft_out, fft_in, FFTW_ESTIMATE); 
     std::vector<std::vector<float>> final_ir(2, std::vector<float>(FFT_SIZE, 0.0f));
+
+    auto get_interpolated_db = [&](int curve_idx, double hz) {
+        if (hz <= smoothed_curve[curve_idx].front().x) return smoothed_curve[curve_idx].front().y;
+        if (hz >= smoothed_curve[curve_idx].back().x) return smoothed_curve[curve_idx].back().y;
+
+        auto it = std::lower_bound(smoothed_curve[curve_idx].begin(), smoothed_curve[curve_idx].end(), hz, 
+            [](const Point& p, double f) { return p.x < f; });
+        if (it == smoothed_curve[curve_idx].begin()) return it->y;
+        if (it == smoothed_curve[curve_idx].end()) return smoothed_curve[curve_idx].back().y;
+        auto prev = it - 1;
+        double t = (hz - prev->x) / (it->x - prev->x);
+        return prev->y + t * (it->y - prev->y);
+    };
 
     for (int ch = 0; ch < 2; ++ch) {
         for (int k = 0; k <= FFT_SIZE / 2; ++k) {
@@ -398,25 +499,22 @@ int main(int argc, char* argv[]) {
 
             if (k == 0) target_db = -100.0; 
             else if (k == FFT_SIZE / 2) target_db = 0.0; 
-            else if (bin_hz < 10.0) {
-                double octaves_below = std::log2(low_cutoff_hz / bin_hz);
-                if (octaves_below < 0.5) target_db = anchor_db[ch] - (12.0 * octaves_below * octaves_below);
-                else target_db = anchor_db[ch] - (12.0 * octaves_below - 3.0);
-            } else {
-                auto it = std::lower_bound(smoothed_curve[ch].begin(), smoothed_curve[ch].end(), bin_hz, 
-                    [](const Point& p, double hz) { return p.x < hz; });
+            else {
+                double f = bin_hz;
+                double fc = crossover_hz;
+                double w_lp = 1.0, w_hp = 0.0;
                 
-                if (it == smoothed_curve[ch].begin()) target_db = it->y;
-                else if (it == smoothed_curve[ch].end()) target_db = smoothed_curve[ch].back().y;
-                else {
-                    auto prev = it - 1;
-                    double t = (bin_hz - prev->x) / (it->x - prev->x);
-                    target_db = prev->y + t * (it->y - prev->y);
+                if (f > 0.0) {
+                    double f4 = f * f * f * f;
+                    double fc4 = fc * fc * fc * fc;
+                    w_lp = fc4 / (f4 + fc4);
+                    w_hp = f4 / (f4 + fc4);
                 }
+                
+                double ms_db = get_interpolated_db(ch, bin_hz);   // 0=Mid, 1=Side
+                double link_db = get_interpolated_db(2, bin_hz);  // 2=Linked
+                target_db = (ms_db * w_lp) + (link_db * w_hp);
             }
-
-            // Apply Wet/Dry Mix logrithmically (preserves 0dB group delay exactly)
-            target_db *= (wet_percent / 100.0);
 
             fft_out[k][0] = std::pow(10.0, target_db / 20.0); 
             fft_out[k][1] = 0.0; 
@@ -475,43 +573,50 @@ int main(int argc, char* argv[]) {
         std::string label = (f >= 1000) ? std::to_string((int)(f/1000)) + "k" : std::to_string((int)f);
         svg << "  <text x=\"" << x << "\" y=\"830\" fill=\"#888888\" font-size=\"14\" text-anchor=\"middle\">" << label << "</text>\n";
     }
+    
+    // --- Crossover Visual Indicator ---
+    double x_xover = get_x(crossover_hz);
+    svg << "  <line x1=\"" << x_xover << "\" y1=\"0\" x2=\"" << x_xover << "\" y2=\"800\" stroke=\"#55ff55\" stroke-width=\"1.5\" stroke-dasharray=\"5,5\" opacity=\"0.7\" />\n";
+    svg << "  <text x=\"" << (x_xover + 5) << "\" y=\"110\" fill=\"#55ff55\" font-size=\"12\" opacity=\"0.9\">Crossover (" << std::fixed << std::setprecision(1) << crossover_hz << " Hz)</text>\n";
+    
+    // --- High-Resolution Raw Delta Background ---
+    // Plots the raw, unsmoothed Source-Target delta to show the spikes the smooth curve is averaging.
+    // We clamp the visual spikes to +/- 12dB so they don't blow out the SVG coordinates, 
+    // but they remain perfectly aligned with the +/- 6dB grid of the main curves.
+    auto get_y_raw = [](double db) { return 400.0 - (std::max(-12.0, std::min(12.0, db)) * 66.66); };
 
-    // Channel 0 (Cyan - Mid/Left/Linked)
+    svg << "  <polyline fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1\" stroke-linejoin=\"round\" opacity=\"0.15\" points=\"";
+    for (int k = 1; k <= FFT_SIZE / 2; ++k) {
+        double bin_hz = k * bin_hz_width;
+        if (bin_hz < 10.0 || bin_hz > nyquist) continue;
+        
+        // We use the Linked channel's raw delta (index 2) as the background reference
+        double raw_db = raw_delta_db[2][k]; 
+        svg << std::fixed << std::setprecision(2) << get_x(bin_hz) << "," << get_y_raw(raw_db) << " ";
+    }
+    svg << "\" />\n";
+
+    // Mid Curve
     svg << "  <polyline fill=\"none\" stroke=\"#00ffff\" stroke-width=\"4\" stroke-linejoin=\"round\" opacity=\"0.9\" points=\"";
     for (const auto& pt : smoothed_curve[0]) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
     svg << "\" />\n";
 
-    // Channel 1 (Magenta - Side/Right - Only drawn if unlinked)
-    if (routing_mode != 1 && src_sfinfo.channels > 1) {
-        svg << "  <polyline fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"4\" stroke-linejoin=\"round\" opacity=\"0.7\" points=\"";
-        for (const auto& pt : smoothed_curve[1]) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
-        svg << "\" />\n";
-    }
+    // Side Curve
+    svg << "  <polyline fill=\"none\" stroke=\"#ff00ff\" stroke-width=\"4\" stroke-linejoin=\"round\" opacity=\"0.7\" points=\"";
+    for (const auto& pt : smoothed_curve[1]) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
+    svg << "\" />\n";
+
+    // Linked Curve
+    svg << "  <polyline fill=\"none\" stroke=\"#ffff00\" stroke-width=\"4\" stroke-linejoin=\"round\" opacity=\"0.9\" points=\"";
+    for (const auto& pt : smoothed_curve[2]) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
+    svg << "\" />\n";
     
-    // --- HUD AND LEGEND GENERATION ---
-    std::string mode_str, legend_str;
-    if (routing_mode == 0) {
-        mode_str = "Dual Mono";
-        legend_str = "Cyan: Left | Magenta: Right";
-    } else if (routing_mode == 2) {
-        mode_str = "Mid/Side";
-        legend_str = "Cyan: Mid | Magenta: Side";
-    } else {
-        mode_str = "Linked Stereo";
-        legend_str = "Cyan: Linked (L+R)";
-    }
-
-    // Line 1: Mode & Wet/Dry
+    // HUD
     svg << "  <text x=\"1580\" y=\"30\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
-        << "Mode: " << mode_str << " (" << std::fixed << std::setprecision(1) << wet_percent << "% Wet)</text>\n";
-
-    // Line 2: Headroom Makeup
-    svg << "  <text x=\"1580\" y=\"50\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
         << "Target Makeup: " << (lufs_difference >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << lufs_difference << " dB</text>\n";
 
-    // Line 3: Color Legend
-    svg << "  <text x=\"1580\" y=\"70\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
-        << "Legend: " << legend_str << "</text>\n";
+    svg << "  <text x=\"1580\" y=\"50\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
+        << "Legend: Cyan: Mid | Magenta: Side | Yellow: Linked</text>\n";
 
     svg << "</svg>\n";    
     svg.close();
@@ -580,20 +685,17 @@ int main(int argc, char* argv[]) {
     sf_count_t read_count;
     std::cout << "          -> Processing routing tree. Latency compensation: " << frames_to_skip << " frames...\n";
 
+    // Pre-allocate the processing buffer OUTSIDE the loop for DSP efficiency
+    std::vector<std::vector<double>> proc_buf(2, std::vector<double>(CONV_BLOCK_SIZE, 0.0));
+
     while ((read_count = sf_readf_float(in_wav, conv_read_buffer.data(), CONV_BLOCK_SIZE)) > 0) {
         
-        // 1. Extract and Route (Apply Mid/Side Encoding if needed)
-        std::vector<std::vector<double>> proc_buf(2, std::vector<double>(read_count, 0.0));
+        // 1. Extract and Route (Native Mid/Side Encoding)
         for (int i = 0; i < read_count; ++i) {
             double l = conv_read_buffer[i * in_info.channels];
-            double r = in_info.channels > 1 ? conv_read_buffer[i * in_info.channels + 1] : l;
-            if (routing_mode == 2) {
-                proc_buf[0][i] = (l + r) * 0.5; // Mid
-                proc_buf[1][i] = (l - r) * 0.5; // Side
-            } else {
-                proc_buf[0][i] = l;
-                proc_buf[1][i] = r;
-            }
+            double r = conv_read_buffer[i * in_info.channels + 1];
+            proc_buf[0][i] = (l + r) * 0.5; // Mid
+            proc_buf[1][i] = (l - r) * 0.5; // Side
         }
 
         // 2. Convolve Independently
@@ -623,18 +725,12 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 3. Recombine and Route (Apply Mid/Side Decoding if needed)
+        // 3. Recombine and Route (Native Mid/Side Decoding)
         for (int i = 0; i < read_count; ++i) {
             double out0 = channel_write_buffers[0][i];
             double out1 = channel_write_buffers[1][i];
-            
-            if (routing_mode == 2) {
-                interleaved_write_buffer[i * in_info.channels] = out0 + out1; // L = M + S
-                if (in_info.channels > 1) interleaved_write_buffer[i * in_info.channels + 1] = out0 - out1; // R = M - S
-            } else {
-                interleaved_write_buffer[i * in_info.channels] = out0;
-                if (in_info.channels > 1) interleaved_write_buffer[i * in_info.channels + 1] = out1;
-            }
+            interleaved_write_buffer[i * in_info.channels] = out0 + out1; // L = M + S
+            interleaved_write_buffer[i * in_info.channels + 1] = out0 - out1; // R = M - S
         }
 
         // 4. Latency Trim & Write
@@ -670,13 +766,8 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < valid_tail_frames; ++i) {
             double out0 = overlap_buffers[0][i];
             double out1 = overlap_buffers[1][i];
-            if (routing_mode == 2) {
-                tail_out[i * in_info.channels] = out0 + out1;
-                if (in_info.channels > 1) tail_out[i * in_info.channels + 1] = out0 - out1;
-            } else {
-                tail_out[i * in_info.channels] = out0;
-                if (in_info.channels > 1) tail_out[i * in_info.channels + 1] = out1;
-            }
+            tail_out[i * in_info.channels] = out0 + out1;
+            tail_out[i * in_info.channels + 1] = out0 - out1;
         }
         sf_writef_float(out_wav, tail_out.data(), valid_tail_frames);
         std::cout << "          -> -200dB Gate engaged. Drained " << valid_tail_frames << " tail frames.\n";
