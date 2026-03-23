@@ -500,11 +500,16 @@ int main(int argc, char* argv[]) {
 
     fftw_execute(ir_plan);
 
+    // Calculate final makeup gain: Match Source LUFS, but subtract 6.0 dB for safety headroom
+    double final_makeup_gain_db = lufs_difference - 6.0;
+    double final_gain_mult = std::pow(10.0, final_makeup_gain_db / 20.0);
+
     for (int i = 0; i < FFT_SIZE; ++i) {
-        double raw_sample = fft_in[i] / FFT_SIZE; 
+        double raw_sample = fft_in[i] / FFT_SIZE;
         int shifted_idx = (i + FFT_SIZE / 2) % FFT_SIZE;
         double window = 0.5 * (1.0 - std::cos(2.0 * M_PI * shifted_idx / (FFT_SIZE - 1)));
-        final_ir[shifted_idx] = static_cast<float>(raw_sample * window);
+        // Bake the -6dB safety offset natively into the convolution FIR
+        final_ir[shifted_idx] = static_cast<float>(raw_sample * window * final_gain_mult);
     }
 
     std::string tgt_dir = tgt_wav_file;
@@ -572,7 +577,7 @@ int main(int argc, char* argv[]) {
     svg << "\" />\n";
     
     svg << "  <text x=\"1580\" y=\"30\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
-        << "Target Makeup: " << (lufs_difference >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << lufs_difference << " dB</text>\n";
+        << "Target Makeup: " << (final_makeup_gain_db >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << final_makeup_gain_db << " dB (-6dB Offset)</text>\n";
     svg << "</svg>\n";    
     svg.close();
 
@@ -622,6 +627,8 @@ int main(int argc, char* argv[]) {
     }
 
     SF_INFO out_info = in_info; 
+    // Force 32-bit Float output to guarantee over-zero headroom preservation
+    out_info.format = (in_info.format & SF_FORMAT_TYPEMASK) | SF_FORMAT_FLOAT;
     SNDFILE* out_wav = sf_open(final_out_file.c_str(), SFM_WRITE, &out_info);
 
     std::vector<std::vector<float>> overlap_buffers(2, std::vector<float>(OVERLAP_SIZE, 0.0f));
@@ -720,6 +727,8 @@ int main(int argc, char* argv[]) {
     sf_close(in_wav); sf_close(out_wav);
 
     std::cout << "\n[Success] Final Master written to: " << final_out_file << "\n";
+    std::cout << "          Output incorporates " << (final_makeup_gain_db >= 0 ? "+" : "") 
+              << std::fixed << std::setprecision(6) << final_makeup_gain_db << " dB makeup gain.\n\n";
     
     return 0;
 }
