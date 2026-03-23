@@ -60,7 +60,7 @@ brew install libsndfile libebur128 fftw pkg-config # MacOS
 
 Then compile.
 
-The REAPER mastering project is included, and uses FabFilter's Pro-L 2 plugin. 
+The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-C 2 and Pro-L 2 plugin, as well as the GUI Clipper in the plugins folder.
 
 Stream / download examples:<br/>
 [YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
