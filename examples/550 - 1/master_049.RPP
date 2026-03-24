@@ -1,4 +1,4 @@
-<REAPER_PROJECT 0.1 "7.66/linux-x86_64" 1774306664 0
+<REAPER_PROJECT 0.1 "7.66/linux-x86_64" 1774322515 0
   <NOTES 0 2
   >
   RIPPLE 0 0
@@ -20,7 +20,7 @@
   PANMODE 3
   PANLAWFLAGS 3
   CURSOR 0
-  ZOOM 0.42127202330629 0 0
+  ZOOM 2.3274845150494 0 0
   VZOOMEX 18.97222137 0
   USE_REC_CFG 0
   RECMODE 1
@@ -111,7 +111,7 @@
   <PROJBAY
   >
   <TRACK {F2DFC650-5087-E3E8-1243-64247E3CE951}
-    NAME folder
+    NAME "master bus"
     PEAKCOL 16576
     BEAT -1
     AUTOMODE 0
@@ -137,9 +137,9 @@
     MIDIOUT -1
     MAINSEND 1 0
     <FXCHAIN
-      WNDRECT 522 127 906 497
+      WNDRECT 522 127 906 583
       SHOW 0
-      LASTSEL 4
+      LASTSEL 0
       DOCKED 0
       BYPASS 0 0 0
       <JS guiclipper ""
@@ -242,7 +242,7 @@
     >
   >
   <TRACK {693E683A-71CF-5A71-4B0B-498257E41D1F}
-    NAME serato
+    NAME main
     PEAKCOL 16576
     BEAT -1
     AUTOMODE 0
@@ -385,17 +385,17 @@
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
-      SEL 1
+      SEL 0
       IGUID {599200C1-001F-674D-6B61-7F3BA85DE192}
       IID 94
-      NAME "550 - 1.wav"
+      NAME "550 - 1 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {FEB55136-2548-DE7E-EFBF-0BFF954E0C87}
       <SOURCE WAVE
-        FILE "Media/550 - 1.wav"
+        FILE "Media/550 - 1 unmastered.wav"
       >
     >
     <ITEM
@@ -410,14 +410,14 @@
       SEL 0
       IGUID {66CC5094-8CDE-36C3-2911-BC95D0C4C769}
       IID 96
-      NAME "550 - 2.wav"
+      NAME "550 - 2 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {57063F75-4294-5CE6-6726-7E81884C43BD}
       <SOURCE WAVE
-        FILE "Media/550 - 2.wav"
+        FILE "Media/550 - 2 unmastered.wav"
       >
     >
     <ITEM
@@ -432,19 +432,19 @@
       SEL 0
       IGUID {270B7379-8A03-E92A-B6CD-70F7391144CE}
       IID 99
-      NAME "550 - 3.wav"
+      NAME "550 - 3 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {66282CB5-1F14-05DC-5452-8879B483D954}
       <SOURCE WAVE
-        FILE "Media/550 - 3.wav"
+        FILE "Media/550 - 3 unmastered.wav"
       >
     >
   >
   <TRACK {187FBEE3-8A22-A308-1169-05F2C9E3FD2C}
-    NAME "serato unmastered"
+    NAME reference
     PEAKCOL 16576
     BEAT -1
     AUTOMODE 0
@@ -463,17 +463,24 @@
     VU 64
     TRACKHEIGHT 63 0 0 0 0 0 0
     INQ 0 0 0 0.5 100 0 0 100
-    NCHAN 2
+    NCHAN 4
     FX 1
     TRACKID {187FBEE3-8A22-A308-1169-05F2C9E3FD2C}
     PERF 0
     MIDIOUT -1
     MAINSEND 1 0
     <FXCHAIN
-      WNDRECT 378 128 906 207
+      WNDRECT 378 128 906 183
       SHOW 0
       LASTSEL 0
       DOCKED 0
+      BYPASS 0 0 0
+      <JS utility/volume ""
+        6 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+      >
+      FLOATPOS 0 0 0 0
+      FXID {4DA74DC2-70BD-4FE8-1162-B65B0D74337B}
+      WAK 0 0
       BYPASS 0 0 0
       <JS sstillwell/eventhorizon ""
         0 0 0 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -494,14 +501,14 @@
       SEL 0
       IGUID {1339B206-8650-0706-779B-40FD3DC4BF4E}
       IID 95
-      NAME "550 - 1.wav"
+      NAME "550 - 1 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {943164B8-D846-D783-3E67-FD874C808136}
       <SOURCE WAVE
-        FILE "Media/550 - 1.wav"
+        FILE "Media/550 - 1 unmastered.wav"
       >
     >
     <ITEM
@@ -516,14 +523,14 @@
       SEL 0
       IGUID {89D86B0E-9F6F-C062-8351-7375D351E642}
       IID 98
-      NAME "550 - 2.wav"
+      NAME "550 - 2 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {CA57E0F8-A282-D7D6-C694-820B63244E99}
       <SOURCE WAVE
-        FILE "Media/550 - 2.wav"
+        FILE "Media/550 - 2 unmastered.wav"
       >
     >
     <ITEM
@@ -535,17 +542,17 @@
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
-      SEL 0
+      SEL 1
       IGUID {17D453DC-D452-9582-E0D4-838AFC05FBCD}
       IID 100
-      NAME "550 - 3.wav"
+      NAME "550 - 3 unmastered.wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
       GUID {FBC4A2BF-E2EE-578D-63BC-1C9768022591}
       <SOURCE WAVE
-        FILE "Media/550 - 3.wav"
+        FILE "Media/550 - 3 unmastered.wav"
       >
     >
   >
