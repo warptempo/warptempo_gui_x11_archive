@@ -319,9 +319,7 @@ elif [[ "$engine" == midi ]]; then
 	# Run midi_adapter
 	base_bpm="$(echo "$sample_rate*.002" | bc -l)"
 	ppq=30000
-	mv .$md5-timemap-midi .timemap-midi
-	mv .$md5-timemap .timemap
-	"$midi_adapter_path" .timemap-midi .midi.mid "$base_bpm" "$ppq"
+	"$midi_adapter_path" .$md5-timemap-midi .midi.mid "$base_bpm" "$ppq"
 	if [[ -f .$md5-trimmed.wav ]]; then
 		mv .$md5-trimmed.wav .trimmed.wav
 	elif [[ "${audio_input,,}" != *.wav ]]; then
@@ -336,6 +334,8 @@ elif [[ "$engine" == midi ]]; then
 			ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
 		fi
 	fi
+	mv .$md5-timemap-midi .timemap-midi
+	mv .$md5-timemap .timemap
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 elif [[ "$engine" == none ]]; then
@@ -345,6 +345,8 @@ elif [[ "$engine" == none ]]; then
 	rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp.wav
 	exit
 fi
+
+mv .$md5-timemap .timemap
 
 # Apply limiting or copy
 if $limiter; then
