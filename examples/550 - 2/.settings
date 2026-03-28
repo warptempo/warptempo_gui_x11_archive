@@ -1,5 +1,5 @@
 title="Mozart - Symphony No. 40 in G Minor (K. 550) - II. Andante (2024 Remaster, Tempo Warp)"
-audio_input=track06.wav
+audio_input="06 Symphony No. 40 in G M - II. Andante.flac"
 url=https://music.youtube.com/watch?v=GYVFB-qi49I
 scale=1.001982
 limiter=false

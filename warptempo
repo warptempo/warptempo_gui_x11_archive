@@ -269,10 +269,10 @@ log_output="$title.log"
 rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav *"$title.wav" *"$title.log"
 
 # Get audio stats
-sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep sample_rate= | cut -d = -f 2)"
-total_frames="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration_ts= | cut -d = -f 2)"
-total_seconds="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep duration= | cut -d = -f 2)"
-total_time_ms=$(echo $(date -d@$(printf "%.3f\n" $total_seconds) -u +%M:%S.%N) | cut -c1-9)
+sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep "^sample_rate=" | head -n 1 | cut -d = -f 2)"
+total_frames="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep "^duration_ts=" | head -n 1 | cut -d = -f 2)"
+total_seconds="$(ffprobe -hide_banner -loglevel error -show_format "$audio_input" | grep "^duration=" | head -n 1 | cut -d = -f 2)"
+total_time_ms=$(echo $(date -d@"$(printf "%.3f\n" "$total_seconds")" -u +%M:%S.%N) | cut -c1-9)
 
 if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then 
 	echo >> "$warpmarkers_file"
@@ -328,10 +328,10 @@ elif [[ "$engine" == midi ]]; then
 			if [[ "$fmt" != "flt" ]]; then
 				echo "File exists but is $fmt (not 32-bit float). Removing and re-rendering as 32-bit float."
 				rm "${audio_input%.*}.wav"
-				ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+				ffmpeg -i "$audio_input" -vn -c:a pcm_f32le "${audio_input%.*}.wav"
 			fi
 		elif [[ ! -f "${audio_input%.*}.wav" ]]; then
-			ffmpeg -i "$audio_input" -c:a pcm_f32le "${audio_input%.*}.wav"
+			ffmpeg -i "$audio_input" -vn -c:a pcm_f32le "${audio_input%.*}.wav"
 		fi
 	fi
 	mv .$md5-timemap-midi .timemap-midi

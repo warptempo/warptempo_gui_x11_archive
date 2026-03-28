@@ -1,5 +1,5 @@
 title="Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp)"
-audio_input=track05.wav
+audio_input="05 Symphony No. 40 in G M - I. Molto allegro.flac"
 url=https://music.youtube.com/watch?v=f10ISOkJZuA
 scale=0.996477
 limiter=true
