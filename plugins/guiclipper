@@ -1,7 +1,8 @@
 desc:GUI Clipper
 
-slider1:0.0<-24.0,0.0,0.1>Threshold (dB)
-slider2:0<0,1,1{Off,On}>Delta Listen
+slider1:0.0<-24.0,24.0,0.1>Input Gain (dB)
+slider2:0.0<-24.0,0.0,0.1>Threshold (dB)
+slider3:0<0,1,1{Off,On}>Delta Listen
 
 in_pin:left input
 in_pin:right input
@@ -9,22 +10,31 @@ out_pin:left output
 out_pin:right output
 
 @init
-  db2log = 0.11512925464970228420089957273422; // ln(10) / 20 
+  // ln(10) / 20 
+  db2log = 0.11512925464970228420089957273422;
   
   // Graphics ring-buffer allocation
   // Stores max amplitude peaks per pixel column
-  MAX_W = 8192; // Safely supports 8K and ultrawide monitors
+  // Safely supports 8K and ultrawide monitors
+  MAX_W = 8192;
   buf_base = 0; 
   ptr = 0;
   
 @slider
-  thresh_db = slider1;
+  // Calculate linear input gain
+  in_gain_db = slider1;
+  in_gain_lin = exp(in_gain_db * db2log);
+
+  // Calculate linear threshold
+  thresh_db = slider2;
   thresh_lin = exp(thresh_db * db2log);
-  delta_mode = slider2;
+  
+  delta_mode = slider3;
 
 @sample
-  in0 = spl0;
-  in1 = spl1;
+  // Apply input gain BEFORE clipping logic
+  in0 = spl0 * in_gain_lin;
+  in1 = spl1 * in_gain_lin;
   
   // Pure Hard Clip (no soft knee, no makeup gain)
   out0 = min(max(in0, -thresh_lin), thresh_lin);
@@ -42,7 +52,7 @@ out_pin:right output
     spl0 = out0;
     spl1 = out1;
   );
-
+  
   // Peak tracking for the graphics engine
   peak_in0 = max(peak_in0, abs(in0));
   peak_in1 = max(peak_in1, abs(in1));
@@ -60,7 +70,7 @@ out_pin:right output
 
 @gfx 600 400
   // Scroll speed (approx 10ms per pixel column)
-  g_samps_per_px = srate / 100; 
+  g_samps_per_px = srate / 100;
   
   // Draw Background
   gfx_r=0.08; gfx_g=0.08; gfx_b=0.08; gfx_a=1;
@@ -83,6 +93,7 @@ out_pin:right output
   // Left Threshold bounds
   gfx_line(0, cy_L - t_px, gfx_w, cy_L - t_px);
   gfx_line(0, cy_L + t_px, gfx_w, cy_L + t_px);
+  
   // Right Threshold bounds
   gfx_line(0, cy_R - t_px, gfx_w, cy_R - t_px);
   gfx_line(0, cy_R + t_px, gfx_w, cy_R + t_px);
