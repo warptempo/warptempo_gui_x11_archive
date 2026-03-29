@@ -261,18 +261,23 @@ int main(int argc, char* argv[]) {
     final_blocks.resize(keep_count);
 
     // ========================================================================
-    // PHASE 2: Dynamic Target Headroom Detection
+    // PHASE 2: Dynamic Target Headroom Diagnostics
     // ========================================================================
     std::cout << "\n[Phase 2] Running Dynamic Headroom Diagnostics...\n";
     double tgt_global_lufs = 0.0, tgt_global_rms = 0.0;
     calculate_metrics(tgt_infile, 0, tgt_sfinfo.frames, tgt_sfinfo.channels, tgt_sfinfo.samplerate, tgt_global_lufs, tgt_global_rms);
     
     double lufs_difference = src_global_lufs - tgt_global_lufs;
-    double target_gain_multiplier = std::pow(10.0, lufs_difference / 20.0);
     
+    // If the difference is > 1.0 dB, we assume a phase vocoder like Serato 
+    // applied a static -6dB headroom pad. Otherwise, we assume 0dB (Rubberband/Bungee).
+    double applied_compensation_db = (lufs_difference > 1.0) ? 6.0 : 0.0;
+    double target_analysis_multiplier = std::pow(10.0, applied_compensation_db / 20.0);
+    
+    std::cout << "=> LUFS Difference: " << std::fixed << std::setprecision(2) << lufs_difference << " dB\n";
     std::cout << "=> Applying exact x" << std::fixed << std::setprecision(3) 
-              << target_gain_multiplier << " (" << (lufs_difference >= 0 ? "+" : "") 
-              << lufs_difference << " dB) makeup gain to target.\n";
+              << target_analysis_multiplier << " (+" 
+              << applied_compensation_db << " dB) compensation gain to target.\n";
 
     // ========================================================================
     // PHASE 3: 2-Channel FFTW3 Analysis Loop
@@ -317,11 +322,11 @@ int main(int argc, char* argv[]) {
             for (int k = 1; k <= FFT_SIZE / 2; ++k) src_psd_r[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
 
             // PROCESS TARGET FILE (L & R)
-            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * 2] * target_gain_multiplier * hanning[i]; // Tgt L
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * 2] * target_analysis_multiplier * hanning[i]; // Tgt L
             fftw_execute(plan_r2c);
             for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_l[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
 
-            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * 2 + 1] * target_gain_multiplier * hanning[i]; // Tgt R
+            for (int i = 0; i < FFT_SIZE; ++i) fft_in[i] = tgt_read_buf[i * 2 + 1] * target_analysis_multiplier * hanning[i]; // Tgt R
             fftw_execute(plan_r2c);
             for (int k = 1; k <= FFT_SIZE / 2; ++k) tgt_psd_r[k] += (fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
 
@@ -500,16 +505,14 @@ int main(int argc, char* argv[]) {
 
     fftw_execute(ir_plan);
 
-    // Calculate final makeup gain: Match Source LUFS, but subtract 6.0 dB for safety headroom
-    double final_makeup_gain_db = lufs_difference - 6.0;
-    double final_gain_mult = std::pow(10.0, final_makeup_gain_db / 20.0);
-
     for (int i = 0; i < FFT_SIZE; ++i) {
         double raw_sample = fft_in[i] / FFT_SIZE;
         int shifted_idx = (i + FFT_SIZE / 2) % FFT_SIZE;
         double window = 0.5 * (1.0 - std::cos(2.0 * M_PI * shifted_idx / (FFT_SIZE - 1)));
-        // Bake the -6dB safety offset natively into the convolution FIR
-        final_ir[shifted_idx] = static_cast<float>(raw_sample * window * final_gain_mult);
+        
+        // Generate the final FIR natively at 0.0dB structural gain 
+        // to preserve the target engine's inherent headroom.
+        final_ir[shifted_idx] = static_cast<float>(raw_sample * window);
     }
 
     std::string tgt_dir = tgt_wav_file;
@@ -576,8 +579,6 @@ int main(int argc, char* argv[]) {
     for (const auto& pt : smoothed_curve) svg << std::fixed << std::setprecision(2) << get_x(pt.x) << "," << get_y(pt.y) << " ";
     svg << "\" />\n";
     
-    svg << "  <text x=\"1580\" y=\"30\" fill=\"#ffffff\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"end\" opacity=\"0.8\">" 
-        << "Target Makeup: " << (final_makeup_gain_db >= 0 ? "+" : "") << std::fixed << std::setprecision(2) << final_makeup_gain_db << " dB (-6dB Offset)</text>\n";
     svg << "</svg>\n";    
     svg.close();
 
@@ -727,8 +728,7 @@ int main(int argc, char* argv[]) {
     sf_close(in_wav); sf_close(out_wav);
 
     std::cout << "\n[Success] Final Master written to: " << final_out_file << "\n";
-    std::cout << "          Output incorporates " << (final_makeup_gain_db >= 0 ? "+" : "") 
-              << std::fixed << std::setprecision(6) << final_makeup_gain_db << " dB makeup gain.\n\n";
+    std::cout << "          Output preserves native engine headroom.\n\n";
     
     return 0;
 }
