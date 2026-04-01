@@ -47,7 +47,7 @@ make
 
 Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=soundtouch in the .settings file.
 
-The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, and clear all markers in Sample and set one marker at the start of the file. Then import the MIDI clip onto Ableton Live and render. 
+The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, clear all markers in Sample and use the "Set Grid Start" button to sync the grid to the start of the file. Then import the MIDI clip onto Ableton Live and render. 
 
 Once an audio output has been rendered, it is recommended to use the included `eqmatch` algorithm to generate a linear phase, impulse response-based EQ curve that approximates the spectral characteristics of the original in relation to the output. The algorithm also applies that curve to the output and trims initial latency caused by the convolution as well as the additional end silence generated as a byproduct of the MIDI rendering workflow.
 
@@ -59,10 +59,4 @@ brew install libsndfile libebur128 fftw pkg-config # MacOS
 ```
 
 Then compile.
-
-The REAPER mastering project is included, and uses FabFilter's Saturn 2, Pro-MB, Pro-C 2 and Pro-L 2 plugin, as well as the GUI Clipper in the plugins folder.
-
-Stream / download examples:<br/>
-[YouTube](https://www.youtube.com/playlist?list=PLm5sJJQZOLT2bLORBHd-lBtpx1PK_mxFl)  
-[Google Drive](https://drive.google.com/drive/folders/1fIU1slnUX0zCRqBXFKTNfuvxz85QFdZw?usp=drive_link)
 
