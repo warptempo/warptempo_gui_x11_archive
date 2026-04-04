@@ -329,7 +329,6 @@ int main(int argc, char* argv[]) {
         // --- 1. HANDLE DISABLED LABELS (#) ---
         // Logic: If label starts with # AND matches format -> Disable & Continue.
         // If it starts with # but fails regex -> Fall through to trigger "Invalid label" error.
-        bool is_disabled_def = false;
         if (!label_raw.empty() && label_raw[0] == '#') {
             string stripped = label_raw.substr(1);
             if (is_valid_label_format(stripped)) {

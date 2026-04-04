@@ -1,6 +1,9 @@
 # Backups
 *~
 
+# Warptempo Build Artifacts
+build/
+
 # Compiled Binaries
 parser
 rms_splitter
@@ -23,4 +26,5 @@ adapters/midi/build/
 
 # EQ Match Build Artifacts
 eqmatch/build/
+
 

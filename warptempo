@@ -34,7 +34,7 @@ if [[ -z "$1" ]] && [[ -z "$2" ]] && [[ ! -f "$warpmarkers_file" ]] && [[ ! -f "
 	echo limiter=true >> "$settings_file"
 	echo limit=-0.1 >> "$settings_file"
 	echo browser=firefox >> "$settings_file"
-	echo engine=rubberband >> "$settings_file"
+	echo engine=warptempo >> "$settings_file"
 	echo >> "$settings_file"
 fi
 
@@ -127,7 +127,7 @@ fi
 
 # Validate engine
 if [[ ! -z "$engine" ]]; then
-	supported_engines=(rubberband bungee stretch soundtouch midi none)
+	supported_engines=(warptempo rubberband bungee stretch soundtouch midi none)
 	supported=false
 	for supported_engine in "${supported_engines[@]}"; do
 		if [[ "$engine" == "$supported_engine" ]]; then
@@ -139,7 +139,7 @@ if [[ ! -z "$engine" ]]; then
 		echo -e "Error: Engine is not supported. Enter one of the following:\n${supported_engines[@]}" && ((validation_errors++))
 	fi
 else
-	engine=bungee
+	engine=warptempo
 fi
 
 if [[ $validation_errors -gt 0 ]]; then
@@ -151,6 +151,12 @@ CXX="${CXX:-g++}"
 
 # Check dependencies
 requirements=(bc ffmpeg ffprobe jq sox yt-dlp)
+if [[ "$engine" == warptempo ]]; then
+	warptempo_engine_path="$script_dir/build/warptempo_engine"
+	if [[ ! -x "$warptempo_engine_path" ]]; then
+		echo "Error: Warptempo engine not found at $warptempo_engine_path" && ((requirement_errors++))
+	fi
+fi
 if [[ "$engine" == rubberband ]]; then
 	requirements+=(rubberband)
 fi
@@ -279,12 +285,11 @@ if [[ "$(cat -e "$warpmarkers_file" | tail -n 1)" != *"$" ]]; then
 fi
 
 # Parser
-parser_source="$script_dir/parser.cpp"
-parser_binary="$script_dir/parser"
+parser_binary="$script_dir/build/parser"
 
-if [[ ! -f "$parser_binary" ]] || [[ "$parser_source" -nt "$parser_binary" ]]; then
-	echo "Compiling parser..."
-	"$CXX" -O3 -o "$parser_binary" "$parser_source"
+if [[ ! -f "$parser_binary" ]]; then
+	echo "Parser not found."
+    exit 1
 fi
 
 # Run Parser
@@ -303,7 +308,9 @@ if [[ ! -z "$updated_input" ]]; then
 fi
 
 # Adapter / Engine Execution
-if [[ "$engine" == rubberband ]]; then
+if [[ "$engine" == warptempo ]]; then
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav
+elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
 	rubberband -t 1 --timemap .$md5-timemap --fine --ignore-clipping "$audio_input" .$md5-tmp.wav
@@ -347,6 +354,7 @@ elif [[ "$engine" == none ]]; then
 fi
 
 mv .$md5-timemap .timemap
+mv .$md5-tmp.png .eqcurve.png
 
 # Apply limiting or copy
 if $limiter; then
