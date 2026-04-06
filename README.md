@@ -5,11 +5,30 @@ Requirements:
 bc ffmpeg ffprobe jq sox yt-dlp
 ```
 
-Additionally, `rubberband`, `bungee`, `stretch` or `soundtouch` are required for rendering audio output, or use engine=midi to produce a MIDI file which can be opened in a DAW. The default is engine=rubberband. 
+To use, first clone this repository:
+```
+git clone https://github.com/warptempo/scripts.git
+cd scripts
+```
 
-To use the script, clone this repository and run `warptempo` within one of the example projects. 
+To compile the `warptempo` engine and parser, install `cmake`, `libsndfile`, and `gcc` or `clang`. Then install the required libraries for your OS:
+```
+sudo pacman -S libsndfile libebur128 fftw pkgconf # Arch Linux
+sudo apt install libsndfile1-dev libebur128-dev libfftw3-dev pkg-config # Debian / WSL
+brew install libsndfile libebur128 fftw pkg-config # MacOS
+```
 
-To compile an adapter, install `cmake`, `libsndfile`, and `gcc` or `clang`. 
+Once dependencies are installed, build the binaries:
+```
+mkdir build && cd build
+cmake .. && make
+```
+
+Then run `warptempo` within one of the example projects. 
+
+Optionally, the `rubberband`, `bungee`, `stretch` or `soundtouch` adapters can be used instead for rendering audio output. You can also use engine=midi to produce a MIDI file which can be opened in a DAW. 
+
+Below are instructions for compiling other engines.
 
 For `midi`, run:
 ```
@@ -38,25 +57,5 @@ sudo apt install libsoundtouch-dev libfftw3-dev # Debian / WSL
 brew install sound-touch fftw # MacOS
 ```
 
-Then compile:
-```
-mkdir build && cd build
-cmake ..
-make
-```
-
-Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=soundtouch in the .settings file.
-
-The recommended workflow is to test in one of the audio output engines using limiter=true, then use MIDI for the final render. Ableton Live and Serato Sample are recommended for use with MIDI - in Sample, click "Grid", then manually set the tempo for the file to the base bpm given by midi_adapter via warptempo, clear all markers in Sample and use the "Set Grid Start" button to sync the grid to the start of the file. Then import the MIDI clip onto Ableton Live and render. 
-
-Once an audio output has been rendered, it is recommended to use the included `eqmatch` algorithm to generate a linear phase, impulse response-based EQ curve that approximates the spectral characteristics of the original in relation to the output. The algorithm also applies that curve to the output and trims initial latency caused by the convolution as well as the additional end silence generated as a byproduct of the MIDI rendering workflow.
-
-For `eqmatch`, run one of the following:
-```
-sudo pacman -S libsndfile libebur128 fftw pkgconf # Arch Linux
-sudo apt install libsndfile1-dev libebur128-dev libfftw3-dev pkg-config # Debian / WSL
-brew install libsndfile libebur128 fftw pkg-config # MacOS
-```
-
-Then compile.
+Then compile. Once compiled, you can use engine=midi, engine=bungee, engine=stretch or engine=soundtouch in the .settings file.
 

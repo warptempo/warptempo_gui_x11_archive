@@ -473,6 +473,10 @@ int main(int argc, char* argv[]) {
     t_a = -(double)N / 2.0; 
     t_a_rounded_prev = std::round(t_a);
     t_s = 0; 
+    
+    // Task 1: Setup for Energy-Weighted EQ Compensation
+    double global_eq_weighted_sum = 0.0;
+    double global_src_energy_sum = 0.0;
 
     for (int f_idx = 0; f_idx < total_analysis_frames; ++f_idx) {
         double alpha = get_alpha(t_s, timemap);
@@ -495,6 +499,14 @@ int main(int argc, char* argv[]) {
             }
         }
         for (int k = 0; k <= N / 2; ++k) M_src[k] = std::sqrt(M_src[k]);
+        
+        // Task 1: EQ Compensation Measurement
+        for (int k = 1; k <= N / 2; ++k) {
+            double E_k = M_src[k] * M_src[k];
+            double m_val = std::max(1e-9, multiplier_array[k]);
+            global_eq_weighted_sum += E_k * 20.0 * std::log10(m_val);
+            global_src_energy_sum += E_k;
+        }
 
         std::fill(read_buf.begin(), read_buf.end(), 0.0f);
         if (t_s + N <= virtual_tgt_buf.size() / channels) {
@@ -635,9 +647,6 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     std::cout << "\n[Pass 4] Executing Final Synthesis with EQ & LR4 Dynamics...\n";
     
-    // NEW: Initialize output loudness meter
-    ebur128_state* st_out = ebur128_init(channels, src_info.samplerate, EBUR128_MODE_I);
-
     SF_INFO tgt_info = src_info;
     tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
     SNDFILE* tgt_snd = sf_open(tgt_audio_file.c_str(), SFM_WRITE, &tgt_info);
@@ -650,6 +659,10 @@ int main(int argc, char* argv[]) {
     t_a = -(double)N / 2.0; t_a_rounded_prev = std::round(t_a);
     t_s = 0; frame_idx = 0; frames_to_skip = N / 2;
     std::vector<float> write_buf(N * channels, 0.0f);
+    
+    // Task 2: Setup for Dynamics Compensation Measurement
+    double global_dyn_atten_sum = 0.0;
+    size_t active_dyn_frames = 0;
 
     while (t_s < target_total_frames) {
         double alpha = get_alpha(t_s, timemap);
@@ -665,6 +678,11 @@ int main(int argc, char* argv[]) {
         }
 
         int s_idx = std::min(frame_idx, total_analysis_frames - 1);
+        
+        // Task 2: Setup Dynamic Compensation Gate
+        bool is_active_dyn = (S_traj_L[s_idx] < 0.94 || S_traj_M[s_idx] < 0.94 || S_traj_H[s_idx] < 0.94);
+        double frame_dyn_weighted_sum = 0.0;
+        double frame_energy_sum = 0.0;
 
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N; ++n) fft_in[n] = read_buf[n * channels + ch] * window[n];
@@ -674,6 +692,19 @@ int main(int argc, char* argv[]) {
             for (int k = 0; k <= N / 2; ++k) {
                 M[k] = std::sqrt(fft_out[k][0]*fft_out[k][0] + fft_out[k][1]*fft_out[k][1]);
                 phi[k] = std::atan2(fft_out[k][1], fft_out[k][0]);
+            }
+            
+            // Task 2: Dynamics Compensation Measurement
+            if (is_active_dyn) {
+                for (int k = 1; k <= N / 2; ++k) {
+                    double E_k = M[k] * M[k];
+                    double dyn_scalar = (S_traj_L[s_idx] * W_L[k]) + 
+                                        (S_traj_M[s_idx] * W_M[k]) + 
+                                        (S_traj_H[s_idx] * W_H[k]);
+                    double s_bin = std::max(1e-9, dyn_scalar);
+                    frame_dyn_weighted_sum += E_k * 20.0 * std::log10(s_bin);
+                    frame_energy_sum += E_k;
+                }
             }
 
             if (frame_idx == 0) for (int k = 0; k <= N / 2; ++k) theta[k] = phi[k];
@@ -724,13 +755,19 @@ int main(int argc, char* argv[]) {
                 for (int ch = 0; ch < channels; ++ch) write_buf[n * channels + ch] = static_cast<float>(overlap_add[ch][write_offset + n]);
             }
             sf_writef_float(tgt_snd, write_buf.data(), write_len);
-            ebur128_add_frames_float(st_out, write_buf.data(), write_len); // NEW: Meter the output
         }
 
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N - R_s; ++n) overlap_add[ch][n] = overlap_add[ch][n + R_s];
             for (int n = N - R_s; n < N; ++n) overlap_add[ch][n] = 0.0;
         }
+        
+        // Task 2: Log active frame attenuation
+        if (is_active_dyn && frame_energy_sum > 1e-6) {
+            global_dyn_atten_sum += (frame_dyn_weighted_sum / frame_energy_sum);
+            active_dyn_frames++;
+        }
+        
         t_s += R_s; t_a_rounded_prev = t_a_rounded; frame_idx++;
     }
 
@@ -740,31 +777,32 @@ int main(int argc, char* argv[]) {
             for (int n = 0; n < remaining; ++n) write_buf[n * channels + ch] = static_cast<float>(overlap_add[ch][n]);
         }
         sf_writef_float(tgt_snd, write_buf.data(), remaining);
-        ebur128_add_frames_float(st_out, write_buf.data(), remaining); // NEW: Meter the tail
     }
 
     std::cout << "[Success] Final Master Written.\n";
 
-    // --- NEW: Calculate and Print Makeup Gain ---
-    double tgt_global_lufs;
-    ebur128_loudness_global(st_out, &tgt_global_lufs);
-    ebur128_destroy(&st_out);
+    // --- Task 3: Unification (Pre-Pass 5) ---
+    double eq_attenuation = (global_src_energy_sum > 1e-20) ? (global_eq_weighted_sum / global_src_energy_sum) : 0.0;
+    double eq_makeup_db = -eq_attenuation;
 
-    double makeup_gain = src_global_lufs - tgt_global_lufs;
+    double dyn_attenuation = (active_dyn_frames > 0) ? (global_dyn_atten_sum / active_dyn_frames) : 0.0;
+    double dyn_makeup_db = -dyn_attenuation;
 
-    std::cout << "\n[Loudness Match]\n";
-    std::cout << "  -> Source iLUFS : " << std::fixed << std::setprecision(2) << src_global_lufs << " LUFS\n";
-    std::cout << "  -> Output iLUFS : " << std::fixed << std::setprecision(2) << tgt_global_lufs << " LUFS\n";
-    std::cout << "  -> Difference   : " << (makeup_gain > 0 ? "+" : "") << std::fixed << std::setprecision(2) << makeup_gain << " dB\n\n";
+    double total_makeup_db = eq_makeup_db + dyn_makeup_db;
+    double makeup_scalar = std::pow(10.0, total_makeup_db / 20.0);
+
+    std::cout << "\n[Loudness Match (Energy-Weighted)]\n";
+    std::cout << "  -> EQ Compensation       : " << (eq_makeup_db > 0 ? "+" : "") << std::fixed << std::setprecision(2) << eq_makeup_db << " dB\n";
+    std::cout << "  -> Dynamics Compensation : " << (dyn_makeup_db > 0 ? "+" : "") << std::fixed << std::setprecision(2) << dyn_makeup_db << " dB\n";
+    std::cout << "  -> Total Makeup          : " << (total_makeup_db > 0 ? "+" : "") << std::fixed << std::setprecision(2) << total_makeup_db << " dB\n\n";
 
     // ========================================================================
     // PASS 5: Bake Makeup Gain
     // ========================================================================
-    std::cout << "[Pass 5] Baking Makeup Gain (" << std::fixed << std::setprecision(2) << makeup_gain << " dB) into final WAV...\n";
+    std::cout << "[Pass 5] Baking Makeup Gain (" << std::fixed << std::setprecision(2) << total_makeup_db << " dB) into final WAV...\n";
     
     sf_close(tgt_snd); // Close Pass 4 file so we can read it
 
-    double makeup_scalar = std::pow(10.0, makeup_gain / 20.0);
     std::string temp_audio_file = tgt_audio_file + ".tmp";
     std::rename(tgt_audio_file.c_str(), temp_audio_file.c_str());
 
