@@ -309,7 +309,7 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == warptempo ]]; then
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav #3328 50 -25,-19,-35 6 -24 50,30,20 250,150,80 1,1,1 120,3500
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav 3328 50 -25,-19,-35 6 -24 50,30,20 250,150,80 1,1,1 120,3500
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
