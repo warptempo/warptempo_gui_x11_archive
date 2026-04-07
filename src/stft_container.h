@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <cstdint>
 #include <fftw3.h>
 #include <sndfile.h>
 
@@ -127,12 +128,53 @@ struct AudioSTFT {
     int total_analysis_frames = 0;
     DynamicsParams dyn_params;
 
+    // HPSS Parameters
+    double G_fg = 1.0;    // Foreground Gain (Unity default for transparent operation)
+    double G_bg = 1.0;    // Background Gain (Unity default for transparent operation)
+    double beta = 0.5;    // Mask exponent (0.5 = Wiener-filter exponent, sharpens transient/tonal split)
+    int L_h = 31;         // 63-frame horizontal context (Background room sponge)
+    int L_p_max = 7;      // Max vertical filter clamp
+
+    // HPSS Mask Arrays: [channel][frame][bin]
+    std::vector<std::vector<std::vector<double>>> M_h_mask;
+    std::vector<std::vector<std::vector<double>>> M_p_mask;
+
     // Synthesis compensation
     double global_dyn_atten_sum = 0.0;
     size_t active_dyn_frames = 0;
+    double global_hpss_atten_sum = 0.0;
+    size_t active_hpss_frames = 0;
 
     // Output
     std::string tgt_audio_file;
+    bool enable_makeup_gain = true;
+
+    // Cached frame map (populated once in main, reused by all passes)
+    std::vector<int64_t> frame_map;
+
+    // --- Generate the canonical frame map ---
+    // Centralizes the t_a accumulation logic to prevent floating-point drift
+    // between modules. Returns int64_t sequence of t_a_rounded values.
+    // t_s for frame m is implicitly m * R_s.
+    // R_a_actual for frame m is frame_map[m] - frame_map[m-1] (caller derives).
+    std::vector<int64_t> generate_frame_map() const {
+        std::vector<int64_t> fmap;
+        double t_a = -(double)N / 2.0;
+        size_t t_s = 0;
+        int idx = 0;
+
+        while (t_s < target_total_frames) {
+            double alpha = get_alpha(t_s, timemap);
+            double R_a = R_s / alpha;
+            if (idx > 0) t_a += R_a;
+            int64_t t_a_rounded = static_cast<int64_t>(std::llround(t_a));
+            fmap.push_back(t_a_rounded);
+
+            t_s += R_s;
+            idx++;
+        }
+        return fmap;
+    }
 
     void init_fftw() {
         R_s = N / 4;

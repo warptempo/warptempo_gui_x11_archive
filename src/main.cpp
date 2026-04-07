@@ -4,6 +4,7 @@
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
+#include "hpss.h"
 #include "eq_matcher.h"
 #include "dynamics_lr4.h"
 #include "synthesis.h"
@@ -15,7 +16,12 @@ int main(int argc, char* argv[]) {
                   << "[N=3328] [low_thresh_hz=50.0]\n"
                   << "       [thresh_L/M/H=-25,-20,-25] [knee=6.0] [atten_max=-24.0]\n"
                   << "       [tauB_L/M/H=50,30,20] [tauF_L/M/H=250,150,80] [depth_L/M/H=1.0,1.0,1.0]\n"
-                  << "       [xover_L,H=120,3500]\n";
+                  << "       [xover_L,H=120,3500]\n"
+                  << "       [hpss_Gfg,Gbg,beta=1.5,1.0,0.5] [hpss_Lh,Lpmax=31,7]\n"
+                  << "       [active_modules=eq,dyn,hpss,makeup]  -- comma-separated whitelist of DSP modules to run.\n"
+                  << "          Pass 'eq,dyn,hpss,makeup' to run all (default), or e.g. 'hpss' to run only HPSS.\n"
+                  << "          Omit 'makeup' to skip loudness compensation (e.g. 'eq,dyn,hpss').\n"
+                  << "          PhaseVocoder and Synthesis always run regardless of this flag.\n";
         return 1;
     }
 
@@ -37,6 +43,15 @@ int main(int argc, char* argv[]) {
     if (argc >= 11) std::sscanf(argv[10], "%lf,%lf,%lf", &dp.tau_F_low, &dp.tau_F_mid, &dp.tau_F_high);
     if (argc >= 12) std::sscanf(argv[11], "%lf,%lf,%lf", &dp.depth_low, &dp.depth_mid, &dp.depth_high);
     if (argc >= 13) std::sscanf(argv[12], "%lf,%lf", &dp.xover_low, &dp.xover_high);
+
+    // HPSS CLI parsing
+    if (argc >= 14) std::sscanf(argv[13], "%lf,%lf,%lf", &audio_stft.G_fg, &audio_stft.G_bg, &audio_stft.beta);
+    if (argc >= 15) std::sscanf(argv[14], "%d,%d", &audio_stft.L_h, &audio_stft.L_p_max);
+
+    std::string active_modules = "eq,dyn,hpss,makeup";
+    if (argc >= 16) active_modules = argv[15];
+
+    audio_stft.enable_makeup_gain = active_modules.find("makeup") != std::string::npos;
 
     if (audio_stft.N % 4 != 0) {
         std::cerr << "Error: N must be divisible by 4.\n";
@@ -68,21 +83,47 @@ int main(int argc, char* argv[]) {
     // --- Init FFTW ---
     audio_stft.init_fftw();
 
+    // --- Generate canonical frame map (once, shared by all passes) ---
+    audio_stft.frame_map = audio_stft.generate_frame_map();
+    std::cout << "[Frame Map] Generated " << audio_stft.frame_map.size() << " frames (int64_t).\n";
+
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
-    // Future insertion point: hpss.process(audio_stft) immediately after stft_engine
     // ========================================================================
     PhaseVocoder stft_engine;
+    HPSS         hpss;
     EQMatcher    eq_matcher;
     DynamicsLR4  dynamics_lr4;
     Visualizer   visualizer;
     Synthesis    synthesis;
 
+    const bool run_eq     = active_modules.find("eq")     != std::string::npos;
+    const bool run_dyn    = active_modules.find("dyn")    != std::string::npos;
+    const bool run_hpss   = active_modules.find("hpss")   != std::string::npos;
+
+    std::cout << "[Pipeline] Active modules: ["
+              << (run_eq     ? "eq"     : "eq=BYPASS")     << " | "
+              << (run_dyn    ? "dyn"    : "dyn=BYPASS")    << " | "
+              << (run_hpss   ? "hpss"   : "hpss=BYPASS")   << " | "
+              << (audio_stft.enable_makeup_gain ? "makeup" : "makeup=BYPASS") << "]\n"
+              << "           (PhaseVocoder and Synthesis always run)\n";
+
     stft_engine.process(audio_stft);
-    eq_matcher.process(audio_stft);
-    visualizer.render_eq(audio_stft);
-    dynamics_lr4.process(audio_stft);
-    visualizer.render_dynamics(audio_stft);
+
+    if (run_eq) {
+        eq_matcher.process(audio_stft);
+        visualizer.render_eq(audio_stft);
+    }
+
+    if (run_dyn) {
+        dynamics_lr4.process(audio_stft);
+        visualizer.render_dynamics(audio_stft);
+    }
+
+    if (run_hpss) {
+        hpss.process(audio_stft);
+    }
+
     synthesis.process(audio_stft);
 
     // --- Cleanup ---

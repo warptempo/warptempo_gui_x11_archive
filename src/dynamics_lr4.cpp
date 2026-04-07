@@ -11,6 +11,7 @@ void DynamicsLR4::process(AudioSTFT& stft) {
     double bin_hz_width = stft.bin_hz_width;
     int total_analysis_frames = stft.total_analysis_frames;
     const auto& dp = stft.dyn_params;
+    const auto& fm = stft.frame_map;
 
     // --- LR4 Weight Initialization ---
     stft.W_L.assign(N / 2 + 1, 0.0);
@@ -28,9 +29,6 @@ void DynamicsLR4::process(AudioSTFT& stft) {
     stft.S_traj_L.assign(total_analysis_frames, 1.0);
     stft.S_traj_M.assign(total_analysis_frames, 1.0);
     stft.S_traj_H.assign(total_analysis_frames, 1.0);
-
-    double t_a = -(double)N / 2.0;
-    size_t t_s = 0;
 
     // Task 1: EQ Compensation Measurement
     stft.global_eq_weighted_sum = 0.0;
@@ -59,17 +57,15 @@ void DynamicsLR4::process(AudioSTFT& stft) {
     };
 
     for (int f_idx = 0; f_idx < total_analysis_frames; ++f_idx) {
-        double alpha = get_alpha(t_s, stft.timemap);
-        double R_a = R_s / alpha;
-        if (f_idx > 0) t_a += R_a;
-        long t_a_rounded = std::round(t_a);
+        int64_t t_a_rounded = fm[f_idx];
+        size_t t_s = static_cast<size_t>(f_idx) * R_s;
 
         std::vector<double> M_src(N / 2 + 1, 0.0), M_tgt(N / 2 + 1, 0.0);
 
         // Source FFT
         std::fill(read_buf.begin(), read_buf.end(), 0.0f);
-        if (t_a_rounded < stft.src_info.frames) {
-            sf_seek(stft.src_snd, std::max(0L, t_a_rounded), SEEK_SET);
+        if (t_a_rounded >= 0 && t_a_rounded < stft.src_info.frames) {
+            sf_seek(stft.src_snd, t_a_rounded, SEEK_SET);
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
         for (int ch = 0; ch < channels; ++ch) {
@@ -84,7 +80,7 @@ void DynamicsLR4::process(AudioSTFT& stft) {
         // Task 1: EQ Compensation
         for (int k = 1; k <= N / 2; ++k) {
             double E_k = M_src[k] * M_src[k];
-            double m_val = std::max(1e-9, stft.multiplier_array[k]);
+            double m_val = stft.multiplier_array.empty() ? 1.0 : std::max(1e-9, stft.multiplier_array[k]);
             stft.global_eq_weighted_sum += E_k * 20.0 * std::log10(m_val);
             stft.global_src_energy_sum += E_k;
         }
@@ -110,7 +106,8 @@ void DynamicsLR4::process(AudioSTFT& stft) {
         double num_L = 0.0, num_M = 0.0, num_H = 0.0;
 
         for (int k = 1; k <= N / 2; ++k) {
-            double M_tgt_eq = M_tgt[k] * stft.multiplier_array[k];
+            double eq_scalar = stft.multiplier_array.empty() ? 1.0 : stft.multiplier_array[k];
+            double M_tgt_eq = M_tgt[k] * eq_scalar;
             double s_raw_k = (M_tgt_eq > M_src[k]) ? (M_src[k] / (M_tgt_eq + 1e-12)) : 1.0;
 
             double mag_sq = M_src[k] * M_src[k];
@@ -138,8 +135,6 @@ void DynamicsLR4::process(AudioSTFT& stft) {
         stft.S_traj_L[f_idx] = evaluate_zone(db_L, dp.thresh_low, dp.knee_low, dp.depth_low, S_raw_L, dp.atten_low);
         stft.S_traj_M[f_idx] = evaluate_zone(db_M, dp.thresh_mid, dp.knee_mid, dp.depth_mid, S_raw_M, dp.atten_mid);
         stft.S_traj_H[f_idx] = evaluate_zone(db_H, dp.thresh_high, dp.knee_high, dp.depth_high, S_raw_H, dp.atten_high);
-
-        t_s += R_s;
     }
 
     // --- Temporal Smoothing ---

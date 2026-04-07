@@ -8,29 +8,23 @@ void PhaseVocoder::process(AudioSTFT& stft) {
     int N = stft.N;
     int R_s = stft.R_s;
     int channels = stft.channels;
+    const auto& fm = stft.frame_map;
+    int num_frames = static_cast<int>(fm.size());
 
     stft.virtual_tgt_buf.clear();
     stft.virtual_tgt_buf.reserve(stft.target_total_frames * channels);
     stft.reset_phase_state();
 
     std::vector<float> read_buf(N * channels, 0.0f);
-
-    double t_a = -(double)N / 2.0;
-    long t_a_rounded_prev = std::round(t_a);
-    size_t t_s = 0;
-    int frame_idx = 0;
     int frames_to_skip = N / 2;
 
-    while (t_s < stft.target_total_frames) {
-        double alpha = get_alpha(t_s, stft.timemap);
-        double R_a = R_s / alpha;
-        if (frame_idx > 0) t_a += R_a;
-        long t_a_rounded = std::round(t_a);
-        long R_a_actual = t_a_rounded - t_a_rounded_prev;
+    for (int frame_idx = 0; frame_idx < num_frames; ++frame_idx) {
+        int64_t t_a_rounded = fm[frame_idx];
+        int64_t R_a_actual = (frame_idx > 0) ? (fm[frame_idx] - fm[frame_idx - 1]) : 0;
 
         std::fill(read_buf.begin(), read_buf.end(), 0.0f);
-        if (t_a_rounded < stft.src_info.frames) {
-            sf_seek(stft.src_snd, std::max(0L, t_a_rounded), SEEK_SET);
+        if (t_a_rounded >= 0 && t_a_rounded < stft.src_info.frames) {
+            sf_seek(stft.src_snd, t_a_rounded, SEEK_SET);
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
 
@@ -103,10 +97,7 @@ void PhaseVocoder::process(AudioSTFT& stft) {
             for (int n = 0; n < N - R_s; ++n) stft.overlap_add[ch][n] = stft.overlap_add[ch][n + R_s];
             for (int n = N - R_s; n < N; ++n) stft.overlap_add[ch][n] = 0.0;
         }
-        t_s += R_s;
-        t_a_rounded_prev = t_a_rounded;
-        frame_idx++;
     }
 
-    stft.total_analysis_frames = frame_idx;
+    stft.total_analysis_frames = num_frames;
 }

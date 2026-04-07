@@ -5,12 +5,13 @@
 #include <cstdio>
 
 void Synthesis::process(AudioSTFT& stft) {
-    std::cout << "\n[Pass 4] Executing Final Synthesis with EQ & LR4 Dynamics...\n";
+    std::cout << "\n[Pass 4] Executing Final Synthesis with EQ, LR4 Dynamics & HPSS...\n";
 
     int N = stft.N;
     int R_s = stft.R_s;
     int channels = stft.channels;
-    int total_analysis_frames = stft.total_analysis_frames;
+    const auto& fm = stft.frame_map;
+    int num_frames = static_cast<int>(fm.size());
 
     SF_INFO tgt_info = stft.src_info;
     tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
@@ -18,10 +19,6 @@ void Synthesis::process(AudioSTFT& stft) {
 
     stft.reset_phase_state();
 
-    double t_a = -(double)N / 2.0;
-    long t_a_rounded_prev = std::round(t_a);
-    size_t t_s = 0;
-    int frame_idx = 0;
     int frames_to_skip = N / 2;
 
     std::vector<float> read_buf(N * channels, 0.0f);
@@ -30,27 +27,25 @@ void Synthesis::process(AudioSTFT& stft) {
     stft.global_dyn_atten_sum = 0.0;
     stft.active_dyn_frames = 0;
 
-    while (t_s < stft.target_total_frames) {
-        double alpha = get_alpha(t_s, stft.timemap);
-        double R_a = R_s / alpha;
-        if (frame_idx > 0) t_a += R_a;
-        long t_a_rounded = std::round(t_a);
-        long R_a_actual = t_a_rounded - t_a_rounded_prev;
+    for (int frame_idx = 0; frame_idx < num_frames; ++frame_idx) {
+        int64_t t_a_rounded = fm[frame_idx];
+        int64_t R_a_actual = (frame_idx > 0) ? (fm[frame_idx] - fm[frame_idx - 1]) : 0;
 
         std::fill(read_buf.begin(), read_buf.end(), 0.0f);
-        if (t_a_rounded < stft.src_info.frames) {
-            sf_seek(stft.src_snd, std::max(0L, t_a_rounded), SEEK_SET);
+        if (t_a_rounded >= 0 && t_a_rounded < stft.src_info.frames) {
+            sf_seek(stft.src_snd, t_a_rounded, SEEK_SET);
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
 
-        int s_idx = std::min(frame_idx, total_analysis_frames - 1);
-
         // Dynamics compensation gate
-        bool is_active_dyn = (stft.S_traj_L[s_idx] < 0.94 ||
-                              stft.S_traj_M[s_idx] < 0.94 ||
-                              stft.S_traj_H[s_idx] < 0.94);
+        bool is_active_dyn = !stft.S_traj_L.empty() &&
+                             (stft.S_traj_L[frame_idx] < 0.94 ||
+                              stft.S_traj_M[frame_idx] < 0.94 ||
+                              stft.S_traj_H[frame_idx] < 0.94);
         double frame_dyn_weighted_sum = 0.0;
         double frame_energy_sum = 0.0;
+        double frame_hpss_weighted_sum = 0.0;
+        double frame_energy_sum_hpss = 0.0;
 
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N; ++n)
@@ -68,9 +63,9 @@ void Synthesis::process(AudioSTFT& stft) {
             if (is_active_dyn) {
                 for (int k = 1; k <= N / 2; ++k) {
                     double E_k = M[k] * M[k];
-                    double dyn_scalar = (stft.S_traj_L[s_idx] * stft.W_L[k]) +
-                                        (stft.S_traj_M[s_idx] * stft.W_M[k]) +
-                                        (stft.S_traj_H[s_idx] * stft.W_H[k]);
+                    double dyn_scalar = (stft.S_traj_L[frame_idx] * stft.W_L[k]) +
+                                        (stft.S_traj_M[frame_idx] * stft.W_M[k]) +
+                                        (stft.S_traj_H[frame_idx] * stft.W_H[k]);
                     double s_bin = std::max(1e-9, dyn_scalar);
                     frame_dyn_weighted_sum += E_k * 20.0 * std::log10(s_bin);
                     frame_energy_sum += E_k;
@@ -101,17 +96,31 @@ void Synthesis::process(AudioSTFT& stft) {
                 }
             }
 
-            // Apply EQ + Dynamics, then polar->complex via direct trig (NOT std::polar)
+            // Apply EQ + Dynamics + HPSS, then polar->complex via direct trig (NOT std::polar)
             for (int k = 0; k <= N / 2; ++k) {
                 stft.phi_prev[ch][k] = phi[k];
                 stft.theta_prev[ch][k] = theta[k];
 
-                M[k] *= stft.multiplier_array[k];
+                if (!stft.multiplier_array.empty())
+                    M[k] *= stft.multiplier_array[k];
 
-                double dyn_scalar = (stft.S_traj_L[s_idx] * stft.W_L[k]) +
-                                    (stft.S_traj_M[s_idx] * stft.W_M[k]) +
-                                    (stft.S_traj_H[s_idx] * stft.W_H[k]);
-                M[k] *= dyn_scalar;
+                if (!stft.S_traj_L.empty() && !stft.W_L.empty()) {
+                    double dyn_scalar = (stft.S_traj_L[frame_idx] * stft.W_L[k]) +
+                                        (stft.S_traj_M[frame_idx] * stft.W_M[k]) +
+                                        (stft.S_traj_H[frame_idx] * stft.W_H[k]);
+                    M[k] *= dyn_scalar;
+                }
+
+                // HPSS Foreground/Background mask application with energy tracking
+                if (!stft.M_h_mask.empty() && !stft.M_p_mask.empty()) {
+                    double hpss_scalar = (stft.G_bg * stft.M_h_mask[ch][frame_idx][k]) +
+                                         (stft.G_fg * stft.M_p_mask[ch][frame_idx][k]);
+                    double E_pre_hpss = M[k] * M[k];
+                    double s_bin_hpss = std::max(1e-9, hpss_scalar);
+                    frame_hpss_weighted_sum += E_pre_hpss * 20.0 * std::log10(s_bin_hpss);
+                    frame_energy_sum_hpss += E_pre_hpss;
+                    M[k] *= hpss_scalar;
+                }
 
                 stft.ifft_in[k][0] = M[k] * std::cos(theta[k]);
                 stft.ifft_in[k][1] = M[k] * std::sin(theta[k]);
@@ -151,9 +160,10 @@ void Synthesis::process(AudioSTFT& stft) {
             stft.active_dyn_frames++;
         }
 
-        t_s += R_s;
-        t_a_rounded_prev = t_a_rounded;
-        frame_idx++;
+        if (frame_energy_sum_hpss > 1e-6) {
+            stft.global_hpss_atten_sum += (frame_hpss_weighted_sum / frame_energy_sum_hpss);
+            stft.active_hpss_frames++;
+        }
     }
 
     // Flush remaining overlap
@@ -181,14 +191,27 @@ void Synthesis::process(AudioSTFT& stft) {
                                  : 0.0;
     double dyn_makeup_db = -dyn_attenuation;
 
-    double total_makeup_db = eq_makeup_db + dyn_makeup_db;
+    double hpss_attenuation = (stft.active_hpss_frames > 0)
+                                  ? (stft.global_hpss_atten_sum / stft.active_hpss_frames)
+                                  : 0.0;
+    double hpss_makeup_db = -hpss_attenuation;
+
+    double total_makeup_db = eq_makeup_db + dyn_makeup_db + hpss_makeup_db;
     double makeup_scalar = std::pow(10.0, total_makeup_db / 20.0);
+
+    if (!stft.enable_makeup_gain) {
+        std::cout << "  -> Makeup Gain: BYPASSED (scalar forced to 1.0)\n";
+        total_makeup_db = 0.0;
+        makeup_scalar   = 1.0;
+    }
 
     std::cout << "\n[Loudness Match (Energy-Weighted)]\n";
     std::cout << "  -> EQ Compensation       : " << (eq_makeup_db > 0 ? "+" : "")
               << std::fixed << std::setprecision(2) << eq_makeup_db << " dB\n";
     std::cout << "  -> Dynamics Compensation : " << (dyn_makeup_db > 0 ? "+" : "")
               << std::fixed << std::setprecision(2) << dyn_makeup_db << " dB\n";
+    std::cout << "  -> HPSS Compensation     : " << (hpss_makeup_db > 0 ? "+" : "")
+              << std::fixed << std::setprecision(2) << hpss_makeup_db << " dB\n";
     std::cout << "  -> Total Makeup          : " << (total_makeup_db > 0 ? "+" : "")
               << std::fixed << std::setprecision(2) << total_makeup_db << " dB\n\n";
 

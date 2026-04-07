@@ -309,7 +309,13 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == warptempo ]]; then
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav 3328 50 -25,-19,-35 6 -24 50,30,20 250,150,80 1,1,1 120,3500
+	#Usage: ./warptempo_engine <source_audio> <timemap_file> <target_audio> [N=3328] [low_thresh_hz=50.0]
+	#       [thresh_L/M/H=-25,-20,-25] [knee=6.0] [atten_max=-24.0]
+	#       [tauB_L/M/H=50,30,20] [tauF_L/M/H=250,150,80] [depth_L/M/H=1.0,1.0,1.0]
+	#       [xover_L,H=120,3500]
+	#       [hpss_Gfg,Gbg,beta=1.5,1.0,0.5] [hpss_Lh,Lpmax=31,7]
+	#       [active_modules=eq,dyn,hpss]  -- comma-separated whitelist of DSP modules to run.
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav 3328 50 -25,-19,-35 6 -24 50,30,20 250,150,80 1,1,1 120,3500 1.122,1,2 31,7 dyn,hpss,makeup
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband

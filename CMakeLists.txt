@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # NOTE: Minimum 4 GB system RAM required.
-# Array footprint ~1.64 GB + OS overhead + FFTW planning buffers.
+# Array footprint ~1.64 GB + HPSS temporaries (~400 MB) + OS overhead + FFTW planning buffers.
 
 # --- Dependencies for the DSP Engine ---
 find_package(PkgConfig REQUIRED)
@@ -17,6 +17,7 @@ pkg_check_modules(FFTW3 REQUIRED fftw3)
 add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
+    src/hpss.cpp
     src/eq_matcher.cpp
     src/dynamics_lr4.cpp
     src/synthesis.cpp

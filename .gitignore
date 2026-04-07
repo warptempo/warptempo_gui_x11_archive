@@ -4,9 +4,8 @@
 # Warptempo Build Artifacts
 build/
 
-# Compiled Binaries
-parser
-rms_splitter
+# Claude Code
+CLAUDE.md
 
 # Bungee Adapter Build Artifacts
 adapters/bungee/build/
@@ -26,5 +25,4 @@ adapters/midi/build/
 
 # EQ Match Build Artifacts
 eqmatch/build/
-
 
