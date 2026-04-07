@@ -4,23 +4,34 @@ project(warptempo_suite VERSION 2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# NOTE: Minimum 4 GB system RAM required.
+# Array footprint ~1.64 GB + OS overhead + FFTW planning buffers.
+
 # --- Dependencies for the DSP Engine ---
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 pkg_check_modules(EBUR128 REQUIRED libebur128)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
 
-# --- 1. Build the DSP Engine ---
-add_executable(warptempo_engine src/warptempo_engine.cpp)
-target_include_directories(warptempo_engine PRIVATE 
-    ${SNDFILE_INCLUDE_DIRS} 
-    ${EBUR128_INCLUDE_DIRS} 
+# --- 1. Build the DSP Engine (Modular) ---
+add_executable(warptempo_engine
+    src/main.cpp
+    src/phase_vocoder.cpp
+    src/eq_matcher.cpp
+    src/dynamics_lr4.cpp
+    src/synthesis.cpp
+    src/visualizer.cpp
+)
+target_include_directories(warptempo_engine PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${SNDFILE_INCLUDE_DIRS}
+    ${EBUR128_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
 )
-target_link_libraries(warptempo_engine PRIVATE 
-    ${SNDFILE_LIBRARIES} 
-    ${EBUR128_LIBRARIES} 
-    ${FFTW3_LIBRARIES} 
+target_link_libraries(warptempo_engine PRIVATE
+    ${SNDFILE_LIBRARIES}
+    ${EBUR128_LIBRARIES}
+    ${FFTW3_LIBRARIES}
     m
 )
 
