@@ -38,6 +38,13 @@ void HPSS::process(AudioSTFT& stft) {
     // unprocessed content. C_rms still provides frame-level RMS modulation.
     // Peak memory: ~2 × M_total × K × 8 bytes, freed before per-channel loop.
     // ========================================================================
+    if (stft.apply_tm == "none") {
+        stft.C_rms.assign(M_total, 0.0);
+        stft.delta_low.assign(M_total, 1.0);
+        stft.delta_mid.assign(M_total, 1.0);
+        stft.delta_high.assign(M_total, 1.0);
+        std::cout << "          -> TM Analysis: bypassed (apply_tm=none).\n";
+    } else {
     std::cout << "          -> TM Analysis: building source/target spectrograms for delta computation...\n";
     {
         stft.C_rms.assign(M_total, 0.0);
@@ -49,29 +56,52 @@ void HPSS::process(AudioSTFT& stft) {
         std::vector<std::vector<double>> X_tgt(M_total, std::vector<double>(K, 0.0));
 
         for (int m = 0; m < M_total; ++m) {
+            // --- Source FFT (mono average of raw source frames) ---
             int64_t t_a = fm[m];
             std::fill(read_buf.begin(), read_buf.end(), 0.0f);
             if (t_a >= 0 && t_a < stft.src_info.frames) {
                 sf_seek(stft.src_snd, t_a, SEEK_SET);
                 sf_readf_float(stft.src_snd, read_buf.data(), N);
             }
-            // Mono average across all channels
             for (int n = 0; n < N; ++n) {
                 double s = 0.0;
                 for (int c = 0; c < channels; ++c) s += read_buf[n * channels + c];
                 stft.fft_in[n] = (s / channels) * stft.window[n];
             }
             fftw_execute(stft.plan_fwd);
+            for (int k = 0; k < K; ++k)
+                X_src[m][k] = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
 
-            for (int k = 0; k < K; ++k) {
-                double mag = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
-                X_src[m][k] = mag;
-                X_tgt[m][k] = mag;
+            // --- Target FFT (mono average of Phase Vocoder output from virtual_tgt_buf) ---
+            int64_t tgt_offset = static_cast<int64_t>(m) * stft.R_s;
+            for (int n = 0; n < N; ++n) {
+                double s = 0.0;
+                int64_t buf_idx = (tgt_offset + n) * channels;
+                if (buf_idx >= 0 &&
+                    buf_idx + channels <= static_cast<int64_t>(stft.virtual_tgt_buf.size())) {
+                    for (int c = 0; c < channels; ++c)
+                        s += stft.virtual_tgt_buf[buf_idx + c];
+                }
+                stft.fft_in[n] = (s / channels) * stft.window[n];
             }
+            fftw_execute(stft.plan_fwd);
+            for (int k = 0; k < K; ++k)
+                X_tgt[m][k] = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
         }
 
-        // C_rms: trailing 21-frame spectral RMS mapped through a soft-knee log curve.
-        // Louder moments receive more transient correction; silence floor is ignored.
+        // C_rms: trailing 21-frame spectral RMS through a piecewise quadratic (C1) spline.
+        // Five-stage gain gate; louder frames receive more transient correction.
+        // S_rms aligns the raw FFTW RMS to the AES17 dBFS scale (0 dBFS = full-scale sine).
+        const double S_rms    = std::sqrt(static_cast<double>(stft.N) * 3.0 / 8.0);
+        const double spline_L = stft.tm_floor_db / 20.0;
+        const double spline_U = stft.tm_peak_db  / 20.0;
+        double       spline_W = stft.tm_knee_db  / 20.0;
+        if (spline_W >= (spline_U - spline_L)) {
+            spline_W = (spline_U - spline_L) * 0.99;
+            std::cerr << "[HPSS] WARNING: tm_knee too wide; clamped to "
+                      << (spline_W * 20.0) << " dB.\n";
+        }
+
         for (int m = 0; m < M_total; ++m) {
             double sum_sq = 0.0;
             int count = 0;
@@ -83,9 +113,23 @@ void HPSS::process(AudioSTFT& stft) {
             double rms = (count > 0 && K > 1)
                              ? std::sqrt(sum_sq / (static_cast<double>(count) * (K - 1)))
                              : 0.0;
-            stft.C_rms[m] = std::max(0.0, std::min(1.0,
-                std::log10((rms + 1e-12) / stft.tm_RMS_floor) /
-                std::log10(stft.tm_RMS_peak / stft.tm_RMS_floor)));
+
+            const double x = std::log10(rms / S_rms + 1e-12);
+            double C;
+            if (x < spline_L - spline_W / 2) {
+                C = 0.0;
+            } else if (x < spline_L + spline_W / 2) {
+                double t = x - spline_L + spline_W / 2;
+                C = (t * t) / (2.0 * spline_W * (spline_U - spline_L));
+            } else if (x < spline_U - spline_W / 2) {
+                C = (x - spline_L) / (spline_U - spline_L);
+            } else if (x < spline_U + spline_W / 2) {
+                double t = spline_U + spline_W / 2 - x;
+                C = 1.0 - (t * t) / (2.0 * spline_W * (spline_U - spline_L));
+            } else {
+                C = 1.0;
+            }
+            stft.C_rms[m] = C;
         }
 
         // Zone boundary bins (first bin at or above each crossover frequency)
@@ -105,15 +149,16 @@ void HPSS::process(AudioSTFT& stft) {
                 for (int k = k_z2; k < K;    ++k) { src_high += X_src[mi][k]; tgt_high += X_tgt[mi][k]; }
             }
 
-            stft.delta_low[m]  = (src_low  > 1e-9) ? (tgt_low  / src_low)  : 1.0;
-            stft.delta_mid[m]  = (src_mid  > 1e-9) ? (tgt_mid  / src_mid)  : 1.0;
-            stft.delta_high[m] = (src_high > 1e-9) ? (tgt_high / src_high) : 1.0;
+            stft.delta_low[m]  = (tgt_low  > 1e-9) ? (src_low  / tgt_low)  : 1.0;
+            stft.delta_mid[m]  = (tgt_mid  > 1e-9) ? (src_mid  / tgt_mid)  : 1.0;
+            stft.delta_high[m] = (tgt_high > 1e-9) ? (src_high / tgt_high) : 1.0;
         }
 
         X_src.clear(); X_src.shrink_to_fit();
         X_tgt.clear(); X_tgt.shrink_to_fit();
         std::cout << "          -> TM Analysis: C_rms and deltas computed. Temporaries freed.\n";
     }
+    } // end apply_tm != "none"
 
     // Process each channel independently to bound peak memory to ~400 MB per pass.
     for (int ch = 0; ch < channels; ++ch) {

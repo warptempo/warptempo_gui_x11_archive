@@ -2,10 +2,12 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
-#include <cstdio>
+#include <cmath>
 
 void Synthesis::process(AudioSTFT& stft) {
-    std::cout << "\n[Pass 4] Executing HPSS + Transient Matcher Synthesis...\n";
+    std::cout << "\n[Pass 4] Executing HPSS Synthesis"
+              << " (apply_tm=" << stft.apply_tm
+              << ", output_mode=" << stft.output_mode << ")...\n";
 
     int N = stft.N;
     int R_s = stft.R_s;
@@ -13,29 +15,53 @@ void Synthesis::process(AudioSTFT& stft) {
     const auto& fm = stft.frame_map;
     int num_frames = static_cast<int>(fm.size());
 
+    // --- Derive output paths ---
+    auto insert_suffix = [](const std::string& path, const std::string& suffix) {
+        auto dot = path.rfind('.');
+        return (dot == std::string::npos)
+               ? path + suffix
+               : path.substr(0, dot) + suffix + path.substr(dot);
+    };
+
     SF_INFO tgt_info = stft.src_info;
     tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-    SNDFILE* tgt_snd = sf_open(stft.tgt_audio_file.c_str(), SFM_WRITE, &tgt_info);
+
+    SNDFILE* tonal_snd = nullptr;
+    SNDFILE* perc_snd  = nullptr;
+
+    if (stft.output_mode == "combined") {
+        tonal_snd = sf_open(stft.tgt_audio_file.c_str(), SFM_WRITE, &tgt_info);
+    } else {
+        std::string tonal_path = insert_suffix(stft.tgt_audio_file, "_tonal");
+        std::string perc_path  = insert_suffix(stft.tgt_audio_file, "_percussive");
+        tonal_snd = sf_open(tonal_path.c_str(), SFM_WRITE, &tgt_info);
+        perc_snd  = sf_open(perc_path.c_str(),  SFM_WRITE, &tgt_info);
+        std::cout << "  -> Tonal       : " << tonal_path << "\n";
+        std::cout << "  -> Percussive  : " << perc_path  << "\n";
+    }
 
     stft.reset_phase_state();
 
+    // Independent OLA buffers for tonal and percussive streams
+    std::vector<std::vector<double>> ola_tonal(channels, std::vector<double>(N, 0.0));
+    std::vector<std::vector<double>> ola_perc (channels, std::vector<double>(N, 0.0));
+
     int frames_to_skip = N / 2;
+    double total_input_energy  = 0.0;
+    double total_output_energy = 0.0;
 
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
 
     for (int frame_idx = 0; frame_idx < num_frames; ++frame_idx) {
         int64_t t_a_rounded = fm[frame_idx];
-        int64_t R_a_actual = (frame_idx > 0) ? (fm[frame_idx] - fm[frame_idx - 1]) : 0;
+        int64_t R_a_actual  = (frame_idx > 0) ? (fm[frame_idx] - fm[frame_idx - 1]) : 0;
 
         std::fill(read_buf.begin(), read_buf.end(), 0.0f);
         if (t_a_rounded >= 0 && t_a_rounded < stft.src_info.frames) {
             sf_seek(stft.src_snd, t_a_rounded, SEEK_SET);
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
-
-        double frame_hpss_weighted_sum = 0.0;
-        double frame_energy_sum_hpss   = 0.0;
 
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N; ++n)
@@ -44,8 +70,8 @@ void Synthesis::process(AudioSTFT& stft) {
 
             std::vector<double> M(N / 2 + 1, 0.0), phi(N / 2 + 1, 0.0), theta(N / 2 + 1, 0.0);
             for (int k = 0; k <= N / 2; ++k) {
-                M[k] = std::sqrt(stft.fft_out[k][0] * stft.fft_out[k][0] +
-                                 stft.fft_out[k][1] * stft.fft_out[k][1]);
+                M[k]   = std::sqrt(stft.fft_out[k][0] * stft.fft_out[k][0] +
+                                   stft.fft_out[k][1] * stft.fft_out[k][1]);
                 phi[k] = std::atan2(stft.fft_out[k][1], stft.fft_out[k][0]);
             }
 
@@ -73,38 +99,74 @@ void Synthesis::process(AudioSTFT& stft) {
                 }
             }
 
-            // Apply HPSS mask with Transient Matcher gain, then polar->complex
+            // Per-bin chain: EQ -> Dynamics -> Routing Matrix
+            std::vector<double> M_tonal_arr(N / 2 + 1), M_perc_arr(N / 2 + 1);
             for (int k = 0; k <= N / 2; ++k) {
-                stft.phi_prev[ch][k] = phi[k];
+                stft.phi_prev[ch][k]   = phi[k];
                 stft.theta_prev[ch][k] = theta[k];
 
-                // LR4-blended delta: bin k picks up the weighted mix of per-zone
-                // energy ratios. W_Z0 anchors to 1.0 (safety floor passthrough).
+                const double M_raw = M[k];
+
+                // --- EQ: DC Block always; LR4 HPF only if hpf_hz > 0 ---
+                if (k == 0) {
+                    M[k] = 0.0;
+                } else if (stft.hpf_hz > 0.0) {
+                    double f  = k * stft.bin_hz_width;
+                    double r8 = std::pow(f / stft.hpf_hz, 8.0);
+                    M[k] *= r8 / (1.0 + r8);
+                }
+
+                // --- Dynamics: LR4-blended delta and restorative G_p ---
                 double blended_delta = (stft.tm_W_Z0[k] * 1.0)
                                      + (stft.tm_W_Z1[k] * stft.delta_low[frame_idx])
                                      + (stft.tm_W_Z2[k] * stft.delta_mid[frame_idx])
                                      + (stft.tm_W_Z3[k] * stft.delta_high[frame_idx]);
-
-                // G_p: restorative gain on the Foreground channel, scaled by
-                // C_rms so that low-level / silent frames receive no correction.
                 double G_p = 1.0 + (blended_delta - 1.0) * stft.C_rms[frame_idx];
 
-                double hpss_scalar = stft.M_h_mask[ch][frame_idx][k]
-                                   + (stft.M_p_mask[ch][frame_idx][k] * G_p);
-                double E_pre = M[k] * M[k];
-                frame_hpss_weighted_sum += E_pre * 20.0 * std::log10(std::max(1e-9, hpss_scalar));
-                frame_energy_sum_hpss   += E_pre;
-                M[k] *= hpss_scalar;
+                // --- Routing Matrix ---
+                double mt, mp;
+                if (stft.apply_tm == "tonal") {
+                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k] * G_p;
+                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
+                } else if (stft.apply_tm == "both") {
+                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k] * G_p;
+                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k] * G_p;
+                } else if (stft.apply_tm == "none") {
+                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k];
+                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
+                } else { // "percussive" (default)
+                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k];
+                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k] * G_p;
+                }
+                M_tonal_arr[k] = mt;
+                M_perc_arr[k]  = mp;
 
-                stft.ifft_in[k][0] = M[k] * std::cos(theta[k]);
-                stft.ifft_in[k][1] = M[k] * std::sin(theta[k]);
+                // Energy meter: combined output vs raw input
+                const double fold = (k == 0 || k == N / 2) ? 1.0 : 2.0;
+                total_input_energy  += fold * M_raw * M_raw;
+                total_output_energy += fold * (mt + mp) * (mt + mp);
+            }
+
+            // --- Step A: IFFT tonal -> ola_tonal ---
+            for (int k = 0; k <= N / 2; ++k) {
+                stft.ifft_in[k][0] = M_tonal_arr[k] * std::cos(theta[k]);
+                stft.ifft_in[k][1] = M_tonal_arr[k] * std::sin(theta[k]);
             }
             fftw_execute(stft.plan_inv);
-
             for (int n = 0; n < N; ++n)
-                stft.overlap_add[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
+                ola_tonal[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
+
+            // --- Step B: IFFT percussive -> ola_perc ---
+            for (int k = 0; k <= N / 2; ++k) {
+                stft.ifft_in[k][0] = M_perc_arr[k] * std::cos(theta[k]);
+                stft.ifft_in[k][1] = M_perc_arr[k] * std::sin(theta[k]);
+            }
+            fftw_execute(stft.plan_inv);
+            for (int n = 0; n < N; ++n)
+                ola_perc[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
         }
 
+        // Write accumulated samples (respecting initial N/2-frame skip)
         int write_offset = 0, write_len = R_s;
         if (frames_to_skip > 0) {
             if (frames_to_skip >= write_len) {
@@ -117,72 +179,70 @@ void Synthesis::process(AudioSTFT& stft) {
             }
         }
         if (write_len > 0) {
-            for (int n = 0; n < write_len; ++n) {
-                for (int ch = 0; ch < channels; ++ch)
-                    write_buf[n * channels + ch] = static_cast<float>(stft.overlap_add[ch][write_offset + n]);
+            if (stft.output_mode == "combined") {
+                for (int n = 0; n < write_len; ++n)
+                    for (int ch = 0; ch < channels; ++ch)
+                        write_buf[n * channels + ch] = static_cast<float>(
+                            ola_tonal[ch][write_offset + n] + ola_perc[ch][write_offset + n]);
+                sf_writef_float(tonal_snd, write_buf.data(), write_len);
+            } else {
+                for (int n = 0; n < write_len; ++n)
+                    for (int ch = 0; ch < channels; ++ch)
+                        write_buf[n * channels + ch] = static_cast<float>(ola_tonal[ch][write_offset + n]);
+                sf_writef_float(tonal_snd, write_buf.data(), write_len);
+                for (int n = 0; n < write_len; ++n)
+                    for (int ch = 0; ch < channels; ++ch)
+                        write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][write_offset + n]);
+                sf_writef_float(perc_snd, write_buf.data(), write_len);
             }
-            sf_writef_float(tgt_snd, write_buf.data(), write_len);
         }
 
+        // Shift OLA buffers
         for (int ch = 0; ch < channels; ++ch) {
-            for (int n = 0; n < N - R_s; ++n) stft.overlap_add[ch][n] = stft.overlap_add[ch][n + R_s];
-            for (int n = N - R_s; n < N; ++n) stft.overlap_add[ch][n] = 0.0;
-        }
-
-        if (frame_energy_sum_hpss > 1e-6) {
-            stft.global_hpss_atten_sum += (frame_hpss_weighted_sum / frame_energy_sum_hpss);
-            stft.active_hpss_frames++;
+            for (int n = 0; n < N - R_s; ++n) {
+                ola_tonal[ch][n] = ola_tonal[ch][n + R_s];
+                ola_perc [ch][n] = ola_perc [ch][n + R_s];
+            }
+            for (int n = N - R_s; n < N; ++n) {
+                ola_tonal[ch][n] = 0.0;
+                ola_perc [ch][n] = 0.0;
+            }
         }
     }
 
     // Flush remaining overlap
     int remaining = N - R_s;
     if (remaining > 0) {
-        for (int ch = 0; ch < channels; ++ch) {
-            for (int n = 0; n < remaining; ++n)
-                write_buf[n * channels + ch] = static_cast<float>(stft.overlap_add[ch][n]);
+        if (stft.output_mode == "combined") {
+            for (int ch = 0; ch < channels; ++ch)
+                for (int n = 0; n < remaining; ++n)
+                    write_buf[n * channels + ch] = static_cast<float>(
+                        ola_tonal[ch][n] + ola_perc[ch][n]);
+            sf_writef_float(tonal_snd, write_buf.data(), remaining);
+        } else {
+            for (int ch = 0; ch < channels; ++ch)
+                for (int n = 0; n < remaining; ++n)
+                    write_buf[n * channels + ch] = static_cast<float>(ola_tonal[ch][n]);
+            sf_writef_float(tonal_snd, write_buf.data(), remaining);
+            for (int ch = 0; ch < channels; ++ch)
+                for (int n = 0; n < remaining; ++n)
+                    write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][n]);
+            sf_writef_float(perc_snd, write_buf.data(), remaining);
         }
-        sf_writef_float(tgt_snd, write_buf.data(), remaining);
     }
 
+    sf_close(tonal_snd);
+    if (perc_snd) sf_close(perc_snd);
     std::cout << "[Success] Final Master Written.\n";
 
     // ========================================================================
-    // Compute and Bake Makeup Gain
+    // Suggested Makeup Gain (Meter-Only — Not Applied)
     // ========================================================================
-    double hpss_attenuation = (stft.active_hpss_frames > 0)
-                                  ? (stft.global_hpss_atten_sum / stft.active_hpss_frames)
-                                  : 0.0;
-    double total_makeup_db = -hpss_attenuation;
-    double makeup_scalar = std::pow(10.0, total_makeup_db / 20.0);
+    double total_makeup_db = 0.0;
+    if (total_input_energy > 1e-12)
+        total_makeup_db = -10.0 * std::log10(total_output_energy / total_input_energy);
 
-    std::cout << "\n[Loudness Match (Energy-Weighted)]\n";
-    std::cout << "  -> HPSS Compensation : " << (total_makeup_db > 0 ? "+" : "")
-              << std::fixed << std::setprecision(2) << total_makeup_db << " dB\n\n";
-
-    std::cout << "[Pass 5] Baking Makeup Gain (" << std::fixed << std::setprecision(2)
-              << total_makeup_db << " dB) into final WAV...\n";
-
-    sf_close(tgt_snd);
-
-    std::string temp_audio_file = stft.tgt_audio_file + ".tmp";
-    std::rename(stft.tgt_audio_file.c_str(), temp_audio_file.c_str());
-
-    SF_INFO pass5_info = stft.src_info;
-    pass5_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-    SNDFILE* in_snd  = sf_open(temp_audio_file.c_str(), SFM_READ, &pass5_info);
-    SNDFILE* out_snd = sf_open(stft.tgt_audio_file.c_str(), SFM_WRITE, &pass5_info);
-
-    std::vector<float> gain_buf(4096 * channels);
-    sf_count_t read_frames;
-    while ((read_frames = sf_readf_float(in_snd, gain_buf.data(), 4096)) > 0) {
-        for (int i = 0; i < read_frames * channels; ++i) gain_buf[i] *= makeup_scalar;
-        sf_writef_float(out_snd, gain_buf.data(), read_frames);
-    }
-
-    sf_close(in_snd);
-    sf_close(out_snd);
-    std::remove(temp_audio_file.c_str());
-
-    std::cout << "[Success] Final Master Loudness Matched & Written.\n";
+    std::cout << "\n[Loudness Match (Suggested — Not Applied)]\n";
+    std::cout << "  -> Suggested Makeup Gain : " << (total_makeup_db > 0 ? "+" : "")
+              << std::fixed << std::setprecision(2) << total_makeup_db << " dB\n";
 }

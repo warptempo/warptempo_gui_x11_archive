@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
-#include <cstdio>
+#include <string>
+#include <unordered_map>
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
@@ -10,39 +11,63 @@
 int main(int argc, char* argv[]) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0]
-                  << " <source_audio> <timemap_file> <target_audio>"
-                  << " [N=4096] [low_thresh_hz=50.0]"
-                  << " [hpss_beta=0.5] [hpss_Lh,Lpmax=31,7]"
-                  << " [tm_params=3,0.01,0.501] [tm_xovers=50,500,2000]\n"
+                  << " <source_audio> <timemap_file> <target_audio> [key=value ...]\n"
                   << "\n"
-                  << "  hpss_beta          : Mask sharpness exponent. Lower = less LF bleed into Foreground.\n"
-                  << "  hpss_Lh,Lpmax      : Horizontal context frames (Background sponge), max vertical clamp.\n"
-                  << "  tm_params          : Transient Matcher — W_frames, RMS_floor, RMS_peak.\n"
-                  << "  tm_xovers          : LR4 crossover frequencies in Hz — xover_0, xover_1, xover_2.\n"
+                  << "  N=4096          FFT size (divisible by 4)\n"
+                  << "  beta=2.0        HPSS mask sharpness exponent\n"
+                  << "  L_h=31          Horizontal context half-width (frames)\n"
+                  << "  L_p=7           Vertical filter max clamp (bins)\n"
+                  << "  tm_frames=3     TM zone energy window (±frames)\n"
+                  << "  tm_floor=-40    Gain gate lower anchor (dBFS)\n"
+                  << "  tm_peak=-12     Gain gate upper anchor (dBFS)\n"
+                  << "  tm_knee=6       Gain gate knee width (dB)\n"
+                  << "  xover_0=50      LR4 safety floor crossover (Hz)\n"
+                  << "  xover_1=500     LR4 low/mid crossover (Hz)\n"
+                  << "  xover_2=2000    LR4 mid/high crossover (Hz)\n"
+                  << "  hpf_hz=30       Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)\n"
+                  << "  apply_tm=both   TM routing: percussive | tonal | both | none\n"
+                  << "  output_mode=split  Output: split (_tonal/_percussive files) | combined\n"
                   << "\n"
                   << "  PhaseVocoder, HPSS, and Synthesis always run.\n";
         return 1;
     }
 
-    // --- Parse CLI ---
+    // --- Parse CLI (key=value) ---
     AudioSTFT audio_stft;
 
     audio_stft.tgt_audio_file = argv[3];
 
-    audio_stft.N              = (argc >= 5) ? std::stoi(argv[4]) : 4096;
-    audio_stft.low_threshold_hz = (argc >= 6) ? std::stod(argv[5]) : 50.0;
+    std::unordered_map<std::string, std::string> kv;
+    for (int i = 4; i < argc; ++i) {
+        std::string arg = argv[i];
+        auto eq = arg.find('=');
+        if (eq != std::string::npos)
+            kv[arg.substr(0, eq)] = arg.substr(eq + 1);
+    }
+    auto kd = [&](const char* k, double d) -> double {
+        auto it = kv.find(k); return (it != kv.end()) ? std::stod(it->second) : d;
+    };
+    auto ki = [&](const char* k, int d) -> int {
+        auto it = kv.find(k); return (it != kv.end()) ? std::stoi(it->second) : d;
+    };
+    auto ks = [&](const char* k, const char* d) -> std::string {
+        auto it = kv.find(k); return (it != kv.end()) ? it->second : d;
+    };
 
-    if (argc >= 7) audio_stft.beta = std::stod(argv[6]);
-    if (argc >= 8) std::sscanf(argv[7], "%d,%d",
-                               &audio_stft.L_h, &audio_stft.L_p_max);
-    if (argc >= 9) std::sscanf(argv[8], "%d,%lf,%lf",
-                               &audio_stft.tm_W_frames,
-                               &audio_stft.tm_RMS_floor,
-                               &audio_stft.tm_RMS_peak);
-    if (argc >= 10) std::sscanf(argv[9], "%lf,%lf,%lf",
-                                &audio_stft.tm_xover_0,
-                                &audio_stft.tm_xover_1,
-                                &audio_stft.tm_xover_2);
+    audio_stft.N                = ki("N",           4096);
+    audio_stft.beta             = kd("beta",          2.0);
+    audio_stft.L_h              = ki("L_h",            31);
+    audio_stft.L_p_max          = ki("L_p",             7);
+    audio_stft.tm_W_frames      = ki("tm_frames",       3);
+    audio_stft.tm_floor_db      = kd("tm_floor",    -40.0);
+    audio_stft.tm_peak_db       = kd("tm_peak",     -12.0);
+    audio_stft.tm_knee_db       = kd("tm_knee",       6.0);
+    audio_stft.tm_xover_0       = kd("xover_0",      50.0);
+    audio_stft.tm_xover_1       = kd("xover_1",     500.0);
+    audio_stft.tm_xover_2       = kd("xover_2",    2000.0);
+    audio_stft.hpf_hz           = kd("hpf_hz",       30.0);
+    audio_stft.apply_tm         = ks("apply_tm",    "both");
+    audio_stft.output_mode      = ks("output_mode", "split");
 
     if (audio_stft.N % 4 != 0) {
         std::cerr << "Error: N must be divisible by 4.\n";
