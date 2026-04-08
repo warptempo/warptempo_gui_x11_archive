@@ -7,28 +7,10 @@
 #include <fftw3.h>
 #include <sndfile.h>
 
-// --- Configuration Constants ---
-const double ATTACK_TOLERANCE_LU = 3.0;
-const double RELEASE_TOLERANCE_LU = 8.0;
-const double MIN_GAP_SEC = 0.5;
-const double MIN_PHRASE_SEC = 5.0;
-const size_t TOP_X_CHUNKS = 10;
-const int CURVE_RESOLUTION = 500;
-
 // --- Data Structures ---
 struct TimeMapSegment {
     size_t src_frame;
     size_t tgt_frame;
-};
-
-struct AcousticBlock {
-    size_t start_frame;
-    size_t end_frame;
-    double duration_sec;
-};
-
-struct Point {
-    double x, y;
 };
 
 // --- DSP Helpers ---
@@ -67,17 +49,6 @@ inline double map_source_to_target(size_t src_frame, const std::vector<TimeMapSe
     return 0.0;
 }
 
-// --- Dynamics Parameters ---
-struct DynamicsParams {
-    double thresh_low = -25.0, thresh_mid = -20.0, thresh_high = -25.0;
-    double knee_low = 6.0, knee_mid = 6.0, knee_high = 6.0;
-    double atten_low = -24.0, atten_mid = -24.0, atten_high = -24.0;
-    double tau_B_low = 50.0, tau_B_mid = 30.0, tau_B_high = 20.0;
-    double tau_F_low = 250.0, tau_F_mid = 150.0, tau_F_high = 80.0;
-    double depth_low = 1.0, depth_mid = 1.0, depth_high = 1.0;
-    double xover_low = 120.0, xover_high = 3500.0;
-};
-
 // --- Central Pipeline Container ---
 // Minimum system RAM: 4 GB (array footprint ~1.64 GB + OS + FFTW planning)
 struct AudioSTFT {
@@ -115,29 +86,14 @@ struct AudioSTFT {
     // Virtual target buffer (Pass 1 output)
     std::vector<float> virtual_tgt_buf;
 
-    // EQ matcher output
-    std::vector<double> multiplier_array;
-    std::vector<double> raw_delta_db;
-    std::vector<Point> smoothed_curve;
-    double global_eq_weighted_sum = 0.0;
-    double global_src_energy_sum = 0.0;
-
-    // LR4 Dynamics output
-    std::vector<double> W_L, W_M, W_H;
-    std::vector<double> S_traj_L, S_traj_M, S_traj_H;
-    int total_analysis_frames = 0;
-    DynamicsParams dyn_params;
-
     // HPSS Parameters
-    double G_fg = 1.0;    // Foreground Gain (Unity default for transparent operation)
-    double G_bg = 1.0;    // Background Gain (Unity default for transparent operation)
-    double beta = 0.5;    // Mask exponent (0.5 = Wiener-filter exponent, sharpens transient/tonal split)
-    int L_h = 31;         // 63-frame horizontal context (Background room sponge)
-    int L_p_max = 7;      // Max vertical filter clamp
+    double beta    = 0.5; // Mask exponent (Wiener-filter; reduce to limit LF bleed into Foreground)
+    int    L_h     = 31;  // 63-frame horizontal context (slow-moving background sponge)
+    int    L_p_max = 7;   // Max vertical filter clamp — do not increase beyond 7
 
     // HPSS Mask Arrays: [channel][frame][bin]
-    std::vector<std::vector<std::vector<double>>> M_h_mask;
-    std::vector<std::vector<std::vector<double>>> M_p_mask;
+    std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Tonal/Horizontal)
+    std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Transient/Vertical)
 
     // Transient Matcher Parameters
     int    tm_W_frames  = 3;      // ± frame radius for zonal energy accumulation
@@ -148,10 +104,10 @@ struct AudioSTFT {
     double tm_xover_2   = 2000.0; // Mid-to-High crossover (Hz)
 
     // Transient Matcher per-frame scalars (size = frame_map.size())
-    std::vector<double> C_rms;       // Soft-knee RMS modulation depth [0,1]
-    std::vector<double> delta_low;   // Zone Z1 energy ratio (50–500 Hz)
-    std::vector<double> delta_mid;   // Zone Z2 energy ratio (500–2000 Hz)
-    std::vector<double> delta_high;  // Zone Z3 energy ratio (>2000 Hz)
+    std::vector<double> C_rms;      // Soft-knee RMS modulation depth [0,1]
+    std::vector<double> delta_low;  // Zone Z1 energy ratio (50–500 Hz)
+    std::vector<double> delta_mid;  // Zone Z2 energy ratio (500–2000 Hz)
+    std::vector<double> delta_high; // Zone Z3 energy ratio (>2000 Hz)
 
     // LR4 per-bin frequency weights (size = N/2 + 1), pre-computed in main.cpp
     std::vector<double> tm_W_Z0; // Lowpass  @ tm_xover_0  (safety floor band)
@@ -160,14 +116,11 @@ struct AudioSTFT {
     std::vector<double> tm_W_Z3; // Highpass @ tm_xover_2             (high zone)
 
     // Synthesis compensation
-    double global_dyn_atten_sum = 0.0;
-    size_t active_dyn_frames = 0;
     double global_hpss_atten_sum = 0.0;
     size_t active_hpss_frames = 0;
 
     // Output
     std::string tgt_audio_file;
-    bool enable_makeup_gain = true;
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;

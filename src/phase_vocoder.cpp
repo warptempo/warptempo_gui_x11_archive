@@ -99,5 +99,4 @@ void PhaseVocoder::process(AudioSTFT& stft) {
         }
     }
 
-    stft.total_analysis_frames = num_frames;
 }

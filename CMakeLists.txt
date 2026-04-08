@@ -18,10 +18,7 @@ add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
     src/hpss.cpp
-    src/eq_matcher.cpp
-    src/dynamics_lr4.cpp
     src/synthesis.cpp
-    src/visualizer.cpp
 )
 target_include_directories(warptempo_engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src

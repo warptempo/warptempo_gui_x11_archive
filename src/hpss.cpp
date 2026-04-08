@@ -33,10 +33,9 @@ void HPSS::process(AudioSTFT& stft) {
     // Builds per-frame C_rms and per-zone delta scalars used by synthesis.cpp
     // to apply restorative gain (G_p) on the Foreground (transient) channel.
     //
-    // X_src: raw source magnitudes (no EQ/Dynamics scalars) — mono average.
-    // X_tgt: post-EQ/Dynamics magnitudes — captures processing-induced energy
-    //        changes. When both modules are bypassed, X_src == X_tgt → delta == 1
-    //        → G_p == 1 → transparent.
+    // Both X_src and X_tgt are built from raw magnitudes (no EQ/Dynamics).
+    // They are identical in the current pipeline; delta == 1 → G_p == 1 for
+    // unprocessed content. C_rms still provides frame-level RMS modulation.
     // Peak memory: ~2 × M_total × K × 8 bytes, freed before per-channel loop.
     // ========================================================================
     std::cout << "          -> TM Analysis: building source/target spectrograms for delta computation...\n";
@@ -66,15 +65,8 @@ void HPSS::process(AudioSTFT& stft) {
 
             for (int k = 0; k < K; ++k) {
                 double mag = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
-                double eq_scalar  = stft.multiplier_array.empty() ? 1.0 : stft.multiplier_array[k];
-                double dyn_scalar = 1.0;
-                if (!stft.S_traj_L.empty() && !stft.W_L.empty()) {
-                    dyn_scalar = (stft.S_traj_L[m] * stft.W_L[k]) +
-                                 (stft.S_traj_M[m] * stft.W_M[k]) +
-                                 (stft.S_traj_H[m] * stft.W_H[k]);
-                }
                 X_src[m][k] = mag;
-                X_tgt[m][k] = mag * eq_scalar * dyn_scalar;
+                X_tgt[m][k] = mag;
             }
         }
 
@@ -148,18 +140,8 @@ void HPSS::process(AudioSTFT& stft) {
                 stft.fft_in[n] = read_buf[n * channels + ch] * stft.window[n];
             fftw_execute(stft.plan_fwd);
 
-            // Apply EQ and Dynamics so median filters work on post-processed geometry.
-            for (int k = 0; k < K; ++k) {
-                double mag = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
-                double eq_scalar  = stft.multiplier_array.empty() ? 1.0 : stft.multiplier_array[k];
-                double dyn_scalar = 1.0;
-                if (!stft.S_traj_L.empty() && !stft.W_L.empty()) {
-                    dyn_scalar = (stft.S_traj_L[m] * stft.W_L[k]) +
-                                 (stft.S_traj_M[m] * stft.W_M[k]) +
-                                 (stft.S_traj_H[m] * stft.W_H[k]);
-                }
-                X[m][k] = mag * eq_scalar * dyn_scalar;
-            }
+            for (int k = 0; k < K; ++k)
+                X[m][k] = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
         }
 
         // ====================================================================
