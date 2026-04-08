@@ -1,6 +1,7 @@
 #include "hpss.h"
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 
 // 2D median helper for vertical (frequency-axis) filtering.
 static double median_of_2d_col(std::vector<double>& scratch, const std::vector<std::vector<double>>& X,
@@ -26,6 +27,101 @@ void HPSS::process(AudioSTFT& stft) {
     stft.M_p_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0)));
 
     std::vector<float> read_buf(N * channels, 0.0f);
+
+    // ========================================================================
+    // TRANSIENT MATCHER ANALYSIS
+    // Builds per-frame C_rms and per-zone delta scalars used by synthesis.cpp
+    // to apply restorative gain (G_p) on the Foreground (transient) channel.
+    //
+    // X_src: raw source magnitudes (no EQ/Dynamics scalars) — mono average.
+    // X_tgt: post-EQ/Dynamics magnitudes — captures processing-induced energy
+    //        changes. When both modules are bypassed, X_src == X_tgt → delta == 1
+    //        → G_p == 1 → transparent.
+    // Peak memory: ~2 × M_total × K × 8 bytes, freed before per-channel loop.
+    // ========================================================================
+    std::cout << "          -> TM Analysis: building source/target spectrograms for delta computation...\n";
+    {
+        stft.C_rms.assign(M_total, 0.0);
+        stft.delta_low.assign(M_total, 1.0);
+        stft.delta_mid.assign(M_total, 1.0);
+        stft.delta_high.assign(M_total, 1.0);
+
+        std::vector<std::vector<double>> X_src(M_total, std::vector<double>(K, 0.0));
+        std::vector<std::vector<double>> X_tgt(M_total, std::vector<double>(K, 0.0));
+
+        for (int m = 0; m < M_total; ++m) {
+            int64_t t_a = fm[m];
+            std::fill(read_buf.begin(), read_buf.end(), 0.0f);
+            if (t_a >= 0 && t_a < stft.src_info.frames) {
+                sf_seek(stft.src_snd, t_a, SEEK_SET);
+                sf_readf_float(stft.src_snd, read_buf.data(), N);
+            }
+            // Mono average across all channels
+            for (int n = 0; n < N; ++n) {
+                double s = 0.0;
+                for (int c = 0; c < channels; ++c) s += read_buf[n * channels + c];
+                stft.fft_in[n] = (s / channels) * stft.window[n];
+            }
+            fftw_execute(stft.plan_fwd);
+
+            for (int k = 0; k < K; ++k) {
+                double mag = std::hypot(stft.fft_out[k][0], stft.fft_out[k][1]);
+                double eq_scalar  = stft.multiplier_array.empty() ? 1.0 : stft.multiplier_array[k];
+                double dyn_scalar = 1.0;
+                if (!stft.S_traj_L.empty() && !stft.W_L.empty()) {
+                    dyn_scalar = (stft.S_traj_L[m] * stft.W_L[k]) +
+                                 (stft.S_traj_M[m] * stft.W_M[k]) +
+                                 (stft.S_traj_H[m] * stft.W_H[k]);
+                }
+                X_src[m][k] = mag;
+                X_tgt[m][k] = mag * eq_scalar * dyn_scalar;
+            }
+        }
+
+        // C_rms: trailing 21-frame spectral RMS mapped through a soft-knee log curve.
+        // Louder moments receive more transient correction; silence floor is ignored.
+        for (int m = 0; m < M_total; ++m) {
+            double sum_sq = 0.0;
+            int count = 0;
+            for (int i = std::max(0, m - 20); i <= m; ++i) {
+                for (int k = 1; k < K; ++k)  // skip DC
+                    sum_sq += X_src[i][k] * X_src[i][k];
+                ++count;
+            }
+            double rms = (count > 0 && K > 1)
+                             ? std::sqrt(sum_sq / (static_cast<double>(count) * (K - 1)))
+                             : 0.0;
+            stft.C_rms[m] = std::max(0.0, std::min(1.0,
+                std::log10((rms + 1e-12) / stft.tm_RMS_floor) /
+                std::log10(stft.tm_RMS_peak / stft.tm_RMS_floor)));
+        }
+
+        // Zone boundary bins (first bin at or above each crossover frequency)
+        const int k_z0 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_0 / stft.bin_hz_width)));
+        const int k_z1 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_1 / stft.bin_hz_width)));
+        const int k_z2 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_2 / stft.bin_hz_width)));
+        const int W    = stft.tm_W_frames;
+
+        for (int m = 0; m < M_total; ++m) {
+            double src_low = 0.0, src_mid = 0.0, src_high = 0.0;
+            double tgt_low = 0.0, tgt_mid = 0.0, tgt_high = 0.0;
+
+            for (int dm = -W; dm <= W; ++dm) {
+                int mi = std::max(0, std::min(M_total - 1, m + dm));
+                for (int k = k_z0; k < k_z1; ++k) { src_low  += X_src[mi][k]; tgt_low  += X_tgt[mi][k]; }
+                for (int k = k_z1; k < k_z2; ++k) { src_mid  += X_src[mi][k]; tgt_mid  += X_tgt[mi][k]; }
+                for (int k = k_z2; k < K;    ++k) { src_high += X_src[mi][k]; tgt_high += X_tgt[mi][k]; }
+            }
+
+            stft.delta_low[m]  = (src_low  > 1e-9) ? (tgt_low  / src_low)  : 1.0;
+            stft.delta_mid[m]  = (src_mid  > 1e-9) ? (tgt_mid  / src_mid)  : 1.0;
+            stft.delta_high[m] = (src_high > 1e-9) ? (tgt_high / src_high) : 1.0;
+        }
+
+        X_src.clear(); X_src.shrink_to_fit();
+        X_tgt.clear(); X_tgt.shrink_to_fit();
+        std::cout << "          -> TM Analysis: C_rms and deltas computed. Temporaries freed.\n";
+    }
 
     // Process each channel independently to bound peak memory to ~400 MB per pass.
     for (int ch = 0; ch < channels; ++ch) {

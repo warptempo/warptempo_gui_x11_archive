@@ -139,6 +139,26 @@ struct AudioSTFT {
     std::vector<std::vector<std::vector<double>>> M_h_mask;
     std::vector<std::vector<std::vector<double>>> M_p_mask;
 
+    // Transient Matcher Parameters
+    int    tm_W_frames  = 3;      // ± frame radius for zonal energy accumulation
+    double tm_RMS_floor = 0.01;   // Soft-knee lower anchor (silence floor)
+    double tm_RMS_peak  = 0.501;  // Soft-knee upper anchor (full correction)
+    double tm_xover_0   = 50.0;   // Safety floor cutoff (Hz)
+    double tm_xover_1   = 500.0;  // Low-to-Mid crossover (Hz)
+    double tm_xover_2   = 2000.0; // Mid-to-High crossover (Hz)
+
+    // Transient Matcher per-frame scalars (size = frame_map.size())
+    std::vector<double> C_rms;       // Soft-knee RMS modulation depth [0,1]
+    std::vector<double> delta_low;   // Zone Z1 energy ratio (50–500 Hz)
+    std::vector<double> delta_mid;   // Zone Z2 energy ratio (500–2000 Hz)
+    std::vector<double> delta_high;  // Zone Z3 energy ratio (>2000 Hz)
+
+    // LR4 per-bin frequency weights (size = N/2 + 1), pre-computed in main.cpp
+    std::vector<double> tm_W_Z0; // Lowpass  @ tm_xover_0  (safety floor band)
+    std::vector<double> tm_W_Z1; // Bandpass @ tm_xover_0–tm_xover_1 (low zone)
+    std::vector<double> tm_W_Z2; // Bandpass @ tm_xover_1–tm_xover_2 (mid zone)
+    std::vector<double> tm_W_Z3; // Highpass @ tm_xover_2             (high zone)
+
     // Synthesis compensation
     double global_dyn_atten_sum = 0.0;
     size_t active_dyn_frames = 0;

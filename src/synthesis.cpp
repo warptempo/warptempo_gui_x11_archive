@@ -111,10 +111,24 @@ void Synthesis::process(AudioSTFT& stft) {
                     M[k] *= dyn_scalar;
                 }
 
-                // HPSS Foreground/Background mask application with energy tracking
+                // HPSS Foreground/Background mask application with Transient Matcher gain
                 if (!stft.M_h_mask.empty() && !stft.M_p_mask.empty()) {
-                    double hpss_scalar = (stft.G_bg * stft.M_h_mask[ch][frame_idx][k]) +
-                                         (stft.G_fg * stft.M_p_mask[ch][frame_idx][k]);
+                    // LR4-blended delta: bin k picks up the weighted mix of per-zone
+                    // energy ratios. W_Z0 anchors to 1.0 (safety floor passthrough).
+                    double blended_delta = 1.0;
+                    if (!stft.tm_W_Z0.empty()) {
+                        blended_delta = (stft.tm_W_Z0[k] * 1.0)
+                                      + (stft.tm_W_Z1[k] * stft.delta_low[frame_idx])
+                                      + (stft.tm_W_Z2[k] * stft.delta_mid[frame_idx])
+                                      + (stft.tm_W_Z3[k] * stft.delta_high[frame_idx]);
+                    }
+                    // G_p: restorative gain on the Foreground channel, scaled by
+                    // C_rms so that low-level / silent frames receive no correction.
+                    double C = stft.C_rms.empty() ? 1.0 : stft.C_rms[frame_idx];
+                    double G_p = 1.0 + (blended_delta - 1.0) * C;
+
+                    double hpss_scalar = (stft.G_bg * stft.M_h_mask[ch][frame_idx][k])
+                                       + (stft.G_fg * stft.M_p_mask[ch][frame_idx][k] * G_p);
                     double E_pre_hpss = M[k] * M[k];
                     double s_bin_hpss = std::max(1e-9, hpss_scalar);
                     frame_hpss_weighted_sum += E_pre_hpss * 20.0 * std::log10(s_bin_hpss);

@@ -13,15 +13,17 @@
 int main(int argc, char* argv[]) {
     if (argc < 4) {
         std::cerr << "Usage: " << argv[0] << " <source_audio> <timemap_file> <target_audio> "
-                  << "[N=3328] [low_thresh_hz=50.0]\n"
+                  << "[N=4096] [low_thresh_hz=50.0]\n"
                   << "       [thresh_L/M/H=-25,-20,-25] [knee=6.0] [atten_max=-24.0]\n"
                   << "       [tauB_L/M/H=50,30,20] [tauF_L/M/H=250,150,80] [depth_L/M/H=1.0,1.0,1.0]\n"
                   << "       [xover_L,H=120,3500]\n"
                   << "       [hpss_Gfg,Gbg,beta=1.5,1.0,0.5] [hpss_Lh,Lpmax=31,7]\n"
-                  << "       [active_modules=eq,dyn,hpss,makeup]  -- comma-separated whitelist of DSP modules to run.\n"
-                  << "          Pass 'eq,dyn,hpss,makeup' to run all (default), or e.g. 'hpss' to run only HPSS.\n"
-                  << "          Omit 'makeup' to skip loudness compensation (e.g. 'eq,dyn,hpss').\n"
-                  << "          PhaseVocoder and Synthesis always run regardless of this flag.\n";
+                  << "       [active_modules=hpss,makeup]  -- comma-separated whitelist of DSP modules to run.\n"
+                  << "          Pass 'eq,dyn,hpss,makeup' to run all, or e.g. 'hpss,makeup' for HPSS only (default).\n"
+                  << "          Omit 'makeup' to skip loudness compensation (e.g. 'hpss').\n"
+                  << "          PhaseVocoder and Synthesis always run regardless of this flag.\n"
+                  << "       [tm_params=3,0.01,0.501]  -- Transient Matcher: W_frames,RMS_floor,RMS_peak\n"
+                  << "       [tm_xovers=50,500,2000]   -- Transient Matcher LR4 crossovers in Hz: xover_0,xover_1,xover_2\n";
         return 1;
     }
 
@@ -32,7 +34,7 @@ int main(int argc, char* argv[]) {
     std::string map_file = argv[2];
     audio_stft.tgt_audio_file = argv[3];
 
-    audio_stft.N = (argc >= 5) ? std::stoi(argv[4]) : 3328;
+    audio_stft.N = (argc >= 5) ? std::stoi(argv[4]) : 4096;
     audio_stft.low_threshold_hz = (argc >= 6) ? std::stod(argv[5]) : 50.0;
 
     auto& dp = audio_stft.dyn_params;
@@ -48,8 +50,18 @@ int main(int argc, char* argv[]) {
     if (argc >= 14) std::sscanf(argv[13], "%lf,%lf,%lf", &audio_stft.G_fg, &audio_stft.G_bg, &audio_stft.beta);
     if (argc >= 15) std::sscanf(argv[14], "%d,%d", &audio_stft.L_h, &audio_stft.L_p_max);
 
-    std::string active_modules = "eq,dyn,hpss,makeup";
+    std::string active_modules = "hpss,makeup";
     if (argc >= 16) active_modules = argv[15];
+
+    // Transient Matcher CLI parsing
+    if (argc >= 17) std::sscanf(argv[16], "%d,%lf,%lf",
+                                &audio_stft.tm_W_frames,
+                                &audio_stft.tm_RMS_floor,
+                                &audio_stft.tm_RMS_peak);
+    if (argc >= 18) std::sscanf(argv[17], "%lf,%lf,%lf",
+                                &audio_stft.tm_xover_0,
+                                &audio_stft.tm_xover_1,
+                                &audio_stft.tm_xover_2);
 
     audio_stft.enable_makeup_gain = active_modules.find("makeup") != std::string::npos;
 
@@ -86,6 +98,49 @@ int main(int argc, char* argv[]) {
     // --- Generate canonical frame map (once, shared by all passes) ---
     audio_stft.frame_map = audio_stft.generate_frame_map();
     std::cout << "[Frame Map] Generated " << audio_stft.frame_map.size() << " frames (int64_t).\n";
+
+    // --- Pre-calculate LR4 Transient Matcher frequency weights ---
+    // Four bands sum to exactly 1.0 at every bin by construction:
+    //   W_Z0 = LP(xover_0)
+    //   W_Z3 = HP(xover_2)
+    //   middle = 1 - W_Z0 - W_Z3                  (guaranteed >= 0 inside passband)
+    //   W_Z1 = middle * LP(xover_1)
+    //   W_Z2 = middle * HP(xover_1)
+    //   Sum  = W_Z0 + middle*(LP1 + HP1) + W_Z3 = W_Z0 + middle + W_Z3 = 1
+    {
+        const int K = audio_stft.N / 2 + 1;
+        audio_stft.tm_W_Z0.resize(K);
+        audio_stft.tm_W_Z1.resize(K);
+        audio_stft.tm_W_Z2.resize(K);
+        audio_stft.tm_W_Z3.resize(K);
+
+        // LR4 power responses: LP(f,fc) = 1/(1+(f/fc)^8), HP = 1 - LP.
+        // The power-of-8 exponent yields a 24 dB/oct roll-off and guarantees
+        // LP(fc) = HP(fc) = 0.5, so LP + HP = 1 at every frequency.
+        auto lr4_lp = [](double f, double fc) -> double {
+            double r8 = std::pow(f / fc, 8.0);
+            return 1.0 / (1.0 + r8);
+        };
+        auto lr4_hp = [](double f, double fc) -> double {
+            double r8 = std::pow(f / fc, 8.0);
+            return r8 / (1.0 + r8);
+        };
+
+        for (int k = 0; k < K; ++k) {
+            double f = k * audio_stft.bin_hz_width;
+            // f == 0 (DC): pow(0,8) = 0 → lp=1, hp=0 — handled correctly by std::pow
+            double w_z0   = lr4_lp(f, audio_stft.tm_xover_0);
+            double w_z3   = lr4_hp(f, audio_stft.tm_xover_2);
+            double middle = 1.0 - w_z0 - w_z3;
+            audio_stft.tm_W_Z0[k] = w_z0;
+            audio_stft.tm_W_Z1[k] = middle * lr4_lp(f, audio_stft.tm_xover_1);
+            audio_stft.tm_W_Z2[k] = middle * lr4_hp(f, audio_stft.tm_xover_1);
+            audio_stft.tm_W_Z3[k] = w_z3;
+        }
+        std::cout << "[LR4 Weights] Computed " << K << " bins ("
+                  << audio_stft.tm_xover_0 << "/" << audio_stft.tm_xover_1
+                  << "/" << audio_stft.tm_xover_2 << " Hz crossovers, unity-sum guaranteed).\n";
+    }
 
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
