@@ -1,4 +1,4 @@
-<REAPER_PROJECT 0.1 "7.66/linux-x86_64" 1775591644 0
+<REAPER_PROJECT 0.1 "7.66/linux-x86_64" 1775614616 0
   <NOTES 0 2
   >
   RIPPLE 0 0
@@ -19,8 +19,8 @@
   VIDEO_CONFIG 0 0 256
   PANMODE 3
   PANLAWFLAGS 3
-  CURSOR 1396.6413407342955
-  ZOOM 0.49690638516767 0 0
+  CURSOR 234.64306871855399
+  ZOOM 0.98447399815196 0 0
   VZOOMEX 18.97222137 0
   USE_REC_CFG 0
   RECMODE 1
@@ -158,65 +158,65 @@
     <ITEM
       POSITION 0
       SNAPOFFS 0
-      LENGTH 455.84544217687073
+      LENGTH 455.87736961451247
       LOOP 1
       ALLTAKES 0
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
       SEL 0
-      IGUID {CD61660E-DA95-85B7-514C-30C541FFB7BC}
-      IID 134
+      IGUID {D8D5F3CE-5E2D-C545-31F1-7C82642F4821}
+      IID 141
       NAME "engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp).wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
-      GUID {32A0338A-7D0E-99AA-6961-FE54A073F82E}
+      GUID {DADB7516-02C6-A7B0-FF1C-000722D19158}
       <SOURCE WAVE
         FILE "Media/engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - I. Molto allegro (2024 Remaster, Tempo Warp).wav"
       >
     >
     <ITEM
-      POSITION 491.83454477979222
+      POSITION 498.74349238445888
       SNAPOFFS 0
-      LENGTH 398.86947845804991
+      LENGTH 398.89560090702946
       LOOP 1
       ALLTAKES 0
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
       SEL 0
-      IGUID {F29B650C-2160-8C7C-8397-867672C4A8EF}
-      IID 135
+      IGUID {93A039C4-A171-E200-28C4-D0E06BD604FD}
+      IID 142
       NAME "engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - II. Andante (2024 Remaster, Tempo Warp).wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
-      GUID {49F02FD5-0855-3AF7-1E06-4CDDD0E8FA12}
+      GUID {4986364C-6070-B7FC-9B7D-E1751FD9B748}
       <SOURCE WAVE
         FILE "Media/engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - II. Andante (2024 Remaster, Tempo Warp).wav"
       >
     >
     <ITEM
-      POSITION 925.04927462943488
+      POSITION 933.49342057294859
       SNAPOFFS 0
-      LENGTH 212.26376417233561
+      LENGTH 212.27682539682539
       LOOP 1
       ALLTAKES 0
       FADEIN 1 0 0 1 0 0 0
       FADEOUT 1 0 0 1 0 0 0
       MUTE 0 0
-      SEL 0
-      IGUID {1E785664-3691-2E13-2F9F-E4B328D41F25}
-      IID 136
+      SEL 1
+      IGUID {1367766E-2DD0-C909-C29A-7F7D22C5487E}
+      IID 143
       NAME "engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - III. Menuetto. Allegretto (2024 Remaster, Tempo Warp).wav"
       VOLPAN 1 0 1 -1
       SOFFS 0
       PLAYRATE 1 1 0 -1 0 0.0025
       CHANMODE 0
-      GUID {BC1EA831-03B7-49E3-E6E6-0D78AC39034C}
+      GUID {12ABE2C3-2A22-ED39-50DC-5EB2A8D9250D}
       <SOURCE WAVE
         FILE "Media/engine=warptempo;limiter=false;Mozart - Symphony No. 40 in G Minor (K. 550) - III. Menuetto. Allegretto (2024 Remaster, Tempo Warp).wav"
       >
