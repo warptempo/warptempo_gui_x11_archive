@@ -24,6 +24,3 @@ adapters/midi/midifile
 adapters/midi/midi_adapter
 adapters/midi/build/
 
-# EQ Match Build Artifacts
-eqmatch/build/
-
