@@ -7,7 +7,25 @@
 #include <fftw3.h>
 #include <sndfile.h>
 
+// --- EQ Matcher Constants ---
+const double ATTACK_TOLERANCE_LU  = 3.0;
+const double RELEASE_TOLERANCE_LU = 8.0;
+const double MIN_GAP_SEC          = 0.5;
+const double MIN_PHRASE_SEC       = 5.0;
+const size_t TOP_X_CHUNKS         = 10;
+const int    CURVE_RESOLUTION     = 500;
+
 // --- Data Structures ---
+struct AcousticBlock {
+    size_t start_frame;
+    size_t end_frame;
+    double duration_sec;
+};
+
+struct Point {
+    double x, y;
+};
+
 struct TimeMapSegment {
     size_t src_frame;
     size_t tgt_frame;
@@ -95,12 +113,14 @@ struct AudioSTFT {
     std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
     std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
 
-    // EQ Diagnostic: raw PSD delta (bin → dB), written by EQMatcher, read by Visualizer
-    std::vector<double> raw_delta_db;
-
     // Output paths (set from CLI argv[3] and argv[4])
     std::string perc_audio_file;
     std::string harmonic_audio_file;
+    std::string tgt_audio_file;     // base path for visualizer PNG naming
+
+    // EQ Matcher output (diagnostic only — not applied to audio)
+    std::vector<double> raw_delta_db;
+    std::vector<Point>  smoothed_curve;
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;

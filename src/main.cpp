@@ -28,6 +28,7 @@ int main(int argc, char* argv[]) {
 
     audio_stft.perc_audio_file     = argv[3];
     audio_stft.harmonic_audio_file = argv[4];
+    audio_stft.tgt_audio_file      = argv[3];  // base path for visualizer PNG
 
     std::unordered_map<std::string, std::string> kv;
     for (int i = 5; i < argc; ++i) {

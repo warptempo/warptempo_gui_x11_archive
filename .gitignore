@@ -5,6 +5,7 @@
 build/
 
 # Claude Code
+.claude/
 CLAUDE.md
 
 # Bungee Adapter Build Artifacts

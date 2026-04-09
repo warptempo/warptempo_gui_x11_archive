@@ -272,7 +272,7 @@ audio_output="$title.wav"
 mkdir -p "$(dirname "$audio_output")"
 log_output="$title.log"
 
-rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav *"$title.wav" *"$title.log"
+rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav .$md5-tmp*.png *"$title.wav" *"$title.log"
 
 # Get audio stats
 sample_rate="$(ffprobe -hide_banner -loglevel error -show_streams "$audio_input" | grep "^sample_rate=" | head -n 1 | cut -d = -f 2)"
@@ -315,17 +315,9 @@ if [[ "$engine" == warptempo ]]; then
 #  beta=2.0            HPSS mask sharpness exponent
 #  L_h=31              Horizontal context half-width (frames)
 #  L_p=7               Vertical filter max clamp (bins)
-#  pem_frames=3        PEM zone energy window (±frames)
-#  pem_apply=true      PEM routing switch: true | false (Default is true)
-#  pem_floor=-40       RMS energy gate lower anchor (dBFS)
-#  pem_peak=-18        RMS energy gate upper anchor (dBFS)
-#  pem_knee=6          RMS energy gate knee width (dB)
-#  pem_xover_0=50      LR4 safety floor crossover (Hz)
-#  pem_xover_1=500     LR4 low/mid crossover (Hz)
-#  pem_xover_2=2000    LR4 mid/high crossover (Hz)
 #  hpf_hz=30           Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
 
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 pem_frames=3 pem_apply=false pem_floor=-40 pem_peak=-18 pem_knee=6 pem_xover_0=50 pem_xover_1=500 pem_xover_2=2000 hpf_hz=30
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 hpf_hz=30
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
@@ -370,12 +362,12 @@ elif [[ "$engine" == none ]]; then
 fi
 
 mv .$md5-timemap .timemap
-[[ -f .$md5-tmp_percussive.png ]] && mv .$md5-tmp_percussive.png .eq.png
+[[ -f .$md5-tmp_percussive_eq.png ]] && mv .$md5-tmp_percussive_eq.png .eq.png
 
 # Apply limiting or copy
 if $limiter; then
 	if [[ $engine == warptempo ]]; then
-		sox -m .$md5-tmp_harmonic.wav .$md5-tmp_percussive.wav -e floating-point -b 32 .$md5-tmp.wav
+		sox -m -v 1 .$md5-tmp_harmonic.wav .$md5-tmp_percussive.wav -e floating-point -b 32 .$md5-tmp.wav
 	fi
 	af="alimiter=latency=enabled:level=disabled:asc=disabled"
 	af+=":level_in=0dB"
@@ -388,8 +380,8 @@ if $limiter; then
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
 	if [[ $engine == warptempo ]]; then
-		mv .$md5-tmp_harmonic.wav "channel=harmonic;engine=$engine;limiter=$limiter;$audio_output"
 		mv .$md5-tmp_percussive.wav "channel=percussive;engine=$engine;limiter=$limiter;$audio_output"
+		mv .$md5-tmp_harmonic.wav "channel=harmonic;engine=$engine;limiter=$limiter;$audio_output"
 	else
 		mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"
 	fi
@@ -397,7 +389,7 @@ else
 	echo -e "$clip_warning"
 fi
 
-rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav
+rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav .$md5-tmp*.png
 
 
 
