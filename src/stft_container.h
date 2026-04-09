@@ -92,40 +92,40 @@ struct AudioSTFT {
     int    L_p_max = 7;   // Max vertical filter clamp — do not increase beyond 7
 
     // HPSS Mask Arrays: [channel][frame][bin]
-    std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Tonal/Horizontal)
-    std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Transient/Vertical)
+    std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
+    std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
 
-    // Transient Matcher Parameters
-    int    tm_W_frames  = 3;      // ± frame radius for zonal energy accumulation
-    double tm_floor_db  = -40.0;  // Gain gate lower anchor (dBFS)
-    double tm_peak_db   = -12.0;  // Gain gate upper anchor (dBFS)
-    double tm_knee_db   =   6.0;  // Gain gate knee width (dB)
-    double tm_xover_0   = 50.0;   // Safety floor cutoff (Hz)
-    double tm_xover_1   = 500.0;  // Low-to-Mid crossover (Hz)
-    double tm_xover_2   = 2000.0; // Mid-to-High crossover (Hz)
+    // PEM Parameters
+    int    pem_frames   = 3;      // ± frame radius for zonal energy accumulation
+    double pem_floor_db  = -40.0;  // Gain gate lower anchor (dBFS)
+    double pem_peak_db   = -18.0;  // Gain gate upper anchor (dBFS)
+    double pem_knee_db   =   6.0;  // Gain gate knee width (dB)
+    double pem_xover_0   = 50.0;   // Safety floor cutoff (Hz)
+    double pem_xover_1   = 500.0;  // Low-to-Mid crossover (Hz)
+    double pem_xover_2   = 2000.0; // Mid-to-High crossover (Hz)
 
-    // Output routing
-    std::string apply_tm    = "both";  // "percussive" | "tonal" | "both" | "none"
-    std::string output_mode = "split"; // "split" | "combined"
+    // PEM routing: true = apply restorative boost to percussive; false = dry extraction
+    bool pem_apply = true;
 
-    // Transient Matcher per-frame scalars (size = frame_map.size())
+    // PEM per-frame scalars (size = frame_map.size())
     std::vector<double> C_rms;      // Soft-knee RMS modulation depth [0,1]
     std::vector<double> delta_low;  // Zone Z1 energy ratio (50–500 Hz)
     std::vector<double> delta_mid;  // Zone Z2 energy ratio (500–2000 Hz)
     std::vector<double> delta_high; // Zone Z3 energy ratio (>2000 Hz)
 
     // LR4 per-bin frequency weights (size = N/2 + 1), pre-computed in main.cpp
-    std::vector<double> tm_W_Z0; // Lowpass  @ tm_xover_0  (safety floor band)
-    std::vector<double> tm_W_Z1; // Bandpass @ tm_xover_0–tm_xover_1 (low zone)
-    std::vector<double> tm_W_Z2; // Bandpass @ tm_xover_1–tm_xover_2 (mid zone)
-    std::vector<double> tm_W_Z3; // Highpass @ tm_xover_2             (high zone)
+    std::vector<double> pem_W_Z0; // Lowpass  @ pem_xover_0  (safety floor band)
+    std::vector<double> pem_W_Z1; // Bandpass @ pem_xover_0–pem_xover_1 (low zone)
+    std::vector<double> pem_W_Z2; // Bandpass @ pem_xover_1–pem_xover_2 (mid zone)
+    std::vector<double> pem_W_Z3; // Highpass @ pem_xover_2             (high zone)
 
     // Synthesis compensation
     double global_hpss_atten_sum = 0.0;
     size_t active_hpss_frames = 0;
 
-    // Output
-    std::string tgt_audio_file;
+    // Output paths (set from CLI argv[3] and argv[4])
+    std::string perc_audio_file;
+    std::string harmonic_audio_file;
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;

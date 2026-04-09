@@ -309,29 +309,23 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == warptempo ]]; then
-#Usage: ./build/warptempo_engine <source_audio> <timemap_file> <target_audio> [key=value ...]
+#Usage: ./build/warptempo_engine <source_audio> <timemap_file> <target_audio_percussive> <target_audio_harmonic> [key=value ...]
 #
-#  N=4096          FFT size (divisible by 4)
-#  beta=2.0        HPSS mask sharpness exponent
-#  L_h=31          Horizontal context half-width (frames)
-#  L_p=7           Vertical filter max clamp (bins)
-#  tm_frames=3     TM zone energy window (±frames)
-#  tm_floor=-40    Gain gate lower anchor (dBFS)
-#  tm_peak=-12     Gain gate upper anchor (dBFS)
-#  tm_knee=6       Gain gate knee width (dB)
-#  xover_0=50      LR4 safety floor crossover (Hz)
-#  xover_1=500     LR4 low/mid crossover (Hz)
-#  xover_2=2000    LR4 mid/high crossover (Hz)
-#  hpf_hz=30       Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
-#  apply_tm=both   TM routing: percussive | tonal | both | none
-#  output_mode=split  Output: split (_tonal/_percussive files) | combined
-#
-#  PhaseVocoder, HPSS, and Synthesis always run.
+#  N=4096              FFT size (divisible by 4)
+#  beta=2.0            HPSS mask sharpness exponent
+#  L_h=31              Horizontal context half-width (frames)
+#  L_p=7               Vertical filter max clamp (bins)
+#  pem_frames=3        PEM zone energy window (±frames)
+#  pem_apply=true      PEM routing switch: true | false (Default is true)
+#  pem_floor=-40       RMS energy gate lower anchor (dBFS)
+#  pem_peak=-18        RMS energy gate upper anchor (dBFS)
+#  pem_knee=6          RMS energy gate knee width (dB)
+#  pem_xover_0=50      LR4 safety floor crossover (Hz)
+#  pem_xover_1=500     LR4 low/mid crossover (Hz)
+#  pem_xover_2=2000    LR4 mid/high crossover (Hz)
+#  hpf_hz=30           Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
 
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp.wav N=4096 beta=2.0 L_h=31 L_p=7 tm_frames=3 tm_floor=-40 tm_peak=-12 tm_knee=6 xover_0=50 xover_1=500 xover_2=2000 hpf_hz=30 apply_tm=both output_mode=split
-	
-	output_mode=split
-	
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 pem_frames=3 pem_apply=true pem_floor=-40 pem_peak=-18 pem_knee=6 pem_xover_0=50 pem_xover_1=500 pem_xover_2=2000 hpf_hz=30
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
@@ -381,9 +375,8 @@ mv .$md5-timemap .timemap
 
 # Apply limiting or copy
 if $limiter; then
-	if [[ $output_mode == split ]]; then
-		echo "Error: Cannot apply limiter to split output."
-		exit 1		
+	if [[ $engine == warptempo ]]; then
+		sox -m .$md5-tmp_harmonic.wav .$md5-tmp_percussive.wav -e floating-point -b 32 .$md5-tmp.wav
 	fi
 	af="alimiter=latency=enabled:level=disabled:asc=disabled"
 	af+=":level_in=0dB"
@@ -395,8 +388,8 @@ if $limiter; then
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
-	if [[ $output_mode == split ]]; then
-		mv .$md5-tmp_tonal.wav "channel=tonal;engine=$engine;limiter=$limiter;$audio_output"
+	if [[ $engine == warptempo ]]; then
+		mv .$md5-tmp_harmonic.wav "channel=harmonic;engine=$engine;limiter=$limiter;$audio_output"
 		mv .$md5-tmp_percussive.wav "channel=percussive;engine=$engine;limiter=$limiter;$audio_output"
 	else
 		mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"

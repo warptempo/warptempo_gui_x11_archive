@@ -23,8 +23,8 @@ void HPSS::process(AudioSTFT& stft) {
     const int M_total = static_cast<int>(fm.size());
 
     // Pre-allocate 3D mask arrays: [channel][frame][bin]
-    stft.M_h_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0)));
-    stft.M_p_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0)));
+    stft.M_h_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0))); // Harmonic
+    stft.M_p_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0))); // Percussive
 
     std::vector<float> read_buf(N * channels, 0.0f);
 
@@ -38,14 +38,14 @@ void HPSS::process(AudioSTFT& stft) {
     // unprocessed content. C_rms still provides frame-level RMS modulation.
     // Peak memory: ~2 × M_total × K × 8 bytes, freed before per-channel loop.
     // ========================================================================
-    if (stft.apply_tm == "none") {
+    if (!stft.pem_apply) {
         stft.C_rms.assign(M_total, 0.0);
         stft.delta_low.assign(M_total, 1.0);
         stft.delta_mid.assign(M_total, 1.0);
         stft.delta_high.assign(M_total, 1.0);
-        std::cout << "          -> TM Analysis: bypassed (apply_tm=none).\n";
+        std::cout << "          -> PEM Analysis: bypassed (pem_apply=false).\n";
     } else {
-    std::cout << "          -> TM Analysis: building source/target spectrograms for delta computation...\n";
+    std::cout << "          -> PEM Analysis: building source/target spectrograms for delta computation...\n";
     {
         stft.C_rms.assign(M_total, 0.0);
         stft.delta_low.assign(M_total, 1.0);
@@ -93,12 +93,12 @@ void HPSS::process(AudioSTFT& stft) {
         // Five-stage gain gate; louder frames receive more transient correction.
         // S_rms aligns the raw FFTW RMS to the AES17 dBFS scale (0 dBFS = full-scale sine).
         const double S_rms    = std::sqrt(static_cast<double>(stft.N) * 3.0 / 8.0);
-        const double spline_L = stft.tm_floor_db / 20.0;
-        const double spline_U = stft.tm_peak_db  / 20.0;
-        double       spline_W = stft.tm_knee_db  / 20.0;
+        const double spline_L = stft.pem_floor_db / 20.0;
+        const double spline_U = stft.pem_peak_db  / 20.0;
+        double       spline_W = stft.pem_knee_db  / 20.0;
         if (spline_W >= (spline_U - spline_L)) {
             spline_W = (spline_U - spline_L) * 0.99;
-            std::cerr << "[HPSS] WARNING: tm_knee too wide; clamped to "
+            std::cerr << "[HPSS] WARNING: tem_knee too wide; clamped to "
                       << (spline_W * 20.0) << " dB.\n";
         }
 
@@ -133,10 +133,10 @@ void HPSS::process(AudioSTFT& stft) {
         }
 
         // Zone boundary bins (first bin at or above each crossover frequency)
-        const int k_z0 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_0 / stft.bin_hz_width)));
-        const int k_z1 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_1 / stft.bin_hz_width)));
-        const int k_z2 = std::min(K - 1, static_cast<int>(std::ceil(stft.tm_xover_2 / stft.bin_hz_width)));
-        const int W    = stft.tm_W_frames;
+        const int k_z0 = std::min(K - 1, static_cast<int>(std::ceil(stft.pem_xover_0 / stft.bin_hz_width)));
+        const int k_z1 = std::min(K - 1, static_cast<int>(std::ceil(stft.pem_xover_1 / stft.bin_hz_width)));
+        const int k_z2 = std::min(K - 1, static_cast<int>(std::ceil(stft.pem_xover_2 / stft.bin_hz_width)));
+        const int W    = stft.pem_frames;
 
         for (int m = 0; m < M_total; ++m) {
             double src_low = 0.0, src_mid = 0.0, src_high = 0.0;
@@ -158,7 +158,7 @@ void HPSS::process(AudioSTFT& stft) {
         X_tgt.clear(); X_tgt.shrink_to_fit();
         std::cout << "          -> TM Analysis: C_rms and deltas computed. Temporaries freed.\n";
     }
-    } // end apply_tm != "none"
+    } // end pem_apply
 
     // Process each channel independently to bound peak memory to ~400 MB per pass.
     for (int ch = 0; ch < channels; ++ch) {

@@ -6,8 +6,7 @@
 
 void Synthesis::process(AudioSTFT& stft) {
     std::cout << "\n[Pass 4] Executing HPSS Synthesis"
-              << " (apply_tm=" << stft.apply_tm
-              << ", output_mode=" << stft.output_mode << ")...\n";
+              << " (pem_apply=" << (stft.pem_apply ? "true" : "false") << ")...\n";
 
     int N = stft.N;
     int R_s = stft.R_s;
@@ -15,36 +14,19 @@ void Synthesis::process(AudioSTFT& stft) {
     const auto& fm = stft.frame_map;
     int num_frames = static_cast<int>(fm.size());
 
-    // --- Derive output paths ---
-    auto insert_suffix = [](const std::string& path, const std::string& suffix) {
-        auto dot = path.rfind('.');
-        return (dot == std::string::npos)
-               ? path + suffix
-               : path.substr(0, dot) + suffix + path.substr(dot);
-    };
-
     SF_INFO tgt_info = stft.src_info;
     tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 
-    SNDFILE* tonal_snd = nullptr;
-    SNDFILE* perc_snd  = nullptr;
-
-    if (stft.output_mode == "combined") {
-        tonal_snd = sf_open(stft.tgt_audio_file.c_str(), SFM_WRITE, &tgt_info);
-    } else {
-        std::string tonal_path = insert_suffix(stft.tgt_audio_file, "_tonal");
-        std::string perc_path  = insert_suffix(stft.tgt_audio_file, "_percussive");
-        tonal_snd = sf_open(tonal_path.c_str(), SFM_WRITE, &tgt_info);
-        perc_snd  = sf_open(perc_path.c_str(),  SFM_WRITE, &tgt_info);
-        std::cout << "  -> Tonal       : " << tonal_path << "\n";
-        std::cout << "  -> Percussive  : " << perc_path  << "\n";
-    }
+    SNDFILE* harmonic_snd = sf_open(stft.harmonic_audio_file.c_str(), SFM_WRITE, &tgt_info);
+    SNDFILE* perc_snd     = sf_open(stft.perc_audio_file.c_str(),     SFM_WRITE, &tgt_info);
+    std::cout << "  -> Harmonic    : " << stft.harmonic_audio_file << "\n";
+    std::cout << "  -> Percussive  : " << stft.perc_audio_file     << "\n";
 
     stft.reset_phase_state();
 
-    // Independent OLA buffers for tonal and percussive streams
-    std::vector<std::vector<double>> ola_tonal(channels, std::vector<double>(N, 0.0));
-    std::vector<std::vector<double>> ola_perc (channels, std::vector<double>(N, 0.0));
+    // Independent OLA buffers for harmonic and percussive streams
+    std::vector<std::vector<double>> ola_harmonic(channels, std::vector<double>(N, 0.0));
+    std::vector<std::vector<double>> ola_perc    (channels, std::vector<double>(N, 0.0));
 
     int frames_to_skip = N / 2;
     double total_input_energy  = 0.0;
@@ -100,7 +82,7 @@ void Synthesis::process(AudioSTFT& stft) {
             }
 
             // Per-bin chain: EQ -> Dynamics -> Routing Matrix
-            std::vector<double> M_tonal_arr(N / 2 + 1), M_perc_arr(N / 2 + 1);
+            std::vector<double> M_harmonic_arr(N / 2 + 1), M_perc_arr(N / 2 + 1);
             for (int k = 0; k <= N / 2; ++k) {
                 stft.phi_prev[ch][k]   = phi[k];
                 stft.theta_prev[ch][k] = theta[k];
@@ -117,44 +99,38 @@ void Synthesis::process(AudioSTFT& stft) {
                 }
 
                 // --- Dynamics: LR4-blended delta and restorative G_p ---
-                double blended_delta = (stft.tm_W_Z0[k] * 1.0)
-                                     + (stft.tm_W_Z1[k] * stft.delta_low[frame_idx])
-                                     + (stft.tm_W_Z2[k] * stft.delta_mid[frame_idx])
-                                     + (stft.tm_W_Z3[k] * stft.delta_high[frame_idx]);
+                double blended_delta = (stft.pem_W_Z0[k] * 1.0)
+                                     + (stft.pem_W_Z1[k] * stft.delta_low[frame_idx])
+                                     + (stft.pem_W_Z2[k] * stft.delta_mid[frame_idx])
+                                     + (stft.pem_W_Z3[k] * stft.delta_high[frame_idx]);
                 double G_p = 1.0 + (blended_delta - 1.0) * stft.C_rms[frame_idx];
 
                 // --- Routing Matrix ---
-                double mt, mp;
-                if (stft.apply_tm == "tonal") {
-                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k] * G_p;
+                double mh, mp;
+                if (!stft.pem_apply) {
+                    mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
                     mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
-                } else if (stft.apply_tm == "both") {
-                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k] * G_p;
-                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k] * G_p;
-                } else if (stft.apply_tm == "none") {
-                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k];
-                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
-                } else { // "percussive" (default)
-                    mt = M[k] * stft.M_h_mask[ch][frame_idx][k];
+                } else {
+                    mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
                     mp = M[k] * stft.M_p_mask[ch][frame_idx][k] * G_p;
                 }
-                M_tonal_arr[k] = mt;
-                M_perc_arr[k]  = mp;
+                M_harmonic_arr[k] = mh;
+                M_perc_arr[k]     = mp;
 
                 // Energy meter: combined output vs raw input
                 const double fold = (k == 0 || k == N / 2) ? 1.0 : 2.0;
                 total_input_energy  += fold * M_raw * M_raw;
-                total_output_energy += fold * (mt + mp) * (mt + mp);
+                total_output_energy += fold * (mh + mp) * (mh + mp);
             }
 
-            // --- Step A: IFFT tonal -> ola_tonal ---
+            // --- Step A: IFFT harmonic -> ola_harmonic ---
             for (int k = 0; k <= N / 2; ++k) {
-                stft.ifft_in[k][0] = M_tonal_arr[k] * std::cos(theta[k]);
-                stft.ifft_in[k][1] = M_tonal_arr[k] * std::sin(theta[k]);
+                stft.ifft_in[k][0] = M_harmonic_arr[k] * std::cos(theta[k]);
+                stft.ifft_in[k][1] = M_harmonic_arr[k] * std::sin(theta[k]);
             }
             fftw_execute(stft.plan_inv);
             for (int n = 0; n < N; ++n)
-                ola_tonal[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
+                ola_harmonic[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
 
             // --- Step B: IFFT percussive -> ola_perc ---
             for (int k = 0; k <= N / 2; ++k) {
@@ -179,33 +155,25 @@ void Synthesis::process(AudioSTFT& stft) {
             }
         }
         if (write_len > 0) {
-            if (stft.output_mode == "combined") {
-                for (int n = 0; n < write_len; ++n)
-                    for (int ch = 0; ch < channels; ++ch)
-                        write_buf[n * channels + ch] = static_cast<float>(
-                            ola_tonal[ch][write_offset + n] + ola_perc[ch][write_offset + n]);
-                sf_writef_float(tonal_snd, write_buf.data(), write_len);
-            } else {
-                for (int n = 0; n < write_len; ++n)
-                    for (int ch = 0; ch < channels; ++ch)
-                        write_buf[n * channels + ch] = static_cast<float>(ola_tonal[ch][write_offset + n]);
-                sf_writef_float(tonal_snd, write_buf.data(), write_len);
-                for (int n = 0; n < write_len; ++n)
-                    for (int ch = 0; ch < channels; ++ch)
-                        write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][write_offset + n]);
-                sf_writef_float(perc_snd, write_buf.data(), write_len);
-            }
+            for (int n = 0; n < write_len; ++n)
+                for (int ch = 0; ch < channels; ++ch)
+                    write_buf[n * channels + ch] = static_cast<float>(ola_harmonic[ch][write_offset + n]);
+            sf_writef_float(harmonic_snd, write_buf.data(), write_len);
+            for (int n = 0; n < write_len; ++n)
+                for (int ch = 0; ch < channels; ++ch)
+                    write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][write_offset + n]);
+            sf_writef_float(perc_snd, write_buf.data(), write_len);
         }
 
         // Shift OLA buffers
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N - R_s; ++n) {
-                ola_tonal[ch][n] = ola_tonal[ch][n + R_s];
-                ola_perc [ch][n] = ola_perc [ch][n + R_s];
+                ola_harmonic[ch][n] = ola_harmonic[ch][n + R_s];
+                ola_perc    [ch][n] = ola_perc    [ch][n + R_s];
             }
             for (int n = N - R_s; n < N; ++n) {
-                ola_tonal[ch][n] = 0.0;
-                ola_perc [ch][n] = 0.0;
+                ola_harmonic[ch][n] = 0.0;
+                ola_perc    [ch][n] = 0.0;
             }
         }
     }
@@ -213,26 +181,18 @@ void Synthesis::process(AudioSTFT& stft) {
     // Flush remaining overlap
     int remaining = N - R_s;
     if (remaining > 0) {
-        if (stft.output_mode == "combined") {
-            for (int ch = 0; ch < channels; ++ch)
-                for (int n = 0; n < remaining; ++n)
-                    write_buf[n * channels + ch] = static_cast<float>(
-                        ola_tonal[ch][n] + ola_perc[ch][n]);
-            sf_writef_float(tonal_snd, write_buf.data(), remaining);
-        } else {
-            for (int ch = 0; ch < channels; ++ch)
-                for (int n = 0; n < remaining; ++n)
-                    write_buf[n * channels + ch] = static_cast<float>(ola_tonal[ch][n]);
-            sf_writef_float(tonal_snd, write_buf.data(), remaining);
-            for (int ch = 0; ch < channels; ++ch)
-                for (int n = 0; n < remaining; ++n)
-                    write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][n]);
-            sf_writef_float(perc_snd, write_buf.data(), remaining);
-        }
+        for (int ch = 0; ch < channels; ++ch)
+            for (int n = 0; n < remaining; ++n)
+                write_buf[n * channels + ch] = static_cast<float>(ola_harmonic[ch][n]);
+        sf_writef_float(harmonic_snd, write_buf.data(), remaining);
+        for (int ch = 0; ch < channels; ++ch)
+            for (int n = 0; n < remaining; ++n)
+                write_buf[n * channels + ch] = static_cast<float>(ola_perc[ch][n]);
+        sf_writef_float(perc_snd, write_buf.data(), remaining);
     }
 
-    sf_close(tonal_snd);
-    if (perc_snd) sf_close(perc_snd);
+    sf_close(harmonic_snd);
+    sf_close(perc_snd);
     std::cout << "[Success] Final Master Written.\n";
 
     // ========================================================================
