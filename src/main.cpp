@@ -5,6 +5,8 @@
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
+#include "eq_matcher.h"
+#include "visualizer.h"
 #include "hpss.h"
 #include "synthesis.h"
 
@@ -84,10 +86,14 @@ int main(int argc, char* argv[]) {
     // Pipeline Execution (order is acoustically critical — do not reorder)
     // ========================================================================
     PhaseVocoder stft_engine;
+    EQMatcher    eq_matcher;
+    Visualizer   visualizer;
     HPSS         hpss;
     Synthesis    synthesis;
 
     stft_engine.process(audio_stft);
+    eq_matcher.process(audio_stft);
+    visualizer.render_eq(audio_stft);
     hpss.process(audio_stft);
     synthesis.process(audio_stft);
 

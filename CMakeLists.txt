@@ -17,6 +17,8 @@ pkg_check_modules(FFTW3 REQUIRED fftw3)
 add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
+    src/eq_matcher.cpp
+    src/visualizer.cpp
     src/hpss.cpp
     src/synthesis.cpp
 )

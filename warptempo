@@ -370,8 +370,7 @@ elif [[ "$engine" == none ]]; then
 fi
 
 mv .$md5-timemap .timemap
-[[ -f .$md5-tmp_eq.png ]] && mv .$md5-tmp_eq.png .eqmatch.png
-[[ -f .$md5-tmp_dynamics.png ]] && mv .$md5-tmp_dynamics.png .dynamicsmatch.png
+[[ -f .$md5-tmp_percussive.png ]] && mv .$md5-tmp_percussive.png .eq.png
 
 # Apply limiting or copy
 if $limiter; then

@@ -95,6 +95,9 @@ struct AudioSTFT {
     std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
     std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
 
+    // EQ Diagnostic: raw PSD delta (bin → dB), written by EQMatcher, read by Visualizer
+    std::vector<double> raw_delta_db;
+
     // Output paths (set from CLI argv[3] and argv[4])
     std::string perc_audio_file;
     std::string harmonic_audio_file;

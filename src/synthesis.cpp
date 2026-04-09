@@ -1,6 +1,5 @@
 #include "synthesis.h"
 #include <iostream>
-#include <iomanip>
 #include <algorithm>
 #include <cmath>
 
@@ -28,8 +27,6 @@ void Synthesis::process(AudioSTFT& stft) {
     std::vector<std::vector<double>> ola_perc    (channels, std::vector<double>(N, 0.0));
 
     int frames_to_skip = N / 2;
-    double total_input_energy  = 0.0;
-    double total_output_energy = 0.0;
 
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
@@ -86,8 +83,6 @@ void Synthesis::process(AudioSTFT& stft) {
                 stft.phi_prev[ch][k]   = phi[k];
                 stft.theta_prev[ch][k] = theta[k];
 
-                const double M_raw = M[k];
-
                 // --- EQ: DC Block always; LR4 HPF only if hpf_hz > 0 ---
                 if (k == 0) {
                     M[k] = 0.0;
@@ -98,15 +93,8 @@ void Synthesis::process(AudioSTFT& stft) {
                 }
 
                 // --- Routing Matrix ---
-                double mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
-                double mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
-                M_harmonic_arr[k] = mh;
-                M_perc_arr[k]     = mp;
-
-                // Energy meter: combined output vs raw input
-                const double fold = (k == 0 || k == N / 2) ? 1.0 : 2.0;
-                total_input_energy  += fold * M_raw * M_raw;
-                total_output_energy += fold * (mh + mp) * (mh + mp);
+                M_harmonic_arr[k] = M[k] * stft.M_h_mask[ch][frame_idx][k];
+                M_perc_arr[k]     = M[k] * stft.M_p_mask[ch][frame_idx][k];
             }
 
             // --- Step A: IFFT harmonic -> ola_harmonic ---
@@ -180,15 +168,4 @@ void Synthesis::process(AudioSTFT& stft) {
     sf_close(harmonic_snd);
     sf_close(perc_snd);
     std::cout << "[Success] Final Master Written.\n";
-
-    // ========================================================================
-    // Suggested Makeup Gain (Meter-Only — Not Applied)
-    // ========================================================================
-    double total_makeup_db = 0.0;
-    if (total_input_energy > 1e-12)
-        total_makeup_db = -10.0 * std::log10(total_output_energy / total_input_energy);
-
-    std::cout << "\n[Loudness Match (Suggested — Not Applied)]\n";
-    std::cout << "  -> Suggested Makeup Gain : " << (total_makeup_db > 0 ? "+" : "")
-              << std::fixed << std::setprecision(2) << total_makeup_db << " dB\n";
 }
