@@ -325,7 +325,7 @@ if [[ "$engine" == warptempo ]]; then
 #  pem_xover_2=2000    LR4 mid/high crossover (Hz)
 #  hpf_hz=30           Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
 
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 pem_frames=3 pem_apply=true pem_floor=-40 pem_peak=-18 pem_knee=6 pem_xover_0=50 pem_xover_1=500 pem_xover_2=2000 hpf_hz=30
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 pem_frames=3 pem_apply=false pem_floor=-40 pem_peak=-18 pem_knee=6 pem_xover_0=50 pem_xover_1=500 pem_xover_2=2000 hpf_hz=30
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
