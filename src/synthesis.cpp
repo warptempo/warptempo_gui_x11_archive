@@ -5,8 +5,7 @@
 #include <cmath>
 
 void Synthesis::process(AudioSTFT& stft) {
-    std::cout << "\n[Pass 4] Executing HPSS Synthesis"
-              << " (pem_apply=" << (stft.pem_apply ? "true" : "false") << ")...\n";
+    std::cout << "\n[Pass 4] Executing HPSS Synthesis...\n";
 
     int N = stft.N;
     int R_s = stft.R_s;
@@ -98,22 +97,9 @@ void Synthesis::process(AudioSTFT& stft) {
                     M[k] *= r8 / (1.0 + r8);
                 }
 
-                // --- Dynamics: LR4-blended delta and restorative G_p ---
-                double blended_delta = (stft.pem_W_Z0[k] * 1.0)
-                                     + (stft.pem_W_Z1[k] * stft.delta_low[frame_idx])
-                                     + (stft.pem_W_Z2[k] * stft.delta_mid[frame_idx])
-                                     + (stft.pem_W_Z3[k] * stft.delta_high[frame_idx]);
-                double G_p = 1.0 + (blended_delta - 1.0) * stft.C_rms[frame_idx];
-
                 // --- Routing Matrix ---
-                double mh, mp;
-                if (!stft.pem_apply) {
-                    mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
-                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
-                } else {
-                    mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
-                    mp = M[k] * stft.M_p_mask[ch][frame_idx][k] * G_p;
-                }
+                double mh = M[k] * stft.M_h_mask[ch][frame_idx][k];
+                double mp = M[k] * stft.M_p_mask[ch][frame_idx][k];
                 M_harmonic_arr[k] = mh;
                 M_perc_arr[k]     = mp;
 

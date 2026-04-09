@@ -95,34 +95,6 @@ struct AudioSTFT {
     std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
     std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
 
-    // PEM Parameters
-    int    pem_frames   = 3;      // ± frame radius for zonal energy accumulation
-    double pem_floor_db  = -40.0;  // Gain gate lower anchor (dBFS)
-    double pem_peak_db   = -18.0;  // Gain gate upper anchor (dBFS)
-    double pem_knee_db   =   6.0;  // Gain gate knee width (dB)
-    double pem_xover_0   = 50.0;   // Safety floor cutoff (Hz)
-    double pem_xover_1   = 500.0;  // Low-to-Mid crossover (Hz)
-    double pem_xover_2   = 2000.0; // Mid-to-High crossover (Hz)
-
-    // PEM routing: true = apply restorative boost to percussive; false = dry extraction
-    bool pem_apply = true;
-
-    // PEM per-frame scalars (size = frame_map.size())
-    std::vector<double> C_rms;      // Soft-knee RMS modulation depth [0,1]
-    std::vector<double> delta_low;  // Zone Z1 energy ratio (50–500 Hz)
-    std::vector<double> delta_mid;  // Zone Z2 energy ratio (500–2000 Hz)
-    std::vector<double> delta_high; // Zone Z3 energy ratio (>2000 Hz)
-
-    // LR4 per-bin frequency weights (size = N/2 + 1), pre-computed in main.cpp
-    std::vector<double> pem_W_Z0; // Lowpass  @ pem_xover_0  (safety floor band)
-    std::vector<double> pem_W_Z1; // Bandpass @ pem_xover_0–pem_xover_1 (low zone)
-    std::vector<double> pem_W_Z2; // Bandpass @ pem_xover_1–pem_xover_2 (mid zone)
-    std::vector<double> pem_W_Z3; // Highpass @ pem_xover_2             (high zone)
-
-    // Synthesis compensation
-    double global_hpss_atten_sum = 0.0;
-    size_t active_hpss_frames = 0;
-
     // Output paths (set from CLI argv[3] and argv[4])
     std::string perc_audio_file;
     std::string harmonic_audio_file;
