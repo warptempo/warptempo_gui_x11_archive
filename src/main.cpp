@@ -2,6 +2,7 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <cstdio>
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
@@ -10,12 +11,31 @@
 #include "hpss.h"
 #include "synthesis.h"
 
+static std::string compute_md5(const char* path) {
+    std::string cmd = std::string("md5sum '") + path + "'";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        std::cerr << "Error: Could not run md5sum.\n";
+        return "";
+    }
+    char buf[64] = {};
+    if (!fgets(buf, sizeof(buf), pipe)) {
+        pclose(pipe);
+        return "";
+    }
+    pclose(pipe);
+    // md5sum output: "<hash>  <filename>" — take first token
+    std::string out(buf);
+    auto sp = out.find(' ');
+    return (sp != std::string::npos) ? out.substr(0, sp) : out;
+}
+
 int main(int argc, char* argv[]) {
-    if (argc < 5) {
-        std::cerr << "Usage: " << argv[0]
-                  << " <source_audio> <timemap_file> <target_audio_percussive> <target_audio_harmonic> [key=value ...]\n"
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <source_audio> <timemap_file> [key=value ...]\n"
                   << "\n"
                   << "  N=4096              FFT size (divisible by 4)\n"
+                  << "  hpss_enabled=true   Perform Harmonic-Percussive Source Separation (true|false)\n"
                   << "  beta=2.0            HPSS mask sharpness exponent\n"
                   << "  L_h=31              Horizontal context half-width (frames)\n"
                   << "  L_p=7               Vertical filter max clamp (bins)\n"
@@ -23,15 +43,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --- Compute MD5 of source audio ---
+    std::string md5 = compute_md5(argv[1]);
+    if (md5.empty()) {
+        std::cerr << "Error: Failed to compute MD5 of source audio.\n";
+        return 1;
+    }
+
     // --- Parse CLI (key=value) ---
     AudioSTFT audio_stft;
 
-    audio_stft.perc_audio_file     = argv[3];
-    audio_stft.harmonic_audio_file = argv[4];
-    audio_stft.tgt_audio_file      = argv[3];  // base path for visualizer PNG
-
     std::unordered_map<std::string, std::string> kv;
-    for (int i = 5; i < argc; ++i) {
+    for (int i = 3; i < argc; ++i) {
         std::string arg = argv[i];
         auto eq = arg.find('=');
         if (eq != std::string::npos)
@@ -43,11 +66,26 @@ int main(int argc, char* argv[]) {
     auto ki = [&](const char* k, int d) -> int {
         auto it = kv.find(k); return (it != kv.end()) ? std::stoi(it->second) : d;
     };
-    audio_stft.N                = ki("N",           4096);
-    audio_stft.beta             = kd("beta",          2.0);
-    audio_stft.L_h              = ki("L_h",            31);
-    audio_stft.L_p_max          = ki("L_p",             7);
-    audio_stft.hpf_hz           = kd("hpf_hz",       30.0);
+    auto kb = [&](const char* k, bool d) -> bool {
+        auto it = kv.find(k); return (it != kv.end()) ? (it->second == "true") : d;
+    };
+
+    audio_stft.N            = ki("N",           4096);
+    audio_stft.hpss_enabled = kb("hpss_enabled", true);
+    audio_stft.beta         = kd("beta",          2.0);
+    audio_stft.L_h          = ki("L_h",            31);
+    audio_stft.L_p_max      = ki("L_p",             7);
+    audio_stft.hpf_hz       = kd("hpf_hz",       30.0);
+
+    // --- Derive output paths from MD5 ---
+    std::string base = "." + md5 + "-tmp";
+    if (audio_stft.hpss_enabled) {
+        audio_stft.perc_audio_file     = base + "_percussive.wav";
+        audio_stft.harmonic_audio_file = base + "_harmonic.wav";
+    } else {
+        audio_stft.perc_audio_file     = base + ".wav";
+    }
+    audio_stft.tgt_audio_file = base;  // visualizer appends _eq.png
 
     if (audio_stft.N % 4 != 0) {
         std::cerr << "Error: N must be divisible by 4.\n";
@@ -95,7 +133,7 @@ int main(int argc, char* argv[]) {
     stft_engine.process(audio_stft);
     eq_matcher.process(audio_stft);
     visualizer.render_eq(audio_stft);
-    hpss.process(audio_stft);
+    if (audio_stft.hpss_enabled) hpss.process(audio_stft);
     synthesis.process(audio_stft);
 
     // --- Cleanup ---

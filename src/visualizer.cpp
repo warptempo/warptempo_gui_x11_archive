@@ -10,10 +10,7 @@ void Visualizer::render_eq(const AudioSTFT& stft) {
     double nyquist = stft.nyquist;
     double bin_hz_width = stft.bin_hz_width;
 
-    std::string png_path = stft.tgt_audio_file;
-    size_t last_ext = png_path.find_last_of(".");
-    if (last_ext != std::string::npos) png_path = png_path.substr(0, last_ext) + "_eq.png";
-    else png_path += "_eq.png";
+    std::string png_path = stft.tgt_audio_file + "_eq.png";
 
     std::cout << "          -> Rendering 1920x1080 EQ Curve to: " << png_path << "\n";
 

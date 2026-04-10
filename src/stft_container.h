@@ -113,7 +113,10 @@ struct AudioSTFT {
     std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
     std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
 
-    // Output paths (set from CLI argv[3] and argv[4])
+    // HPSS enable flag
+    bool hpss_enabled = true;
+
+    // Output paths (derived from MD5 of source audio)
     std::string perc_audio_file;
     std::string harmonic_audio_file;
     std::string tgt_audio_file;     // base path for visualizer PNG naming

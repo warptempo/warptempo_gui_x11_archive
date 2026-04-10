@@ -14,8 +14,6 @@ add_subdirectory(bungee EXCLUDE_FROM_ALL)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 
-pkg_check_modules(SNDFILE REQUIRED sndfile)
-
 # Versioning logic
 find_package(Git)
 if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bungee/.git")

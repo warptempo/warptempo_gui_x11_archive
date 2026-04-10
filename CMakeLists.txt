@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Array footprint ~1.64 GB + HPSS temporaries (~400 MB) + OS overhead + FFTW planning buffers.
 
 # --- Dependencies for the DSP Engine ---
+find_package(OpenMP)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 pkg_check_modules(EBUR128 REQUIRED libebur128)
@@ -33,6 +34,7 @@ target_link_libraries(warptempo_engine PRIVATE
     ${EBUR128_LIBRARIES}
     ${FFTW3_LIBRARIES}
     m
+    $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
 # --- 2. Build the Timemap Parser ---

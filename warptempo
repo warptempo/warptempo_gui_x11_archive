@@ -312,12 +312,14 @@ if [[ "$engine" == warptempo ]]; then
 #Usage: ./build/warptempo_engine <source_audio> <timemap_file> <target_audio_percussive> <target_audio_harmonic> [key=value ...]
 #
 #  N=4096              FFT size (divisible by 4)
+#  hpss_enabled=true   Perform Harmonic-Percussive Source Separation (true|false)
 #  beta=2.0            HPSS mask sharpness exponent
 #  L_h=31              Horizontal context half-width (frames)
 #  L_p=7               Vertical filter max clamp (bins)
 #  hpf_hz=30           Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
 
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap .$md5-tmp_percussive.wav .$md5-tmp_harmonic.wav N=4096 beta=2.0 L_h=31 L_p=7 hpf_hz=30
+	hpss_enabled=true
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap N=4096 hpss_enabled=$hpss_enabled beta=2.0 L_h=31 L_p=7 hpf_hz=30
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
 	# Run rubberband
@@ -362,11 +364,11 @@ elif [[ "$engine" == none ]]; then
 fi
 
 mv .$md5-timemap .timemap
-[[ -f .$md5-tmp_percussive_eq.png ]] && mv .$md5-tmp_percussive_eq.png .eq.png
+[[ -f .$md5-tmp_eq.png ]] && mv .$md5-tmp_eq.png .eq.png
 
 # Apply limiting or copy
 if $limiter; then
-	if [[ $engine == warptempo ]]; then
+	if [[ $engine == warptempo ]] && $hpss_enabled; then
 		sox -m -v 1 .$md5-tmp_harmonic.wav .$md5-tmp_percussive.wav -e floating-point -b 32 .$md5-tmp.wav
 	fi
 	af="alimiter=latency=enabled:level=disabled:asc=disabled"
@@ -379,7 +381,7 @@ if $limiter; then
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -af "$af" "$audio_output"
 else
 	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
-	if [[ $engine == warptempo ]]; then
+	if [[ $engine == warptempo ]] && $hpss_enabled; then
 		mv .$md5-tmp_percussive.wav "channel=percussive;engine=$engine;limiter=$limiter;$audio_output"
 		mv .$md5-tmp_harmonic.wav "channel=harmonic;engine=$engine;limiter=$limiter;$audio_output"
 	else

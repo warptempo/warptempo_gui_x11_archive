@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Dependency Check: midifile ---
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/midifile/CMakeLists.txt")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/midifile/include/MidiFile.h")
     message(FATAL_ERROR "\n\n"
         "-----------------------------------------------------------------\n"
         " Error: 'midifile' library not found.\n"
@@ -15,25 +15,15 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/midifile/CMakeLists.txt")
     )
 endif()
 
-# --- FIX FOR ARCH LINUX / MODERN CMAKE ---
-# The midifile library uses an old cmake_minimum_required that fails on CMake 3.27+.
-# We dynamically update it to 3.10 to prevent the 'Compatibility < 3.5 removed' error.
-execute_process(
-    COMMAND sed -i "s/cmake_minimum_required(VERSION .*)/cmake_minimum_required(VERSION 3.10)/" 
-    "${CMAKE_CURRENT_SOURCE_DIR}/midifile/CMakeLists.txt"
-)
+# Compile midifile sources directly — bypasses midifile's own CMakeLists.txt,
+# which uses cmake_minimum_required < 3.5 (removed in CMake 3.27+).
+file(GLOB MIDIFILE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/midifile/src/*.cpp")
 
-# Add the library
-add_subdirectory(midifile EXCLUDE_FROM_ALL)
+add_executable(midi_adapter main.cpp ${MIDIFILE_SOURCES})
 
-# --- Build Executable ---
-add_executable(midi_adapter main.cpp)
-
-target_include_directories(midi_adapter PRIVATE 
+target_include_directories(midi_adapter PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/midifile/include"
 )
-
-target_link_libraries(midi_adapter PRIVATE midifile)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(midi_adapter PRIVATE -Wall -O3)
