@@ -74,12 +74,14 @@ void EQMatcher::process(AudioSTFT& stft) {
     std::vector<double> src_psd_linked(N / 2 + 1, 0.0);
     std::vector<double> tgt_psd_linked(N / 2 + 1, 0.0);
     size_t total_psd_windows = 0;
+    double sum_alpha = 0.0;
     std::vector<float> src_chunk(N * channels), tgt_chunk(N * channels);
 
     for (const auto& b : final_blocks) {
         size_t s_frame = b.start_frame;
         while (s_frame + N <= b.end_frame) {
             size_t t_start = static_cast<size_t>(map_source_to_target(s_frame, stft.timemap));
+            sum_alpha += get_alpha(t_start, stft.timemap);
 
             sf_seek(stft.src_snd, s_frame, SEEK_SET);
             sf_readf_float(stft.src_snd, src_chunk.data(), N);
@@ -107,6 +109,8 @@ void EQMatcher::process(AudioSTFT& stft) {
             s_frame += N / 2;
         }
     }
+
+    stft.alpha_ref = (total_psd_windows > 0) ? (sum_alpha / total_psd_windows) : 1.0;
 
     // --- Raw Delta & Smoothing ---
     stft.raw_delta_db.assign(N / 2 + 1, 0.0);
@@ -143,5 +147,8 @@ void EQMatcher::process(AudioSTFT& stft) {
             pt.y *= std::max(0.0, std::min(1.0, (nyquist - pt.x) / 20.0));
     }
 
+    std::cout << "          -> " << final_blocks.size() << " acoustic blocks selected, "
+              << total_psd_windows << " PSD windows accumulated.\n";
+    std::cout << "          -> alpha_ref = " << stft.alpha_ref << "\n";
     std::cout << "          -> Delta curve computed.\n";
 }

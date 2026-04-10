@@ -8,6 +8,10 @@ build/
 .claude/
 CLAUDE.md
 
+# tmp
+tmp/
+src.tar.gz
+
 # Bungee Adapter Build Artifacts
 adapters/bungee/build/
 adapters/bungee/bungee/

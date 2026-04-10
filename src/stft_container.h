@@ -121,7 +121,27 @@ struct AudioSTFT {
     std::string harmonic_audio_file;
     std::string tgt_audio_file;     // base path for visualizer PNG naming
 
-    // EQ Matcher output (diagnostic only — not applied to audio)
+    // EQ Match parameters
+    bool   eq_match_enabled      = true;
+    double eq_match_xover_0      = 50.0;
+    double eq_match_xover_1      = 500.0;
+    double eq_match_xover_2      = 2000.0;
+    double eq_match_floor_db     = -50.0;
+    double eq_match_peak_db      = -14.0;
+    double eq_match_release_low  = 350.0;
+    double eq_match_release_mid  = 300.0;
+    double eq_match_release_high = 200.0;
+
+    // α_ref: mean stretch ratio over loud PSD windows (populated by EQMatcher)
+    double alpha_ref = 1.0;
+
+    // LR4 per-bin band weights (size N/2+1, precomputed in main.cpp)
+    std::vector<double> eq_W_Z0; // LP(xover_0)      — sub-bass bypass
+    std::vector<double> eq_W_Z1; // middle · LP(xover_1) — low
+    std::vector<double> eq_W_Z2; // middle · HP(xover_1) — mid
+    std::vector<double> eq_W_Z3; // HP(xover_2)      — high
+
+    // EQ Matcher output
     std::vector<double> raw_delta_db;
     std::vector<Point>  smoothed_curve;
 
