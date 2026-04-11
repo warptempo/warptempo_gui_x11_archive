@@ -31,7 +31,6 @@ target_include_directories(warptempo_engine PRIVATE
 )
 target_link_libraries(warptempo_engine PRIVATE
     ${SNDFILE_LIBRARIES}
-    ${EBUR128_LIBRARIES}
     ${FFTW3_LIBRARIES}
     m
     $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
@@ -42,8 +41,24 @@ add_executable(parser src/parser.cpp)
 # (Assuming the parser is pure C++ and doesn't need external audio libs. 
 # If it does, we can add a target_link_libraries block for it here.)
 
+# --- 3. Build the EQ Test Suite ---
+add_executable(eq_test_suite src/eq_test_suite.cpp)
+target_include_directories(eq_test_suite PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${SNDFILE_INCLUDE_DIRS}
+    ${EBUR128_INCLUDE_DIRS}
+    ${FFTW3_INCLUDE_DIRS}
+)
+target_link_libraries(eq_test_suite PRIVATE
+    ${SNDFILE_LIBRARIES}
+    ${EBUR128_LIBRARIES}
+    ${FFTW3_LIBRARIES}
+    m
+)
+
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(parser PRIVATE -Wall -Wextra -O3 -march=native)
+    target_compile_options(eq_test_suite PRIVATE -Wall -Wextra -O3 -march=native)
 endif()
