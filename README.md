@@ -2,7 +2,7 @@ Tempo-warping scripts.
 
 Requirements:
 ```
-bc ffmpeg ffprobe jq sox yt-dlp
+bc ffmpeg ffprobe imagemagick jq sox yt-dlp
 ```
 
 To use, first clone this repository:

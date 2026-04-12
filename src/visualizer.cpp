@@ -11,7 +11,9 @@
 // Render one 1920x1080 SVG panel using the fixed ±6 dB scale from the old implementation.
 static std::string render_panel(const AudioSTFT& stft,
                                 const std::vector<double>& raw_delta,
-                                const std::vector<Point>&  smoothed)
+                                const std::vector<Point>&  smoothed,
+                                const std::string& alpha_label,
+                                double alpha_val)
 {
     int N = stft.N;
     double nyquist      = stft.nyquist;
@@ -109,12 +111,45 @@ static std::string render_panel(const AudioSTFT& stft,
         svg << "\" />\n";
     }
 
+    // Alpha legend — top right
+    svg << "  <text x=\"1912\" y=\"20\" fill=\"#aaaaaa\" font-size=\"16\""
+        << " text-anchor=\"end\">" << alpha_label << " = "
+        << std::fixed << std::setprecision(4) << alpha_val << "</text>\n";
+
     svg << "</svg>\n";
     return svg.str();
 }
 
 void Visualizer::render_eq(const AudioSTFT& stft) {
     std::string png_path = stft.tgt_audio_file + "_eq.png";
+
+    auto write_svg = [](const std::string& path, const std::string& content) -> bool {
+        std::ofstream f(path);
+        if (!f) return false;
+        f << content;
+        return true;
+    };
+    auto convert = [](const std::string& svg, const std::string& png) -> bool {
+        std::string cmd = "magick \"" + svg + "\" -density 144 \"" + png + "\" 2>/dev/null";
+        return system(cmd.c_str()) == 0;
+    };
+
+    if (!stft.has_slowdown_frames) {
+        // Fallback: only speedup material — single 1920x1080 panel
+        std::cout << "          -> Rendering 1920x1080 EQ Curve (speedup only) to: " << png_path << "\n";
+        std::string svg_path = stft.tgt_audio_file + "_eq.svg";
+        write_svg(svg_path, render_panel(stft,
+                                        stft.raw_delta_db_speedup,
+                                        stft.smoothed_curve_speedup,
+                                        "alpha_ref_speedup",
+                                        stft.alpha_ref_speedup));
+        if (!convert(svg_path, png_path))
+            std::cerr << "          -> Warning: SVG conversion failed.\n";
+        std::remove(svg_path.c_str());
+        return;
+    }
+
+    // Normal: two panels stitched into 1920x2160
     std::cout << "          -> Rendering 1920x2160 EQ Curve to: " << png_path << "\n";
 
     std::string svg_speedup  = stft.tgt_audio_file + "_eq_speedup.svg";
@@ -122,39 +157,19 @@ void Visualizer::render_eq(const AudioSTFT& stft) {
     std::string png_speedup  = stft.tgt_audio_file + "_eq_speedup.png";
     std::string png_slowdown = stft.tgt_audio_file + "_eq_slowdown.png";
 
-    // Write both SVGs
-    auto write_svg = [](const std::string& path, const std::string& content) -> bool {
-        std::ofstream f(path);
-        if (!f) return false;
-        f << content;
-        return true;
-    };
+    write_svg(svg_speedup,  render_panel(stft, stft.raw_delta_db_speedup,  stft.smoothed_curve_speedup,
+                                         "alpha_ref_speedup",  stft.alpha_ref_speedup));
+    write_svg(svg_slowdown, render_panel(stft, stft.raw_delta_db_slowdown, stft.smoothed_curve_slowdown,
+                                         "alpha_ref_slowdown", stft.alpha_ref_slowdown));
 
-    write_svg(svg_speedup,  render_panel(stft, stft.raw_delta_db_speedup,  stft.smoothed_curve_speedup));
-    write_svg(svg_slowdown, render_panel(stft, stft.raw_delta_db_slowdown, stft.smoothed_curve_slowdown));
-
-    // Convert each SVG → PNG
-    auto convert = [](const std::string& svg, const std::string& png) {
-        std::string cmd = "magick \"" + svg + "\" -density 144 \"" + png
-                        + "\" 2>/dev/null || rsvg-convert -f png -o \"" + png
-                        + "\" \"" + svg + "\" 2>/dev/null";
-        return system(cmd.c_str());
-    };
-
-    bool ok = (convert(svg_speedup,  png_speedup)  == 0) &&
-              (convert(svg_slowdown, png_slowdown) == 0);
-
-    if (!ok) {
+    if (!convert(svg_speedup, png_speedup) || !convert(svg_slowdown, png_slowdown))
         std::cerr << "          -> Warning: SVG conversion failed for one or both panels.\n";
-    }
 
-    // Stitch top (speedup) + bottom (slowdown) → final PNG
     std::string stitch = "magick \"" + png_speedup + "\" \"" + png_slowdown
                        + "\" -append \"" + png_path + "\" 2>/dev/null";
     if (system(stitch.c_str()) != 0)
         std::cerr << "          -> Warning: Could not stitch panels into final PNG.\n";
 
-    // Cleanup temporaries
     std::remove(svg_speedup.c_str());
     std::remove(svg_slowdown.c_str());
     std::remove(png_speedup.c_str());
