@@ -309,7 +309,12 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == warptempo ]]; then
-#Usage: ./warptempo_engine <source_audio> <timemap_file> [key=value ...]
+#Usage: ./warptempo_engine <source_audio> <timemap_file> <source_audio_md5> [key=value ...]
+#
+#  <source_audio_md5>  MD5 hex digest of the original (untrimmed) source
+#                      audio used when generating the timemap. Passed
+#                      explicitly so trimmed or resampled variants of the
+#                      source do not silently produce mismatched output paths.
 #
 #  N=4096                    FFT size (divisible by 4)
 #  hpss_enabled=true         Perform HPSS (true|false)
@@ -318,32 +323,16 @@ if [[ "$engine" == warptempo ]]; then
 #  L_p=7                     Vertical filter max clamp (bins)
 #  hpf_hz=30                 Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
 #  eq_match_enabled=true     EQ match correction (true|false)
-#  eq_match_xover_0=50       LR4 sub-bass/low crossover (Hz)
-#  eq_match_xover_1=500      LR4 low/mid crossover (Hz)
-#  eq_match_xover_2=2000     LR4 mid/high crossover (Hz)
-#  eq_match_floor_db=-50     Loudness gate lower anchor (dBFS)
-#  eq_match_peak_db=-14      Loudness gate upper anchor (dBFS)
-#  eq_match_release_low=350  Low-band release time (ms)
-#  eq_match_release_mid=300  Mid-band release time (ms)
-#  eq_match_release_high=200 High-band release time (ms)
 
 	hpss_enabled=true
-	"$warptempo_engine_path" "$audio_input" .$md5-timemap \
+	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
 		N=4096 \
 		hpss_enabled=$hpss_enabled \
 		beta=2.0 \
 		L_h=31 \
 		L_p=7 \
 		hpf_hz=30 \
-		eq_match_enabled=true \
-		eq_match_xover_0=50 \
-		eq_match_xover_1=500 \
-		eq_match_xover_2=2000 \
-		eq_match_floor_db=-50 \
-		eq_match_peak_db=-14 \
-		eq_match_release_low=350 \
-		eq_match_release_mid=300 \
-		eq_match_release_high=200
+		eq_match_enabled=true
 
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap

@@ -10,26 +10,15 @@
 #include "hpss.h"
 #include "synthesis.h"
 
-// Extract md5 from timemap filename. Format: .<md5>-timemap
-// Takes the basename, strips leading '.', strips trailing '-timemap'.
-static std::string md5_from_timemap(const char* path) {
-    std::string s(path);
-    // Grab basename
-    auto slash = s.rfind('/');
-    if (slash != std::string::npos) s = s.substr(slash + 1);
-    // Strip leading '.'
-    if (!s.empty() && s[0] == '.') s = s.substr(1);
-    // Strip trailing '-timemap'
-    const std::string suffix = "-timemap";
-    if (s.size() > suffix.size() &&
-        s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0)
-        s = s.substr(0, s.size() - suffix.size());
-    return s;
-}
-
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <source_audio> <timemap_file> [key=value ...]\n"
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0]
+                  << " <source_audio> <timemap_file> <source_audio_md5> [key=value ...]\n"
+                  << "\n"
+                  << "  <source_audio_md5>  MD5 hex digest of the original (untrimmed) source\n"
+                  << "                      audio used when generating the timemap. Passed\n"
+                  << "                      explicitly so trimmed or resampled variants of the\n"
+                  << "                      source do not silently produce mismatched output paths.\n"
                   << "\n"
                   << "  N=4096                    FFT size (divisible by 4)\n"
                   << "  hpss_enabled=true         Perform HPSS (true|false)\n"
@@ -41,18 +30,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // --- Extract MD5 from timemap filename (format: .<md5>-timemap) ---
-    std::string md5 = md5_from_timemap(argv[2]);
-    if (md5.empty()) {
-        std::cerr << "Error: Could not extract MD5 from timemap filename '" << argv[2] << "'.\n";
+    const std::string md5 = argv[3];
+    if (md5.size() != 32) {
+        std::cerr << "Error: <source_audio_md5> must be a 32-character hex digest, got '"
+                  << md5 << "'.\n";
         return 1;
     }
 
-    // --- Parse CLI (key=value) ---
+    // --- Parse CLI (key=value) — argv[4+] ---
     AudioSTFT audio_stft;
 
     std::unordered_map<std::string, std::string> kv;
-    for (int i = 3; i < argc; ++i) {
+    for (int i = 4; i < argc; ++i) {
         std::string arg = argv[i];
         auto eq = arg.find('=');
         if (eq != std::string::npos)

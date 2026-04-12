@@ -8,20 +8,9 @@
 #include <sndfile.h>
 
 // --- EQ Matcher Constants ---
-const double ATTACK_TOLERANCE_LU  = 3.0;
-const double RELEASE_TOLERANCE_LU = 8.0;
-const double MIN_GAP_SEC          = 0.5;
-const double MIN_PHRASE_SEC       = 5.0;
-const size_t TOP_X_CHUNKS         = 10;
 const int    CURVE_RESOLUTION     = 500;
 
 // --- Data Structures ---
-struct AcousticBlock {
-    size_t start_frame;
-    size_t end_frame;
-    double duration_sec;
-};
-
 struct Point {
     double x, y;
 };

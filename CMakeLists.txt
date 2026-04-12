@@ -26,7 +26,6 @@ add_executable(warptempo_engine
 target_include_directories(warptempo_engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${SNDFILE_INCLUDE_DIRS}
-    ${EBUR128_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
 )
 target_link_libraries(warptempo_engine PRIVATE
