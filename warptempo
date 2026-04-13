@@ -321,8 +321,6 @@ if [[ "$engine" == warptempo ]]; then
 #  beta=2.0                  HPSS mask sharpness exponent
 #  L_h=31                    Horizontal context half-width (frames)
 #  L_p=7                     Vertical filter max clamp (bins)
-#  hpf_hz=30                 Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)
-#  eq_match_enabled=true     EQ match correction (true|false)
 
 	hpss_enabled=true
 	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
@@ -330,9 +328,7 @@ if [[ "$engine" == warptempo ]]; then
 		hpss_enabled=$hpss_enabled \
 		beta=2.0 \
 		L_h=31 \
-		L_p=7 \
-		hpf_hz=30 \
-		eq_match_enabled=false
+		L_p=7
 
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap

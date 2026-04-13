@@ -16,9 +16,9 @@ void HPSS::process(AudioSTFT& stft) {
     const auto& fm = stft.frame_map;
     const int M_total = static_cast<int>(fm.size());
 
-    // Pre-allocate 3D mask arrays: [channel][frame][bin]
-    stft.M_h_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0)));
-    stft.M_p_mask.assign(channels, std::vector<std::vector<double>>(M_total, std::vector<double>(K, 0.0)));
+    // Pre-allocate flat mask arrays: index as ch * M_total * K + m * K + k
+    stft.M_h_mask.assign(static_cast<size_t>(channels) * M_total * K, 0.0);
+    stft.M_p_mask.assign(static_cast<size_t>(channels) * M_total * K, 0.0);
 
     std::vector<float> read_buf(N * channels, 0.0f);
 
@@ -115,8 +115,9 @@ void HPSS::process(AudioSTFT& stft) {
                 double P_beta = std::pow(P[m * K + k], stft.beta);
                 double H_beta = std::pow(H[m * K + k], stft.beta);
                 double denom  = P_beta + H_beta + 1e-8;
-                stft.M_p_mask[ch][m][k] = P_beta / denom;
-                stft.M_h_mask[ch][m][k] = H_beta / denom;
+                size_t idx = static_cast<size_t>(ch) * M_total * K + m * K + k;
+                stft.M_p_mask[idx] = P_beta / denom;
+                stft.M_h_mask[idx] = H_beta / denom;
             }
         }
 

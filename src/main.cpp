@@ -5,8 +5,6 @@
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
-#include "eq_matcher.h"
-#include "visualizer.h"
 #include "hpss.h"
 #include "synthesis.h"
 
@@ -25,8 +23,7 @@ int main(int argc, char* argv[]) {
                   << "  beta=2.0                  HPSS mask sharpness exponent\n"
                   << "  L_h=31                    Horizontal context half-width (frames)\n"
                   << "  L_p=7                     Vertical filter max clamp (bins)\n"
-                  << "  hpf_hz=30                 Zero-phase sub-rumble HPF cutoff (Hz; 0=bypass)\n"
-                  << "  eq_match_enabled=true     EQ match correction (true|false)\n";
+;
         return 1;
     }
 
@@ -62,8 +59,7 @@ int main(int argc, char* argv[]) {
     audio_stft.beta         = kd("beta",          2.0);
     audio_stft.L_h          = ki("L_h",            31);
     audio_stft.L_p_max      = ki("L_p",             7);
-    audio_stft.hpf_hz       = kd("hpf_hz",       30.0);
-    audio_stft.eq_match_enabled = kb("eq_match_enabled", true);
+
 
     // --- Derive output paths from MD5 ---
     std::string base = "." + md5 + "-tmp";
@@ -90,6 +86,22 @@ int main(int argc, char* argv[]) {
     while (file >> src_f >> tgt_f) audio_stft.timemap.push_back({src_f, tgt_f});
     file.close();
 
+    // Validate timemap: both src_frame and tgt_frame must be strictly monotonically increasing
+    for (size_t i = 1; i < audio_stft.timemap.size(); ++i) {
+        if (audio_stft.timemap[i].src_frame <= audio_stft.timemap[i - 1].src_frame) {
+            std::cerr << "Error: timemap entry " << i << " has non-monotonic src_frame ("
+                      << audio_stft.timemap[i - 1].src_frame << " -> "
+                      << audio_stft.timemap[i].src_frame << ").\n";
+            return 1;
+        }
+        if (audio_stft.timemap[i].tgt_frame <= audio_stft.timemap[i - 1].tgt_frame) {
+            std::cerr << "Error: timemap entry " << i << " has non-monotonic tgt_frame ("
+                      << audio_stft.timemap[i - 1].tgt_frame << " -> "
+                      << audio_stft.timemap[i].tgt_frame << ").\n";
+            return 1;
+        }
+    }
+
     // --- Open Source Audio ---
     audio_stft.src_info.format = 0;
     audio_stft.src_snd = sf_open(argv[1], SFM_READ, &audio_stft.src_info);
@@ -109,23 +121,14 @@ int main(int argc, char* argv[]) {
     audio_stft.frame_map = audio_stft.generate_frame_map();
     std::cout << "[Frame Map] Generated " << audio_stft.frame_map.size() << " frames (int64_t).\n";
 
-    std::cout << "[EQ Match] enabled=" << (audio_stft.eq_match_enabled ? "true" : "false")
-              << "  hpf_hz=" << audio_stft.hpf_hz << " Hz\n";
-
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
     // ========================================================================
     PhaseVocoder stft_engine;
-    EQMatcher    eq_matcher;
-    Visualizer   visualizer;
     HPSS         hpss;
     Synthesis    synthesis;
 
     stft_engine.process(audio_stft);
-    if (audio_stft.eq_match_enabled) {
-        eq_matcher.process(audio_stft);
-        visualizer.render_eq(audio_stft);
-    }
     if (audio_stft.hpss_enabled) hpss.process(audio_stft);
     synthesis.process(audio_stft);
 

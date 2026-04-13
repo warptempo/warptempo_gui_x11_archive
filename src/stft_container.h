@@ -7,14 +7,7 @@
 #include <fftw3.h>
 #include <sndfile.h>
 
-// --- EQ Matcher Constants ---
-const int    CURVE_RESOLUTION     = 500;
-
 // --- Data Structures ---
-struct Point {
-    double x, y;
-};
-
 struct TimeMapSegment {
     size_t src_frame;
     size_t tgt_frame;
@@ -25,6 +18,9 @@ inline double princarg(double phase) {
     return phase - 2.0 * M_PI * std::floor((phase + M_PI) / (2.0 * M_PI));
 }
 
+// get_alpha() returns tgt_dur / src_dur.
+// Less than 1.0 means speedup (output shorter than source).
+// Greater than 1.0 means slowdown (output longer than source).
 inline double get_alpha(size_t t_s, const std::vector<TimeMapSegment>& map) {
     if (map.empty()) return 1.0;
     if (t_s <= map.front().tgt_frame) return 1.0;
@@ -62,12 +58,13 @@ struct AudioSTFT {
     // Source metadata
     SF_INFO src_info{};
     SNDFILE* src_snd = nullptr;
-    int N = 3328;
+    // Default matches CLI; eq_test_suite.cpp data collected at N=3328 but generalizes
+    // due to 1/3-octave Gaussian smoothing.
+    int N = 4096;
     int R_s = 0;
     int channels = 0;
     double nyquist = 0.0;
     double bin_hz_width = 0.0;
-    double hpf_hz = 30.0;         // Zero-phase sub-rumble filter cutoff
     size_t target_total_frames = 0;
 
     // Timemap
@@ -98,9 +95,10 @@ struct AudioSTFT {
     int    L_h     = 31;  // 63-frame horizontal context (slow-moving background sponge)
     int    L_p_max = 7;   // Max vertical filter clamp — do not increase beyond 7
 
-    // HPSS Mask Arrays: [channel][frame][bin]
-    std::vector<std::vector<std::vector<double>>> M_h_mask; // Background (Harmonic/Horizontal)
-    std::vector<std::vector<std::vector<double>>> M_p_mask; // Foreground (Percussive/Vertical)
+    // HPSS Mask Arrays (flat): index as ch * M_total * K + m * K + k
+    // where M_total = frame_map.size(), K = N/2+1
+    std::vector<double> M_h_mask; // Background (Harmonic/Horizontal)
+    std::vector<double> M_p_mask; // Foreground (Percussive/Vertical)
 
     // HPSS enable flag
     bool hpss_enabled = true;
@@ -108,24 +106,7 @@ struct AudioSTFT {
     // Output paths (derived from MD5 of source audio)
     std::string perc_audio_file;
     std::string harmonic_audio_file;
-    std::string tgt_audio_file;     // base path for visualizer PNG naming
-
-    // EQ Match master toggle
-    bool eq_match_enabled = true;
-
-    // Direction-aware PSD delta curves
-    std::vector<double> raw_delta_db_speedup;   // raw delta per bin — speedup regions
-    std::vector<double> raw_delta_db_slowdown;  // raw delta per bin — slowdown regions
-    std::vector<Point>  smoothed_curve_speedup; // Gaussian-smoothed 500-pt curve — speedup
-    std::vector<Point>  smoothed_curve_slowdown;// Gaussian-smoothed 500-pt curve — slowdown
-
-    // Mean stretch ratio over contributing PSD windows, per direction
-    // Stored in get_alpha() coordinates: speedup < 1.0, slowdown > 1.0
-    double alpha_ref_speedup  = 1.0;
-    double alpha_ref_slowdown = 1.0;
-
-    // True when qualifying slowdown material exists (>= SLOWDOWN_FALLBACK_THRESHOLD of source)
-    bool has_slowdown_frames = false;
+    std::string tgt_audio_file;     // base path for eq_analysis output naming
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;
@@ -140,9 +121,23 @@ struct AudioSTFT {
         double t_a = -(double)N / 2.0;
         size_t t_s = 0;
         int idx = 0;
+        // Forward-only cursor: O(segments + frames) instead of O(segments * frames)
+        size_t seg = 0;
 
         while (t_s < target_total_frames) {
-            double alpha = get_alpha(t_s, timemap);
+            // Advance cursor while the next segment starts at or before t_s
+            while (timemap.size() >= 2 && seg + 2 < timemap.size() &&
+                   t_s >= timemap[seg + 1].tgt_frame)
+                ++seg;
+
+            double alpha = 1.0;
+            if (timemap.size() >= 2 && t_s > timemap.front().tgt_frame &&
+                t_s >= timemap[seg].tgt_frame && t_s < timemap[seg + 1].tgt_frame) {
+                double tgt_dur = static_cast<double>(timemap[seg + 1].tgt_frame - timemap[seg].tgt_frame);
+                double src_dur = static_cast<double>(timemap[seg + 1].src_frame - timemap[seg].src_frame);
+                alpha = tgt_dur / src_dur;
+            }
+
             double R_a = R_s / alpha;
             if (idx > 0) t_a += R_a;
             int64_t t_a_rounded = static_cast<int64_t>(std::llround(t_a));
@@ -180,6 +175,56 @@ struct AudioSTFT {
             std::fill(phi_prev[ch].begin(), phi_prev[ch].end(), 0.0);
             std::fill(theta_prev[ch].begin(), theta_prev[ch].end(), 0.0);
             std::fill(overlap_add[ch].begin(), overlap_add[ch].end(), 0.0);
+        }
+    }
+
+    // Shared phase vocoder core for one channel/frame.
+    // M, phi, theta must be pre-allocated to K = N/2+1.
+    // peaks must be pre-reserved (e.g. N/8); cleared on each call.
+    // frame_buf is the interleaved read buffer; ch_stride is the channel count.
+    // On return: M[k] holds magnitude, theta[k] holds synthesised phase.
+    // phi_prev[ch] and theta_prev[ch] are updated in place.
+    void phase_vocoder_frame(int ch, int ch_stride, int64_t R_a_actual, int frame_idx,
+                              const float* frame_buf,
+                              std::vector<double>& M, std::vector<double>& phi,
+                              std::vector<double>& theta, std::vector<int>& peaks) {
+        const int K = N / 2 + 1;
+
+        for (int n = 0; n < N; ++n)
+            fft_in[n] = frame_buf[n * ch_stride + ch] * window[n];
+        fftw_execute(plan_fwd);
+
+        for (int k = 0; k < K; ++k) {
+            M[k]   = std::hypot(fft_out[k][0], fft_out[k][1]);
+            phi[k] = std::atan2(fft_out[k][1], fft_out[k][0]);
+        }
+
+        if (frame_idx == 0) {
+            for (int k = 0; k < K; ++k) theta[k] = phi[k];
+        } else {
+            peaks.clear();
+            for (int k = 1; k < N / 2; ++k)
+                if (M[k] > M[k - 1] && M[k] > M[k + 1]) peaks.push_back(k);
+            if (peaks.empty()) peaks.push_back(N / 4);
+
+            for (int p : peaks) {
+                double omega_p = 2.0 * M_PI * p / N;
+                theta[p] = theta_prev[ch][p] +
+                           (omega_p + princarg(phi[p] - phi_prev[ch][p] - omega_p * R_a_actual) / R_a_actual) * R_s;
+            }
+            size_t peak_idx = 0;
+            for (int k = 0; k < K; ++k) {
+                if (peak_idx < peaks.size() - 1 &&
+                    std::abs(k - peaks[peak_idx + 1]) < std::abs(k - peaks[peak_idx]))
+                    ++peak_idx;
+                int p = peaks[peak_idx];
+                if (k != p) theta[k] = theta[p] + phi[k] - phi[p];
+            }
+        }
+
+        for (int k = 0; k < K; ++k) {
+            phi_prev[ch][k]   = phi[k];
+            theta_prev[ch][k] = theta[k];
         }
     }
 

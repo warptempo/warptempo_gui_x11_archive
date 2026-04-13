@@ -18,8 +18,6 @@ pkg_check_modules(FFTW3 REQUIRED fftw3)
 add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
-    src/eq_matcher.cpp
-    src/visualizer.cpp
     src/hpss.cpp
     src/synthesis.cpp
 )
@@ -55,9 +53,23 @@ target_link_libraries(eq_test_suite PRIVATE
     m
 )
 
+# --- 4. Build the EQ Analysis Binary ---
+add_executable(eq_analysis src/eq_analysis.cpp)
+target_include_directories(eq_analysis PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${SNDFILE_INCLUDE_DIRS}
+    ${FFTW3_INCLUDE_DIRS}
+)
+target_link_libraries(eq_analysis PRIVATE
+    ${SNDFILE_LIBRARIES}
+    ${FFTW3_LIBRARIES}
+    m
+)
+
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(parser PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(eq_test_suite PRIVATE -Wall -Wextra -O3 -march=native)
+    target_compile_options(eq_analysis PRIVATE -Wall -Wextra -O3 -march=native)
 endif()
