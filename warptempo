@@ -332,7 +332,7 @@ if [[ "$engine" == warptempo ]]; then
 		L_h=31 \
 		L_p=7 \
 		hpf_hz=30 \
-		eq_match_enabled=true
+		eq_match_enabled=false
 
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
