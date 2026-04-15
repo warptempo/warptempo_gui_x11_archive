@@ -322,7 +322,7 @@ if [[ "$engine" == warptempo ]]; then
 #  L_h=31                    Horizontal context half-width (frames)
 #  L_p=7                     Vertical filter max clamp (bins)
 
-	hpss_enabled=true
+	hpss_enabled=false
 	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
 		N=4096 \
 		hpss_enabled=$hpss_enabled \

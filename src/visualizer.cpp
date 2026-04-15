@@ -61,33 +61,6 @@ static std::string render_panel(const AudioSTFT& stft,
             << " fill=\"#888888\" font-size=\"16\" text-anchor=\"middle\">" << lbl << "</text>\n";
     }
 
-    // HPF marker + LR4 slope curve
-    if (stft.hpf_hz > 0.0) {
-        double x_hpf = get_x(stft.hpf_hz);
-        svg << "  <line x1=\"" << x_hpf << "\" y1=\"0\" x2=\"" << x_hpf << "\" y2=\"1080\""
-            << " stroke=\"#ffffff\" stroke-width=\"1.5\" stroke-dasharray=\"5,5\" opacity=\"0.7\" />\n";
-        svg << "  <text x=\"" << (x_hpf + 5) << "\" y=\"110\""
-            << " fill=\"#ffffff\" font-size=\"14\" opacity=\"0.9\">HPF ("
-            << std::fixed << std::setprecision(1) << stft.hpf_hz << " Hz)</text>\n";
-
-        svg << "  <polyline fill=\"none\" stroke=\"#ff9955\" stroke-width=\"2\""
-            << " stroke-linejoin=\"round\" opacity=\"0.8\" points=\"";
-        double log_min = std::log10(10.0), log_max = std::log10(nyquist);
-        double prev_f = 0.0;
-        for (int i = 0; i < CURVE_RESOLUTION; ++i) {
-            double f = std::pow(10.0, log_min + i * (log_max - log_min) / (CURVE_RESOLUTION - 1));
-            if (prev_f < stft.hpf_hz && f >= stft.hpf_hz)
-                svg << std::fixed << std::setprecision(2)
-                    << get_x(stft.hpf_hz) << "," << get_y(-6.02) << " ";
-            double r8 = std::pow(f / stft.hpf_hz, 8.0);
-            double h  = r8 / (1.0 + r8);
-            double db = 20.0 * std::log10(std::max(h, 1e-10));
-            svg << std::fixed << std::setprecision(2) << get_x(f) << "," << get_y(db) << " ";
-            prev_f = f;
-        }
-        svg << "\" />\n";
-    }
-
     // Raw delta trace (gray thin)
     if (!raw_delta.empty()) {
         svg << "  <polyline fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1\""
