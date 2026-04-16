@@ -23,6 +23,14 @@ int main(int argc, char* argv[]) {
                   << "  beta=2.0                  HPSS mask sharpness exponent\n"
                   << "  L_h=31                    Horizontal context half-width (frames)\n"
                   << "  L_p=7                     Vertical filter max clamp (bins)\n"
+                  << "  yin_enabled=true          Enable YIN extraction (requires hpss_enabled)\n"
+                  << "  yin_f0_min=500.0          Minimum tracked f0 in Hz\n"
+                  << "  yin_f0_max=1200.0         Maximum tracked f0 in Hz\n"
+                  << "  yin_confidence=0.65       Confidence threshold (1 - d_prime at tau_0)\n"
+                  << "  yin_alpha=1.0             Comb filter extraction depth [0, 1]\n"
+                  << "  yin_sigma=1.5             Comb filter half-width in bins\n"
+                  << "  yin_threshold=0.35        d_prime threshold for voiced frame detection\n"
+                  << "  yin_diag=false            Write pitch log and correction WAV\n"
 ;
         return 1;
     }
@@ -60,6 +68,14 @@ int main(int argc, char* argv[]) {
     audio_stft.L_h          = ki("L_h",            31);
     audio_stft.L_p_max      = ki("L_p",             7);
 
+    audio_stft.yin_enabled    = kb("yin_enabled",     true);
+    audio_stft.yin_f0_min     = kd("yin_f0_min",    500.0);
+    audio_stft.yin_f0_max     = kd("yin_f0_max",   1200.0);
+    audio_stft.yin_confidence = kd("yin_confidence",  0.65);
+    audio_stft.yin_alpha      = kd("yin_alpha",       1.00);
+    audio_stft.yin_sigma      = kd("yin_sigma",        1.5);
+    audio_stft.yin_threshold  = kd("yin_threshold",   0.35);
+    audio_stft.yin_diag       = kb("yin_diag",       false);
 
     // --- Derive output paths from MD5 ---
     std::string base = "." + md5 + "-tmp";
@@ -70,9 +86,17 @@ int main(int argc, char* argv[]) {
         audio_stft.perc_audio_file     = base + ".wav";
     }
     audio_stft.tgt_audio_file = base;  // visualizer appends _eq.png
+    if (audio_stft.yin_diag) {
+        audio_stft.yin_diag_pitch_file      = base + "_yin_pitch.txt";
+        audio_stft.yin_diag_correction_file = base + "_yin_correction.wav";
+    }
 
     if (audio_stft.N % 4 != 0) {
         std::cerr << "Error: N must be divisible by 4.\n";
+        return 1;
+    }
+    if (audio_stft.yin_enabled && !audio_stft.hpss_enabled) {
+        std::cerr << "Error: yin_enabled=true requires hpss_enabled=true.\n";
         return 1;
     }
 

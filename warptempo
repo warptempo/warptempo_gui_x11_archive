@@ -309,26 +309,22 @@ fi
 
 # Adapter / Engine Execution
 if [[ "$engine" == warptempo ]]; then
-#Usage: ./warptempo_engine <source_audio> <timemap_file> <source_audio_md5> [key=value ...]
-#
-#  <source_audio_md5>  MD5 hex digest of the original (untrimmed) source
-#                      audio used when generating the timemap. Passed
-#                      explicitly so trimmed or resampled variants of the
-#                      source do not silently produce mismatched output paths.
-#
-#  N=4096                    FFT size (divisible by 4)
-#  hpss_enabled=true         Perform HPSS (true|false)
-#  beta=2.0                  HPSS mask sharpness exponent
-#  L_h=31                    Horizontal context half-width (frames)
-#  L_p=7                     Vertical filter max clamp (bins)
 
-	hpss_enabled=false
+	hpss_enabled=true
 	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
 		N=4096 \
 		hpss_enabled=$hpss_enabled \
 		beta=2.0 \
 		L_h=31 \
-		L_p=7
+		L_p=7 \
+		yin_enabled=true \
+		yin_f0_min=500.0 \
+		yin_f0_max=1200.0 \
+		yin_confidence=0.65 \
+		yin_alpha=1.0 \
+		yin_sigma=1.5 \
+		yin_threshold=0.35 \
+		yin_diag=false
 
 elif [[ "$engine" == rubberband ]]; then
 	sed -i '/^0 0$/d' .$md5-timemap
@@ -401,7 +397,7 @@ else
 	echo -e "$clip_warning"
 fi
 
-rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav .$md5-tmp*.png
+#rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav .$md5-tmp*.png
 
 
 

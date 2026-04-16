@@ -103,6 +103,18 @@ struct AudioSTFT {
     // HPSS enable flag
     bool hpss_enabled = true;
 
+    // YIN Extraction (Pass 5) parameters
+    bool   yin_enabled   = true;
+    double yin_f0_min    = 500.0;
+    double yin_f0_max    = 1200.0;
+    double yin_confidence = 0.65;
+    double yin_alpha     = 1.0;
+    double yin_sigma     = 1.5;
+    double yin_threshold = 0.35;
+    bool   yin_diag      = false;
+    std::string yin_diag_pitch_file;
+    std::string yin_diag_correction_file;
+
     // Output paths (derived from MD5 of source audio)
     std::string perc_audio_file;
     std::string harmonic_audio_file;
