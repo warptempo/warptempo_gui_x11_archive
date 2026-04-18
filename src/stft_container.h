@@ -13,6 +13,11 @@ struct TimeMapSegment {
     size_t tgt_frame;
 };
 
+struct TransientMarker {
+    int synth_frame;
+    int64_t src_frame;
+};
+
 // --- DSP Helpers ---
 inline double princarg(double phase) {
     return phase - 2.0 * M_PI * std::floor((phase + M_PI) / (2.0 * M_PI));
@@ -114,6 +119,10 @@ struct AudioSTFT {
     bool   yin_diag      = false;
     std::string yin_diag_pitch_file;
     std::string yin_diag_correction_file;
+
+    // Transient phase reset
+    std::vector<TransientMarker> transient_markers;
+    int flex_window = 1;
 
     // Output paths (derived from MD5 of source audio)
     std::string perc_audio_file;

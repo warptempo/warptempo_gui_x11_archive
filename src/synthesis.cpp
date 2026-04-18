@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <deque>
+#include <cstdio>
 
 void Synthesis::process(AudioSTFT& stft) {
     std::cout << "\n[Pass 4] Executing " << (stft.hpss_enabled ? "HPSS" : "Bypass") << " Synthesis...\n";
@@ -70,8 +72,103 @@ void Synthesis::process(AudioSTFT& stft) {
     std::vector<int> peaks;
     peaks.reserve(N / 8);
 
+    // Transient phase reset infrastructure
+    const bool has_transients = !stft.transient_markers.empty();
+    const int flex_win = stft.flex_window;
+    const int ring_size = 2 * flex_win + 2;
+    int transient_cursor = 0;
+    struct PendingEval { int marker_frame; int64_t src_frame; };
+    std::deque<PendingEval> pending_evals;
+    std::vector<std::vector<double>> ring_phi;
+    std::vector<std::vector<int>> ring_peaks_buf;
+    double recent_peak_amp = 1e-10;
+    if (has_transients) {
+        ring_phi.resize(channels * ring_size, std::vector<double>(K, 0.0));
+        ring_peaks_buf.resize(channels * ring_size);
+    }
+
     std::vector<std::vector<double>> ola_harmonic(channels, std::vector<double>(N, 0.0));
     std::vector<std::vector<double>> ola_perc    (channels, std::vector<double>(N, 0.0));
+
+    auto evaluate_and_apply_reset = [&](const PendingEval& pe, int eval_frame) {
+        int best_frame = pe.marker_frame;
+        double best_score = -1.0;
+
+        for (int cand = pe.marker_frame - flex_win; cand <= pe.marker_frame + flex_win; ++cand) {
+            if (cand < 0 || cand >= num_frames || cand > eval_frame) continue;
+
+            // Criterion 1: Zero-crossing proximity
+            int ola_pos = N / 2 + (cand - eval_frame) * R_s;
+            double zc_score = 0.0;
+            if (ola_pos >= 0 && ola_pos < N) {
+                double avg_val = 0.0;
+                for (int c = 0; c < channels; ++c)
+                    avg_val += std::abs(ola_perc[c][ola_pos]);
+                avg_val /= channels;
+                zc_score = 1.0 - std::min(avg_val / (recent_peak_amp + 1e-10), 1.0);
+            }
+
+            // Criterion 2: Phase lock group stability (Jaccard)
+            double jaccard_avg = 0.0;
+            int jaccard_count = 0;
+            for (int c = 0; c < channels; ++c) {
+                if (cand < eval_frame - ring_size + 1) break;
+                int cand_slot = cand % ring_size;
+                const auto& cp = ring_peaks_buf[c * ring_size + cand_slot];
+
+                std::vector<int> neighbor_union;
+                for (int nb : {cand - 1, cand + 1}) {
+                    if (nb < 0 || nb >= num_frames || nb > eval_frame) continue;
+                    if (nb < eval_frame - ring_size + 1) continue;
+                    int nb_slot = nb % ring_size;
+                    const auto& np = ring_peaks_buf[c * ring_size + nb_slot];
+                    std::vector<int> merged;
+                    std::set_union(neighbor_union.begin(), neighbor_union.end(),
+                                   np.begin(), np.end(), std::back_inserter(merged));
+                    neighbor_union = std::move(merged);
+                }
+
+                if (neighbor_union.empty() && cp.empty()) {
+                    jaccard_avg += 1.0;
+                } else if (!neighbor_union.empty() && !cp.empty()) {
+                    int isect = 0, usize = 0;
+                    size_t i = 0, j = 0;
+                    while (i < cp.size() && j < neighbor_union.size()) {
+                        if (cp[i] == neighbor_union[j]) { ++isect; ++usize; ++i; ++j; }
+                        else if (cp[i] < static_cast<int>(neighbor_union[j])) { ++usize; ++i; }
+                        else { ++usize; ++j; }
+                    }
+                    usize += static_cast<int>((cp.size() - i) + (neighbor_union.size() - j));
+                    jaccard_avg += static_cast<double>(isect) / usize;
+                }
+                ++jaccard_count;
+            }
+            if (jaccard_count > 0) jaccard_avg /= jaccard_count;
+
+            double combined = zc_score * jaccard_avg;
+            if (combined > best_score) {
+                best_score = combined;
+                best_frame = cand;
+            }
+        }
+
+        // Apply reset: theta_prev = phi from chosen frame
+        int best_slot = best_frame % ring_size;
+        for (int c = 0; c < channels; ++c)
+            for (int k = 0; k < K; ++k)
+                stft.theta_prev[c][k] = ring_phi[c * ring_size + best_slot][k];
+
+        // Diagnostic output
+        int delta = best_frame - pe.marker_frame;
+        int64_t flex_ta = fm[best_frame];
+        double secs = std::max(0.0, static_cast<double>(flex_ta) / fs);
+        int total_ms = static_cast<int>(secs * 1000);
+        int mm = total_ms / 60000;
+        int ss = (total_ms % 60000) / 1000;
+        int ms = total_ms % 1000;
+        std::printf("  transient src=%lld synth=%d flex=%d delta=%d at %02d:%02d.%03d\n",
+                    (long long)pe.src_frame, pe.marker_frame, best_frame, delta, mm, ss, ms);
+    };
 
     int frames_to_skip = N / 2;
 
@@ -93,6 +190,12 @@ void Synthesis::process(AudioSTFT& stft) {
         for (int ch = 0; ch < channels; ++ch) {
             stft.phase_vocoder_frame(ch, channels, R_a_actual, frame_idx,
                                      read_buf.data(), M, phi, theta, peaks);
+
+            if (has_transients) {
+                int slot = frame_idx % ring_size;
+                std::copy(phi.begin(), phi.end(), ring_phi[ch * ring_size + slot].begin());
+                ring_peaks_buf[ch * ring_size + slot] = peaks;
+            }
 
             if (stft.yin_enabled && stft.hpss_enabled) {
                 // Pass 5: YIN extraction — detect f0, redistribute harmonic energy
@@ -269,6 +372,28 @@ void Synthesis::process(AudioSTFT& stft) {
             }
         }
 
+        // Transient phase reset processing
+        if (has_transients) {
+            double frame_max = 0.0;
+            for (int ch = 0; ch < channels; ++ch)
+                for (int n = 0; n < R_s && n < N; ++n)
+                    frame_max = std::max(frame_max, std::abs(ola_perc[ch][n]));
+            recent_peak_amp = std::max(recent_peak_amp * 0.995, frame_max);
+
+            while (transient_cursor < static_cast<int>(stft.transient_markers.size()) &&
+                   stft.transient_markers[transient_cursor].synth_frame == frame_idx) {
+                pending_evals.push_back({frame_idx,
+                    stft.transient_markers[transient_cursor].src_frame});
+                ++transient_cursor;
+            }
+
+            while (!pending_evals.empty() &&
+                   frame_idx >= pending_evals.front().marker_frame + flex_win) {
+                evaluate_and_apply_reset(pending_evals.front(), frame_idx);
+                pending_evals.pop_front();
+            }
+        }
+
         // Write accumulated samples (respecting initial N/2-frame skip)
         int write_offset = 0, write_len = R_s;
         if (frames_to_skip > 0) {
@@ -317,6 +442,14 @@ void Synthesis::process(AudioSTFT& stft) {
                 for (int n = N - R_s; n < N; ++n)
                     ola_correction[ch][n] = 0.0;
             }
+        }
+    }
+
+    // Flush any remaining pending transient evaluations
+    if (has_transients) {
+        while (!pending_evals.empty()) {
+            evaluate_and_apply_reset(pending_evals.front(), num_frames - 1);
+            pending_evals.pop_front();
         }
     }
 

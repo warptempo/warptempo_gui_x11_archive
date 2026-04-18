@@ -29,6 +29,8 @@ struct WarpMarker {
     bool is_log_sync = false;
     bool is_label_ref = false;
     bool is_numeric = false;
+
+    vector<double> transient_times_sec;
 };
 
 struct Settings {
@@ -218,6 +220,7 @@ int main(int argc, char* argv[]) {
     if (settings.title.empty()) { cerr << "Error: Title required in settings file: " << set_file << endl; return 1; }
 
     string timemap_file = "." + md5 + "-timemap";
+    string transientmap_file = "." + md5 + "-transientmap";
     
     // [NEW] Tempomap for MIDI Adapter (Time + Multiplier)
     string tempomap_file = "." + md5 + "-timemap-midi";
@@ -243,6 +246,8 @@ int main(int argc, char* argv[]) {
     // =========================================================
     string pre_scan_line;
     while (getline(wmf, pre_scan_line)) {
+        if (!pre_scan_line.empty() && (pre_scan_line[0] == ' ' || pre_scan_line[0] == '\t'))
+            continue;
         string t_line = trim_str(pre_scan_line);
         if (t_line.empty()) continue;
         
@@ -277,9 +282,52 @@ int main(int argc, char* argv[]) {
 
     string line;
     while (getline(wmf, line)) {
+        // Detect indented transient line (before trimming)
+        if (!line.empty() && (line[0] == ' ' || line[0] == '\t')) {
+            string t_indent = trim_str(line);
+            if (t_indent.empty()) continue;
+            // Strip text after first space (match main parser convention)
+            size_t sp = t_indent.find(' ');
+            if (sp != string::npos) t_indent = t_indent.substr(0, sp);
+            if (markers.empty()) {
+                cerr << "Error: Indented transient line before any warp marker: " << line << endl;
+                return 1;
+            }
+            if (t_indent.length() < 9 || !is_valid_time_format(t_indent.substr(0, 9))) {
+                cerr << "Error: Invalid transient time format - use MM:SS.mmm (" << line << ")." << endl;
+                return 1;
+            }
+            double transient_sec;
+            if (t_indent.length() > 9) {
+                transient_sec = parse_timestamp(t_indent.substr(0, 9)) + eval_math_string(t_indent.substr(9));
+            } else {
+                transient_sec = parse_timestamp(t_indent.substr(0, 9));
+            }
+            auto& tvec = markers.back().transient_times_sec;
+            if (tvec.empty()) {
+                if (transient_sec < markers.back().time_seconds) {
+                    cerr << "Error: Transient at " << format_timestamp(transient_sec)
+                         << " before parent warp marker at "
+                         << format_timestamp(markers.back().time_seconds)
+                         << " (" << line << ")." << endl;
+                    return 1;
+                }
+            } else {
+                if (transient_sec <= tvec.back()) {
+                    cerr << "Error: Transient times not strictly increasing: "
+                         << format_timestamp(tvec.back()) << " -> "
+                         << format_timestamp(transient_sec)
+                         << " (" << line << ")." << endl;
+                    return 1;
+                }
+            }
+            tvec.push_back(transient_sec);
+            continue;
+        }
+
         string t_line = trim_str(line);
         if (t_line.empty()) continue;
-        
+
         t_line = trim_str(t_line);
         size_t first_space = t_line.find(' ');
         if (first_space != string::npos) t_line = t_line.substr(0, first_space);
@@ -466,6 +514,22 @@ int main(int argc, char* argv[]) {
             if (!disabled) filtered.push_back(m);
         }
         markers = filtered;
+    }
+
+    // Validate transient regions
+    for (size_t i = 0; i < markers.size(); ++i) {
+        double upper_bound = (i + 1 < markers.size())
+            ? markers[i + 1].time_seconds
+            : (double)total_frames / sample_rate;
+        for (double t : markers[i].transient_times_sec) {
+            if (t < markers[i].time_seconds || t >= upper_bound) {
+                cerr << "Error: Transient at " << format_timestamp(t)
+                     << " outside region ["
+                     << format_timestamp(markers[i].time_seconds) << ", "
+                     << format_timestamp(upper_bound) << ")." << endl;
+                return 1;
+            }
+        }
     }
 
     // --- 2. Handle Trim ---
@@ -718,6 +782,20 @@ int main(int argc, char* argv[]) {
     of_tempo.close(); // [NEW]
     of_log.close();
 
+    // --- Generate Transientmap ---
+    {
+        ofstream of_tmap(transientmap_file);
+        int transient_count = 0;
+        for (const auto& m : markers) {
+            for (double t : m.transient_times_sec) {
+                of_tmap << llrint(t * sample_rate) << "\n";
+                ++transient_count;
+            }
+        }
+        of_tmap.close();
+        cout << "Generated transientmap: " << transient_count << " transients written" << endl;
+    }
+
     // --- 5. Post-Process Trim on Timemap ---
     if (!begin_time_str.empty()) {
         long begin_frame = (long)llrint(parse_timestamp(begin_time_str) * sample_rate);
@@ -800,7 +878,31 @@ int main(int argc, char* argv[]) {
             remove(tempomap_file.c_str());
             rename(tp_trimmed_file.c_str(), tempomap_file.c_str());
         }
-        
+
+        // Transientmap Trim
+        {
+            ifstream tmap_in(transientmap_file);
+            string tmap_trimmed = transientmap_file + "-trimmed";
+            ofstream tmap_out(tmap_trimmed);
+            long val;
+            int dropped = 0;
+            while (tmap_in >> val) {
+                long adjusted = val - begin_frame;
+                if (adjusted >= 0 && val <= end_frame) {
+                    tmap_out << adjusted << "\n";
+                } else {
+                    ++dropped;
+                }
+            }
+            tmap_in.close();
+            tmap_out.close();
+            remove(transientmap_file.c_str());
+            rename(tmap_trimmed.c_str(), transientmap_file.c_str());
+            if (dropped > 0)
+                cout << "Transientmap trim: dropped " << dropped
+                     << " transient(s) outside range" << endl;
+        }
+
         cout << "AUDIO_INPUT_UPDATED=." << md5 << "-trimmed.wav" << endl;
     }
 
