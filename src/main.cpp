@@ -24,8 +24,8 @@ int main(int argc, char* argv[]) {
                   << "  L_h=31                    Horizontal context half-width (frames)\n"
                   << "  L_p=7                     Vertical filter max clamp (bins)\n"
                   << "  yin_enabled=true          Enable YIN extraction (requires hpss_enabled)\n"
-                  << "  yin_f0_min=500.0          Minimum tracked f0 in Hz\n"
-                  << "  yin_f0_max=1200.0         Maximum tracked f0 in Hz\n"
+                  << "  yin_f0_min=300.0          Minimum tracked f0 in Hz\n"
+                  << "  yin_f0_max=1500.0         Maximum tracked f0 in Hz\n"
                   << "  yin_confidence=0.65       Confidence threshold (1 - d_prime at tau_0)\n"
                   << "  yin_alpha=1.0             Comb filter extraction depth [0, 1]\n"
                   << "  yin_sigma=1.5             Comb filter half-width in bins\n"
@@ -69,8 +69,8 @@ int main(int argc, char* argv[]) {
     audio_stft.L_p_max      = ki("L_p",             7);
 
     audio_stft.yin_enabled    = kb("yin_enabled",     true);
-    audio_stft.yin_f0_min     = kd("yin_f0_min",    500.0);
-    audio_stft.yin_f0_max     = kd("yin_f0_max",   1200.0);
+    audio_stft.yin_f0_min     = kd("yin_f0_min",    300.0);
+    audio_stft.yin_f0_max     = kd("yin_f0_max",   1500.0);
     audio_stft.yin_confidence = kd("yin_confidence",  0.65);
     audio_stft.yin_alpha      = kd("yin_alpha",       1.00);
     audio_stft.yin_sigma      = kd("yin_sigma",        1.5);

@@ -105,8 +105,8 @@ struct AudioSTFT {
 
     // YIN Extraction (Pass 5) parameters
     bool   yin_enabled   = true;
-    double yin_f0_min    = 500.0;
-    double yin_f0_max    = 1200.0;
+    double yin_f0_min    = 300.0;
+    double yin_f0_max    = 1500.0;
     double yin_confidence = 0.65;
     double yin_alpha     = 1.0;
     double yin_sigma     = 1.5;
