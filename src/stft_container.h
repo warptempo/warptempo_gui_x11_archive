@@ -58,7 +58,7 @@ inline double map_source_to_target(size_t src_frame, const std::vector<TimeMapSe
 }
 
 // --- Central Pipeline Container ---
-// Minimum system RAM: 4 GB (array footprint ~1.64 GB + OS + FFTW planning)
+// Peak memory dominated by overlap-add buffers, FFTW planning, and phase vocoder state arrays.
 struct AudioSTFT {
     // Source metadata
     SF_INFO src_info{};
@@ -95,39 +95,12 @@ struct AudioSTFT {
     // Virtual target buffer (Pass 1 output)
     std::vector<float> virtual_tgt_buf;
 
-    // HPSS Parameters
-    double beta    = 2.0; // Mask exponent (Wiener-filter; higher = sharper separation)
-    int    L_h     = 31;  // 63-frame horizontal context (slow-moving background sponge)
-    int    L_p_max = 7;   // Max vertical filter clamp — do not increase beyond 7
-
-    // HPSS Mask Arrays (flat): index as ch * M_total * K + m * K + k
-    // where M_total = frame_map.size(), K = N/2+1
-    std::vector<double> M_h_mask; // Background (Harmonic/Horizontal)
-    std::vector<double> M_p_mask; // Foreground (Percussive/Vertical)
-
-    // HPSS enable flag
-    bool hpss_enabled = true;
-
-    // YIN Extraction (Pass 5) parameters
-    bool   yin_enabled   = true;
-    double yin_f0_min    = 300.0;
-    double yin_f0_max    = 1500.0;
-    double yin_confidence = 0.65;
-    double yin_alpha     = 1.0;
-    double yin_sigma     = 1.5;
-    double yin_threshold = 0.35;
-    bool   yin_diag      = false;
-    std::string yin_diag_pitch_file;
-    std::string yin_diag_correction_file;
-
     // Transient phase reset
     std::vector<TransientMarker> transient_markers;
     int flex_window = 1;
 
-    // Output paths (derived from MD5 of source audio)
-    std::string perc_audio_file;
-    std::string harmonic_audio_file;
-    std::string tgt_audio_file;     // base path for eq_analysis output naming
+    // Output path (derived from MD5 of source audio)
+    std::string output_audio_file;
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;

@@ -4,21 +4,16 @@ project(warptempo_suite VERSION 2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# NOTE: Minimum 4 GB system RAM required.
-# Array footprint ~1.64 GB + HPSS temporaries (~400 MB) + OS overhead + FFTW planning buffers.
-
 # --- Dependencies for the DSP Engine ---
 find_package(OpenMP)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
-pkg_check_modules(EBUR128 REQUIRED libebur128)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
 
 # --- 1. Build the DSP Engine (Modular) ---
 add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
-    src/hpss.cpp
     src/synthesis.cpp
 )
 target_include_directories(warptempo_engine PRIVATE
@@ -35,41 +30,11 @@ target_link_libraries(warptempo_engine PRIVATE
 
 # --- 2. Build the Timemap Parser ---
 add_executable(parser src/parser.cpp)
-# (Assuming the parser is pure C++ and doesn't need external audio libs. 
+# (Assuming the parser is pure C++ and doesn't need external audio libs.
 # If it does, we can add a target_link_libraries block for it here.)
-
-# --- 3. Build the EQ Test Suite ---
-add_executable(eq_test_suite src/eq_test_suite.cpp)
-target_include_directories(eq_test_suite PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${SNDFILE_INCLUDE_DIRS}
-    ${EBUR128_INCLUDE_DIRS}
-    ${FFTW3_INCLUDE_DIRS}
-)
-target_link_libraries(eq_test_suite PRIVATE
-    ${SNDFILE_LIBRARIES}
-    ${EBUR128_LIBRARIES}
-    ${FFTW3_LIBRARIES}
-    m
-)
-
-# --- 4. Build the EQ Analysis Binary ---
-add_executable(eq_analysis src/eq_analysis.cpp)
-target_include_directories(eq_analysis PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${SNDFILE_INCLUDE_DIRS}
-    ${FFTW3_INCLUDE_DIRS}
-)
-target_link_libraries(eq_analysis PRIVATE
-    ${SNDFILE_LIBRARIES}
-    ${FFTW3_LIBRARIES}
-    m
-)
 
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(parser PRIVATE -Wall -Wextra -O3 -march=native)
-    target_compile_options(eq_test_suite PRIVATE -Wall -Wextra -O3 -march=native)
-    target_compile_options(eq_analysis PRIVATE -Wall -Wextra -O3 -march=native)
 endif()
