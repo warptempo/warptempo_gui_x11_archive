@@ -16,6 +16,19 @@ struct TimeMapSegment {
 struct TransientMarker {
     int synth_frame;
     int64_t src_frame;
+    bool is_loud = true;
+};
+
+struct DetectorParams {
+    bool   enabled               = true;
+    double xover_low             = 200.0;
+    double xover_high            = 3000.0;
+    double tau_back_ms           = 30.0;
+    double loud_thresh_db        = -20.0;
+    double quiet_thresh_db       = -40.0;
+    double refractory_ms         = 1500.0;
+    double loud_anticipation_ms  = 18.0;
+    double quiet_delay_ms        = 18.0;
 };
 
 // --- DSP Helpers ---
@@ -102,6 +115,10 @@ struct AudioSTFT {
     // Transient phase reset
     std::vector<TransientMarker> transient_markers;
     int flex_window = 1;
+
+    // Automatic transient detector
+    DetectorParams detect_params;
+    bool transient_diag = false;
 
     // Output path (derived from MD5 of source audio)
     std::string output_audio_file;

@@ -126,8 +126,6 @@ void Synthesis::process(AudioSTFT& stft) {
                     (long long)pe.src_frame, pe.marker_frame, best_frame, delta, mm, ss, ms);
     };
 
-    int frames_to_skip = N / 2;
-
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
 
@@ -184,24 +182,11 @@ void Synthesis::process(AudioSTFT& stft) {
             }
         }
 
-        // Write accumulated samples (respecting initial N/2-frame skip)
-        int write_offset = 0, write_len = R_s;
-        if (frames_to_skip > 0) {
-            if (frames_to_skip >= write_len) {
-                frames_to_skip -= write_len;
-                write_len = 0;
-            } else {
-                write_offset   = frames_to_skip;
-                write_len     -= frames_to_skip;
-                frames_to_skip = 0;
-            }
-        }
-        if (write_len > 0) {
-            for (int n = 0; n < write_len; ++n)
-                for (int ch = 0; ch < channels; ++ch)
-                    write_buf[n * channels + ch] = static_cast<float>(ola_out[ch][write_offset + n]);
-            sf_writef_float(output_snd, write_buf.data(), write_len);
-        }
+        // Write R_s samples of completed overlap-add output (1:1 target:output mapping)
+        for (int n = 0; n < R_s; ++n)
+            for (int ch = 0; ch < channels; ++ch)
+                write_buf[n * channels + ch] = static_cast<float>(ola_out[ch][n]);
+        sf_writef_float(output_snd, write_buf.data(), R_s);
 
         // Shift OLA buffers
         for (int ch = 0; ch < channels; ++ch) {

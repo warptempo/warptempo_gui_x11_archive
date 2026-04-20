@@ -14,6 +14,7 @@ pkg_check_modules(FFTW3 REQUIRED fftw3)
 add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
+    src/transients.cpp
     src/synthesis.cpp
 )
 target_include_directories(warptempo_engine PRIVATE
