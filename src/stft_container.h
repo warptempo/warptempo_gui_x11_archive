@@ -23,9 +23,13 @@ inline double princarg(double phase) {
     return phase - 2.0 * M_PI * std::floor((phase + M_PI) / (2.0 * M_PI));
 }
 
-// get_alpha() returns tgt_dur / src_dur.
-// Less than 1.0 means speedup (output shorter than source).
-// Greater than 1.0 means slowdown (output longer than source).
+// get_alpha() returns tgt_dur / src_dur, the engine-internal
+// alpha used by the phase vocoder.
+// alpha < 1.0: output shorter than source (user's tempo value > 1, speedup).
+// alpha > 1.0: output longer than source (user's tempo value < 1, slowdown).
+// Note: the engine's alpha is the reciprocal of the tempo value the
+// user authors in the warp marker file, which is consumed by the
+// parser as delta_tgt = delta_src / (tempo * scale).
 inline double get_alpha(size_t t_s, const std::vector<TimeMapSegment>& map) {
     if (map.empty()) return 1.0;
     if (t_s <= map.front().tgt_frame) return 1.0;

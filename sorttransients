@@ -1,0 +1,138 @@
+#!/bin/bash
+# Run only from terminal
+if [ ! -t 0 ]; then exit; fi
+shopt -s nocaseglob
+set -e
+export LC_ALL=C
+#
+# sorttransients - sort transient markers within each warp marker group
+#
+# Reads a warp marker file from a filename argument and rewrites it in
+# place, moving the original to <filename>~ as a backup.
+#
+# For each warp marker (unindented line with a time) collects all
+# immediately following tab-indented transient lines, sorts them
+# strictly by time, and writes them back placed immediately after
+# their warp marker. All other lines are preserved verbatim in
+# their original positions.
+#
+# Assumes warp markers are already monotonically increasing.
+# Ensures tab-indented transient lines are monotonically increasing
+# within each group.
+
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "Usage: sorttransients <filename>" >&2
+    exit 1
+fi
+
+input="$1"
+backup="${input}~"
+
+# Move original to backup (overwrites any existing backup)
+mv -f "$input" "$backup"
+
+# Read all lines into an array, preserving empty lines and comments
+declare -a lines=()
+mapfile -t lines < "$backup"
+
+# Convert a MM:SS.mmm timestamp (possibly with optional b= or e= prefix
+# stripped by the caller) into total milliseconds as an integer for
+# comparison. Returns via stdout.
+ts_to_ms() {
+    local t="$1"
+    # Strip anything after the first pipe (for warp marker lines)
+    t="${t%%|*}"
+    # Strip leading tab/spaces (for transient lines)
+    t="${t#"${t%%[![:space:]]*}"}"
+    # Strip b= or e= prefix if present
+    t="${t#b=}"
+    t="${t#e=}"
+    # Strip anything after whitespace following the timestamp
+    t="${t%% *}"
+    # Parse MM:SS.mmm
+    local mm="${t%%:*}"
+    local rest="${t#*:}"
+    local ss="${rest%%.*}"
+    local mmm="${rest#*.}"
+    # Strip any leading zeros to avoid octal interpretation, but keep at
+    # least one digit
+    mm=$((10#$mm))
+    ss=$((10#$ss))
+    mmm=$((10#$mmm))
+    echo $(( mm * 60000 + ss * 1000 + mmm ))
+}
+
+# Returns 0 (true) if the line is a transient line (starts with a tab),
+# 1 (false) otherwise.
+is_transient() {
+    [[ "$1" == $'\t'* ]]
+}
+
+# Returns 0 (true) if the line is a warp marker line (has a timestamp
+# at column zero, optionally with a b= or e= prefix).
+is_warpmarker() {
+    local l="$1"
+    # Must not start with whitespace
+    [[ "$l" == $'\t'* || "$l" == " "* ]] && return 1
+    # Must be non-empty
+    [[ -z "$l" ]] && return 1
+    # Must not be a bare comment line
+    [[ "$l" == "#"* ]] && return 1
+    # Must contain a pipe (all real warp markers do)
+    [[ "$l" == *"|"* ]] || return 1
+    return 0
+}
+
+# Process the lines. For each warp marker, we may reorder any
+# transient lines that immediately follow it.
+declare -a output=()
+i=0
+n=${#lines[@]}
+
+while [ $i -lt $n ]; do
+    line="${lines[$i]}"
+
+    if is_warpmarker "$line"; then
+        # Emit the warp marker itself first
+        output+=("$line")
+        i=$((i + 1))
+
+        # Collect all directly-following transient lines (tab-indented).
+        # Stop at any non-transient line: empty line, comment, next warp
+        # marker, or end of file. Those belong to the next block and
+        # stay in place.
+        declare -a group=()
+        while [ $i -lt $n ] && is_transient "${lines[$i]}"; do
+            group+=("${lines[$i]}")
+            i=$((i + 1))
+        done
+
+        # Sort the group by timestamp ascending. Build a paired list of
+        # "ms<TAB>original_line" for sort -n, then strip the ms.
+        if [ ${#group[@]} -gt 0 ]; then
+            declare -a keyed=()
+            for g in "${group[@]}"; do
+                ms=$(ts_to_ms "$g")
+                keyed+=("${ms}"$'\t'"${g}")
+            done
+            # Sort numerically by leading integer. Use printf + sort.
+            mapfile -t sorted < <(printf '%s\n' "${keyed[@]}" | sort -n -k1,1 -t$'\t')
+            # Strip the ms prefix
+            for s in "${sorted[@]}"; do
+                output+=("${s#*$'\t'}")
+            done
+            unset keyed sorted
+        fi
+        unset group
+    else
+        # Any non-warp-marker line (empty, comment, stray line) is
+        # preserved in place.
+        output+=("$line")
+        i=$((i + 1))
+    fi
+done
+
+# Write the reordered file to the original path
+printf '%s\n' "${output[@]}" > "$input"
