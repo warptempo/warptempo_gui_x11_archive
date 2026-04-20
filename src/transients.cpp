@@ -108,6 +108,15 @@ void Transients::process(AudioSTFT& stft) {
             return a.is_loud && !b.is_loud;  // tie-break: loud before quiet
         });
 
+    // --- Warp marker synthesis frames (loud-path refractory reset only) ---
+    std::vector<int> warp_frames;
+    warp_frames.reserve(stft.timemap.size());
+    for (const auto& seg : stft.timemap) {
+        int wf = static_cast<int>(seg.tgt_frame / R_s);
+        if (wf >= 0 && wf < total_frames) warp_frames.push_back(wf);
+    }
+    std::sort(warp_frames.begin(), warp_frames.end());
+
     // --- Unified asymmetric refractory ---
     // Loud detections consult only the loud tracker; quiet detections consult
     // both, yielding to any recent loud activity.
@@ -116,7 +125,18 @@ void Transients::process(AudioSTFT& stft) {
     int last_quiet = std::numeric_limits<int>::min() / 2;
     std::vector<Crossing> accepted;
     accepted.reserve(merged_raw.size());
+    size_t warp_cursor = 0;
+    int n_warp_resets = 0;
+    auto apply_warps_upto = [&](int frame) {
+        while (warp_cursor < warp_frames.size() &&
+               warp_frames[warp_cursor] <= frame) {
+            last_loud = warp_frames[warp_cursor] - refr;
+            ++warp_cursor;
+            ++n_warp_resets;
+        }
+    };
     for (const auto& c : merged_raw) {
+        apply_warps_upto(c.frame);
         if (c.is_loud) {
             if (c.frame - last_loud >= refr) {
                 accepted.push_back(c);
@@ -129,6 +149,7 @@ void Transients::process(AudioSTFT& stft) {
             }
         }
     }
+    while (warp_cursor < warp_frames.size()) { ++warp_cursor; ++n_warp_resets; }
 
     // --- Per-path shifts (loud earlier, quiet later) ---
     const int loud_shift  = ms_to_frames(dp.loud_anticipation_ms);
@@ -154,6 +175,8 @@ void Transients::process(AudioSTFT& stft) {
     std::cout << "[Detector] Loud path: " << n_loud
               << " detections. Quiet path: " << n_quiet
               << " detections. Total: " << n_total << ".\n";
+    std::cout << "[Detector] Processed " << n_warp_resets
+              << " warp marker reset events.\n";
     if (n_total < 3)
         std::cout << "[Detector] Warning: fewer than 3 detections; "
                      "output may be unusable without retuning thresholds.\n";
