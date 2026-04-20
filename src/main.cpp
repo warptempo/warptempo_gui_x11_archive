@@ -156,11 +156,19 @@ int main(int argc, char* argv[]) {
                   << ".\n";
 
         // Convert source frames to synthesis frame indices (forward cursor)
+        // Compare against window centers (fm[i] + N/2) by shifting src down by N/2.
         const auto& fm = audio_stft.frame_map;
         const int num_fm = static_cast<int>(fm.size());
+        const int64_t half_N = audio_stft.N / 2;
         int cursor = 0;
         for (int64_t src : transient_src_frames) {
-            while (cursor < num_fm && fm[cursor] < src)
+            int64_t shifted = src - half_N;
+            if (shifted < 0) {
+                std::cout << "[Transientmap] Skipping src=" << src
+                          << " (before first analyzed frame)\n";
+                continue;
+            }
+            while (cursor < num_fm && fm[cursor] < shifted)
                 ++cursor;
             if (cursor >= num_fm) {
                 std::cout << "[Transientmap] Skipping src=" << src
@@ -168,11 +176,11 @@ int main(int argc, char* argv[]) {
                 continue;
             }
             int best = cursor;
-            if (cursor > 0 && fm[cursor] > src) {
-                if ((src - fm[cursor - 1]) <= (fm[cursor] - src))
+            if (cursor > 0 && fm[cursor] > shifted) {
+                if ((shifted - fm[cursor - 1]) <= (fm[cursor] - shifted))
                     best = cursor - 1;
             }
-            if (best == 0 && fm[0] > src) {
+            if (best == 0 && fm[0] > shifted) {
                 std::cout << "[Transientmap] Skipping src=" << src
                           << " (before first analyzed frame)\n";
                 continue;
