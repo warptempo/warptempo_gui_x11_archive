@@ -6,12 +6,12 @@
 #include <vector>
 
 void Transients::process(AudioSTFT& stft) {
-    const auto& dp       = stft.detect_params;
+    const auto& tp       = stft.transients_params;
 
     stft.transient_markers.clear();
 
-    if (!dp.enabled) {
-        std::cout << "[Pass 2/5] Transient detection.............. disabled\n";
+    if (!tp.enabled) {
+        std::cout << "[Pass 2/4] Transient detection.............. disabled\n";
         return;
     }
 
@@ -25,7 +25,7 @@ void Transients::process(AudioSTFT& stft) {
     const int total_frames = static_cast<int>(fm.size());
 
     if (total_frames <= 1) {
-        std::cout << "[Pass 2/5] Transient detection.............. 0 loud, 0 quiet\n";
+        std::cout << "[Pass 2/4] Transient detection.............. 0 transients\n";
         std::cout << "  ! fewer than two frames; no detection possible\n";
         return;
     }
@@ -34,8 +34,8 @@ void Transients::process(AudioSTFT& stft) {
     std::vector<double> W_M(K, 0.0);
     for (int k = 1; k <= N / 2; ++k) {
         double hz = k * bin_hz;
-        double W_L = 1.0 / (1.0 + std::pow(hz / dp.xover_low, 8.0));
-        double W_H = 1.0 / (1.0 + std::pow(dp.xover_high / hz, 8.0));
+        double W_L = 1.0 / (1.0 + std::pow(hz / tp.xover_low, 8.0));
+        double W_H = 1.0 / (1.0 + std::pow(tp.xover_high / hz, 8.0));
         double w = 1.0 - W_L - W_H;
         W_M[k] = (w < 0.0) ? 0.0 : w;
     }
@@ -72,7 +72,7 @@ void Transients::process(AudioSTFT& stft) {
 
     // --- Single-pass backward IIR smoothing (fast, per addendum) ---
     double c_back = 1.0 - std::exp(-static_cast<double>(R_s) /
-                                    ((dp.tau_back_ms / 1000.0) * fs));
+                                    ((tp.tau_back_ms / 1000.0) * fs));
     for (int m = total_frames - 2; m >= 0; --m)
         energy[m] = c_back * energy[m] + (1.0 - c_back) * energy[m + 1];
 
@@ -82,32 +82,18 @@ void Transients::process(AudioSTFT& stft) {
     for (int m = 0; m < total_frames; ++m)
         db[m] = 20.0 * std::log10(std::sqrt(energy[m]) / norm + 1e-9);
 
-    // --- Two-path crossing detection ---
-    std::vector<int> loud_raw, quiet_raw;
+    // --- Upward-crossing detection ---
+    std::vector<int> raw;
     for (int m = 1; m < total_frames; ++m) {
-        if (db[m] >= dp.loud_thresh_db && db[m - 1] < dp.loud_thresh_db)
-            loud_raw.push_back(m);
-        if (db[m] <= dp.quiet_thresh_db && db[m - 1] > dp.quiet_thresh_db)
-            quiet_raw.push_back(m);
+        if (db[m] >= tp.thresh_db && db[m - 1] < tp.thresh_db)
+            raw.push_back(m);
     }
 
     auto ms_to_frames = [fs, R_s](double ms) {
         return static_cast<int>(std::llround(ms * fs / (1000.0 * R_s)));
     };
 
-    // --- Merge both paths into one time-ordered list with path tags ---
-    struct Crossing { int frame; bool is_loud; };
-    std::vector<Crossing> merged_raw;
-    merged_raw.reserve(loud_raw.size() + quiet_raw.size());
-    for (int f : loud_raw)  merged_raw.push_back({f, true});
-    for (int f : quiet_raw) merged_raw.push_back({f, false});
-    std::stable_sort(merged_raw.begin(), merged_raw.end(),
-        [](const Crossing& a, const Crossing& b) {
-            if (a.frame != b.frame) return a.frame < b.frame;
-            return a.is_loud && !b.is_loud;  // tie-break: loud before quiet
-        });
-
-    // --- Warp marker synthesis frames (loud-path refractory reset only) ---
+    // --- Warp marker synthesis frames ---
     std::vector<int> warp_frames;
     warp_frames.reserve(stft.timemap.size());
     for (const auto& seg : stft.timemap) {
@@ -116,68 +102,42 @@ void Transients::process(AudioSTFT& stft) {
     }
     std::sort(warp_frames.begin(), warp_frames.end());
 
-    // --- Unified asymmetric refractory ---
-    // Loud detections consult last_loud_for_loud_gate (reset by warp markers so
-    // musically significant attacks can fire immediately after warp points).
-    // Quiet detections consult both last_quiet and last_loud_for_quiet_gate;
-    // the latter is NOT reset by warp markers, preserving the rule that a quiet
-    // detection must yield to any genuinely recent loud activity regardless of
-    // whether a warp marker sits between them.
-    const int refr = ms_to_frames(dp.refractory_ms);
-    int last_loud_for_loud_gate  = std::numeric_limits<int>::min() / 2;
-    int last_loud_for_quiet_gate = std::numeric_limits<int>::min() / 2;
-    int last_quiet               = std::numeric_limits<int>::min() / 2;
-    std::vector<Crossing> accepted;
-    accepted.reserve(merged_raw.size());
+    // --- Refractory ---
+    // Warp markers reset the refractory so musically significant attacks at
+    // warp points can fire immediately.
+    const int refr = ms_to_frames(tp.refractory_ms);
+    int last_accepted = std::numeric_limits<int>::min() / 2;
+    std::vector<int> accepted;
+    accepted.reserve(raw.size());
     size_t warp_cursor = 0;
     auto apply_warps_upto = [&](int frame) {
         while (warp_cursor < warp_frames.size() &&
                warp_frames[warp_cursor] <= frame) {
-            last_loud_for_loud_gate = warp_frames[warp_cursor] - refr;
+            last_accepted = warp_frames[warp_cursor] - refr;
             ++warp_cursor;
         }
     };
-    for (const auto& c : merged_raw) {
-        apply_warps_upto(c.frame);
-        if (c.is_loud) {
-            if (c.frame - last_loud_for_loud_gate >= refr) {
-                accepted.push_back(c);
-                last_loud_for_loud_gate  = c.frame;
-                last_loud_for_quiet_gate = c.frame;
-            }
-        } else {
-            if (c.frame - last_quiet >= refr &&
-                c.frame - last_loud_for_quiet_gate >= refr) {
-                accepted.push_back(c);
-                last_quiet = c.frame;
-            }
+    for (int f : raw) {
+        apply_warps_upto(f);
+        if (f - last_accepted >= refr) {
+            accepted.push_back(f);
+            last_accepted = f;
         }
     }
-    while (warp_cursor < warp_frames.size()) ++warp_cursor;
 
-    // --- Per-path shifts (loud earlier, quiet later) ---
-    const int loud_shift  = ms_to_frames(dp.loud_anticipation_ms);
-    const int quiet_shift = ms_to_frames(dp.quiet_delay_ms);
+    // --- Anticipation shift ---
+    const int anticipation_shift = ms_to_frames(tp.anticipation_ms);
 
-    std::vector<Crossing> shifted;
-    shifted.reserve(accepted.size());
-    int n_loud = 0, n_quiet = 0;
-    for (const auto& c : accepted) {
-        int s = c.is_loud ? (c.frame - loud_shift) : (c.frame + quiet_shift);
+    stft.transient_markers.reserve(accepted.size());
+    for (int f : accepted) {
+        int s = f - anticipation_shift;
         if (s < 0 || s >= total_frames) continue;
-        shifted.push_back({s, c.is_loud});
-        if (c.is_loud) ++n_loud; else ++n_quiet;
+        stft.transient_markers.push_back({s, fm[s]});
     }
-    std::sort(shifted.begin(), shifted.end(),
-        [](const Crossing& a, const Crossing& b) { return a.frame < b.frame; });
-
-    stft.transient_markers.reserve(shifted.size());
-    for (const auto& s : shifted)
-        stft.transient_markers.push_back({s.frame, fm[s.frame], s.is_loud});
 
     const int n_total = static_cast<int>(stft.transient_markers.size());
-    std::cout << "[Pass 2/5] Transient detection.............. "
-              << n_loud << " loud, " << n_quiet << " quiet\n";
+    std::cout << "[Pass 2/4] Transient detection.............. "
+              << n_total << " transients\n";
     if (n_total < 3)
         std::cout << "  ! fewer than 3 detections; output may be unusable\n";
 }

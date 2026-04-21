@@ -3,9 +3,7 @@
 #include <cmath>
 #include <complex>
 #include <cstring>
-#include <deque>
 #include <iostream>
-#include <iterator>
 #include <vector>
 
 void Synthesis::synthesize_full(
@@ -13,7 +11,6 @@ void Synthesis::synthesize_full(
     bool apply_clipper,
     std::complex<float>* spectra_cache,
     std::function<void(const float*, size_t)> write_cb,
-    bool lock_transient_resets,
     bool show_progress,
     const char* pass_label) {
     const int N          = stft.N;
@@ -31,110 +28,9 @@ void Synthesis::synthesize_full(
     std::vector<int> peaks;
     peaks.reserve(N / 8);
 
-    const bool has_transients = !stft.transient_markers.empty();
-    const int flex_win = stft.flex_window;
-    const int ring_size = 2 * flex_win + 2;
     int transient_cursor = 0;
-    struct PendingEval { int marker_frame; int64_t src_frame; int marker_index; };
-    std::deque<PendingEval> pending_evals;
-    bool fallback_warned = false;
-    std::vector<std::vector<double>> ring_phi;
-    std::vector<std::vector<int>> ring_peaks_buf;
-    double recent_peak_amp = 1e-10;
-    if (has_transients) {
-        ring_phi.resize(channels * ring_size, std::vector<double>(K, 0.0));
-        ring_peaks_buf.resize(channels * ring_size);
-    }
 
     std::vector<std::vector<double>> ola_out(channels, std::vector<double>(N, 0.0));
-
-    auto run_evaluator = [&](const PendingEval& pe, int eval_frame) -> int {
-        int best_frame = pe.marker_frame;
-        double best_score = -1.0;
-
-        for (int cand = pe.marker_frame - flex_win; cand <= pe.marker_frame + flex_win; ++cand) {
-            if (cand < 0 || cand >= num_frames || cand > eval_frame) continue;
-
-            int ola_pos = N / 2 + (cand - eval_frame) * R_s;
-            double zc_score = 0.0;
-            if (ola_pos >= 0 && ola_pos < N) {
-                double avg_val = 0.0;
-                for (int c = 0; c < channels; ++c)
-                    avg_val += std::abs(ola_out[c][ola_pos]);
-                avg_val /= channels;
-                zc_score = 1.0 - std::min(avg_val / (recent_peak_amp + 1e-10), 1.0);
-            }
-
-            double jaccard_avg = 0.0;
-            int jaccard_count = 0;
-            for (int c = 0; c < channels; ++c) {
-                if (cand < eval_frame - ring_size + 1) break;
-                int cand_slot = cand % ring_size;
-                const auto& cp = ring_peaks_buf[c * ring_size + cand_slot];
-
-                std::vector<int> neighbor_union;
-                for (int nb : {cand - 1, cand + 1}) {
-                    if (nb < 0 || nb >= num_frames || nb > eval_frame) continue;
-                    if (nb < eval_frame - ring_size + 1) continue;
-                    int nb_slot = nb % ring_size;
-                    const auto& np = ring_peaks_buf[c * ring_size + nb_slot];
-                    std::vector<int> merged;
-                    std::set_union(neighbor_union.begin(), neighbor_union.end(),
-                                   np.begin(), np.end(), std::back_inserter(merged));
-                    neighbor_union = std::move(merged);
-                }
-
-                if (neighbor_union.empty() && cp.empty()) {
-                    jaccard_avg += 1.0;
-                } else if (!neighbor_union.empty() && !cp.empty()) {
-                    int isect = 0, usize = 0;
-                    size_t i = 0, j = 0;
-                    while (i < cp.size() && j < neighbor_union.size()) {
-                        if (cp[i] == neighbor_union[j]) { ++isect; ++usize; ++i; ++j; }
-                        else if (cp[i] < static_cast<int>(neighbor_union[j])) { ++usize; ++i; }
-                        else { ++usize; ++j; }
-                    }
-                    usize += static_cast<int>((cp.size() - i) + (neighbor_union.size() - j));
-                    jaccard_avg += static_cast<double>(isect) / usize;
-                }
-                ++jaccard_count;
-            }
-            if (jaccard_count > 0) jaccard_avg /= jaccard_count;
-
-            double combined = zc_score * jaccard_avg;
-            if (combined > best_score) {
-                best_score = combined;
-                best_frame = cand;
-            }
-        }
-        return best_frame;
-    };
-
-    auto apply_reset_from_frame = [&](int best_frame) {
-        int best_slot = best_frame % ring_size;
-        for (int c = 0; c < channels; ++c)
-            for (int k = 0; k < K; ++k)
-                stft.theta_prev[c][k] = ring_phi[c * ring_size + best_slot][k];
-    };
-
-    auto evaluate_and_apply_reset = [&](const PendingEval& pe, int eval_frame) {
-        TransientMarker& marker = stft.transient_markers[pe.marker_index];
-        int best_frame;
-        if (lock_transient_resets) {
-            best_frame = run_evaluator(pe, eval_frame);
-            marker.chosen_reset_frame = best_frame;
-        } else if (marker.chosen_reset_frame >= 0) {
-            best_frame = marker.chosen_reset_frame;
-        } else {
-            if (!fallback_warned) {
-                std::cerr << "  ! Transient marker at synth_frame " << pe.marker_frame
-                          << " has no locked reset frame; falling back to evaluator\n";
-                fallback_warned = true;
-            }
-            best_frame = run_evaluator(pe, eval_frame);
-        }
-        apply_reset_from_frame(best_frame);
-    };
 
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
@@ -162,12 +58,6 @@ void Synthesis::synthesize_full(
             stft.phase_vocoder_frame(ch, channels, R_a_actual, frame_idx,
                                      read_buf.data(), M, phi, theta, peaks, atten_row);
 
-            if (has_transients) {
-                int slot = frame_idx % ring_size;
-                std::copy(phi.begin(), phi.end(), ring_phi[ch * ring_size + slot].begin());
-                ring_peaks_buf[ch * ring_size + slot] = peaks;
-            }
-
             if (spectra_cache) {
                 std::complex<float>* dst = spectra_cache +
                     (static_cast<size_t>(frame_idx) * channels + ch) * K;
@@ -184,26 +74,12 @@ void Synthesis::synthesize_full(
                 ola_out[ch][n] += (stft.ifft_out[n] * inv_N) * stft.synth_window[n];
         }
 
-        if (has_transients) {
-            double frame_max = 0.0;
-            for (int ch = 0; ch < channels; ++ch)
-                for (int n = 0; n < R_s && n < N; ++n)
-                    frame_max = std::max(frame_max, std::abs(ola_out[ch][n]));
-            recent_peak_amp = std::max(recent_peak_amp * 0.995, frame_max);
-
-            while (transient_cursor < static_cast<int>(stft.transient_markers.size()) &&
-                   stft.transient_markers[transient_cursor].synth_frame == frame_idx) {
-                pending_evals.push_back({frame_idx,
-                    stft.transient_markers[transient_cursor].src_frame,
-                    transient_cursor});
-                ++transient_cursor;
-            }
-
-            while (!pending_evals.empty() &&
-                   frame_idx >= pending_evals.front().marker_frame + flex_win) {
-                evaluate_and_apply_reset(pending_evals.front(), frame_idx);
-                pending_evals.pop_front();
-            }
+        while (transient_cursor < static_cast<int>(stft.transient_markers.size()) &&
+               stft.transient_markers[transient_cursor].synth_frame == frame_idx) {
+            for (int c = 0; c < channels; ++c)
+                for (int k = 0; k < K; ++k)
+                    stft.theta_prev[c][k] = stft.phi_prev[c][k];
+            ++transient_cursor;
         }
 
         int write_offset = 0, write_len = R_s;
@@ -247,13 +123,6 @@ void Synthesis::synthesize_full(
         }
     }
 
-    if (has_transients) {
-        while (!pending_evals.empty()) {
-            evaluate_and_apply_reset(pending_evals.front(), num_frames - 1);
-            pending_evals.pop_front();
-        }
-    }
-
     const int remaining = N - R_s;
     if (remaining > 0) {
         for (int ch = 0; ch < channels; ++ch) {
@@ -289,8 +158,7 @@ void Synthesis::process(AudioSTFT& stft) {
     };
 
     synthesize_full(stft, stft.limiter_params.clipper_enabled, nullptr, write_to_file,
-                    /*lock_transient_resets=*/false,
                     /*show_progress=*/true,
-                    /*pass_label=*/"[Pass 5/5] Synthesis........................ ");
+                    /*pass_label=*/"[Pass 4/4] Synthesis........................ ");
     sf_close(output_snd);
 }

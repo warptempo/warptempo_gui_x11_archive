@@ -185,7 +185,7 @@ void Limiter::process(AudioSTFT& stft) {
     auto& lp = stft.limiter_params;
 
     if (!lp.enabled) {
-        std::cout << "[Pass 4/5] Limiter.......................... disabled\n";
+        std::cout << "[Pass 3/4] Limiter.......................... disabled\n";
         return;
     }
 
@@ -223,7 +223,6 @@ void Limiter::process(AudioSTFT& stft) {
     };
     Synthesis::synthesize_full(stft, /*apply_clipper=*/false,
                                 cached_spectra.data(), write_mem,
-                                /*lock_transient_resets=*/false,
                                 /*show_progress=*/false,
                                 /*pass_label=*/"");
 
@@ -234,7 +233,7 @@ void Limiter::process(AudioSTFT& stft) {
                              ceiling, queue);
 
     if (queue.empty()) {
-        std::cout << "[Pass 4/5] Limiter.......................... 0 peaks, no attenuation required\n";
+        std::cout << "[Pass 3/4] Limiter.......................... 0 peaks, no attenuation required\n";
         return;
     }
 
@@ -493,7 +492,7 @@ void Limiter::process(AudioSTFT& stft) {
         reduction_db_list.push_back(reduction_db);
     }
 
-    std::cout << "[Pass 4/5] Limiter.......................... "
+    std::cout << "[Pass 3/4] Limiter.......................... "
               << resolved.size() << " peaks, " << iterations
               << " iterations, done\n";
 

@@ -16,15 +16,10 @@ public:
     // as a flat array of size num_frames * channels * (N/2+1). apply_clipper
     // clamps each output sample to +/- ceiling_amplitude.
     //
-    // lock_transient_resets=true: run the reset evaluator and record its
-    //   chosen frame into each TransientMarker.chosen_reset_frame. The
-    //   TransientApply pass uses this mode to freeze reset decisions against a
-    //   single reference OLA so downstream passes (limiter measurement, final
-    //   synthesis) apply identical resets and produce comparable output.
-    // lock_transient_resets=false: for each marker, apply the reset from its
-    //   pre-recorded chosen_reset_frame directly. If a marker has no recorded
-    //   frame (<0), fall back to running the evaluator and emit a one-shot
-    //   warning.
+    // When a transient marker's synth_frame is encountered, theta_prev is reset
+    // from the current phi_prev so that synthesis phase realigns with the
+    // source at that frame.
+    //
     // show_progress=true: print live progress % via \r, terminating with 100%.
     // pass_label: full prefix printed before each progress tick (caller provides
     //   trailing dots/space to reach the pipeline's 45-char status column).
@@ -33,7 +28,6 @@ public:
         bool apply_clipper,
         std::complex<float>* spectra_cache,
         std::function<void(const float*, size_t)> write_cb,
-        bool lock_transient_resets,
         bool show_progress,
         const char* pass_label);
 };

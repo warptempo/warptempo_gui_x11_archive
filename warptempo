@@ -313,22 +313,16 @@ if [[ "$engine" == warptempo ]]; then
 	if [[ -z "$N" ]]; then
 		N=4096
 	fi
-	if [[ -z "$flex_window" ]]; then
-		flex_window=1
-	fi
 	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
 		N=4096 \
-		flex_window=1 \
-		detect_enabled=true \
-		detect_xover_low=200.0 \
-		detect_xover_high=3000.0 \
-		detect_tau_back_ms=30.0 \
-		detect_loud_thresh_db=-20.0 \
-		detect_quiet_thresh_db=-40.0 \
-		detect_refractory_ms=1500.0 \
-		detect_loud_anticipation_ms=50.0 \
-		detect_quiet_delay_ms=50.0 \
-		transient_diag=true \
+		transients_enabled=true \
+		transients_xover_low=120.0 \
+		transients_xover_high=3500.0 \
+		transients_tau_back_ms=30.0 \
+		transients_thresh_db=-20.0 \
+		transients_refractory_ms=1500.0 \
+		transients_anticipation_ms=100.0 \
+		transients_diag=true \
 		limiter_enabled=true \
 		limiter_ceiling_dbfs=-0.3 \
 		limiter_tolerance_db=0.01 \

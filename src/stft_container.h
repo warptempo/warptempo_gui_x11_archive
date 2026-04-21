@@ -16,20 +16,16 @@ struct TimeMapSegment {
 struct TransientMarker {
     int synth_frame;
     int64_t src_frame;
-    bool is_loud = true;
-    int chosen_reset_frame = -1;   // -1 = not yet decided; set by TransientApply pass
 };
 
-struct DetectorParams {
-    bool   enabled               = true;
-    double xover_low             = 200.0;
-    double xover_high            = 3000.0;
-    double tau_back_ms           = 30.0;
-    double loud_thresh_db        = -20.0;
-    double quiet_thresh_db       = -40.0;
-    double refractory_ms         = 1500.0;
-    double loud_anticipation_ms  = 50.0;
-    double quiet_delay_ms        = 50.0;
+struct TransientsParams {
+    bool   enabled          = true;
+    double xover_low        = 120.0;
+    double xover_high       = 3500.0;
+    double tau_back_ms      = 30.0;
+    double thresh_db        = -20.0;
+    double refractory_ms    = 1500.0;
+    double anticipation_ms  = 100.0;
 };
 
 struct LimiterParams {
@@ -136,11 +132,10 @@ struct AudioSTFT {
 
     // Transient phase reset
     std::vector<TransientMarker> transient_markers;
-    int flex_window = 1;
 
     // Automatic transient detector
-    DetectorParams detect_params;
-    bool transient_diag = false;
+    TransientsParams transients_params;
+    bool transients_diag = false;
 
     // Spectral limiter
     LimiterParams limiter_params;

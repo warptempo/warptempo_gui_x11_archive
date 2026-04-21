@@ -7,7 +7,6 @@
 #include "stft_container.h"
 #include "phase_vocoder.h"
 #include "transients.h"
-#include "transient_apply.h"
 #include "limiter.h"
 #include "synthesis.h"
 
@@ -21,20 +20,16 @@ int main(int argc, char* argv[]) {
                   << "                      explicitly so trimmed or resampled variants of the\n"
                   << "                      source do not silently produce mismatched output paths.\n"
                   << "\n"
-                  << "  N=4096                            FFT size (divisible by 4)\n"
-                  << "  flex_window=1                     Flex factor search half-width (synth frames)\n"
+                  << "  N=4096                                FFT size (divisible by 4)\n"
                   << "\n"
-                  << "  detect_enabled=true               Run detector (false produces zero markers)\n"
-                  << "  detect_xover_low=200.0            Detection band lower edge (Hz)\n"
-                  << "  detect_xover_high=3000.0          Detection band upper edge (Hz)\n"
-                  << "  detect_tau_back_ms=30.0           Backward IIR time constant\n"
-                  << "  detect_loud_thresh_db=-20.0       Loud-path dB threshold (upward crossings)\n"
-                  << "  detect_quiet_thresh_db=-40.0      Quiet-path dB threshold (downward crossings)\n"
-                  << "  detect_refractory_ms=1500.0       Unified target-time refractory (loud always fires;\n"
-                  << "                                    quiet yields to recent loud activity)\n"
-                  << "  detect_loud_anticipation_ms=50.0  Shift loud detections earlier (ms)\n"
-                  << "  detect_quiet_delay_ms=50.0        Shift quiet detections later (ms)\n"
-                  << "  transient_diag=false              Write <output>-diag.wav with dirac spikes (mono)\n"
+                  << "  transients_enabled=true               Run detector (false produces zero markers)\n"
+                  << "  transients_xover_low=120.0            Detection band lower edge (Hz)\n"
+                  << "  transients_xover_high=3500.0          Detection band upper edge (Hz)\n"
+                  << "  transients_tau_back_ms=30.0           Backward IIR time constant\n"
+                  << "  transients_thresh_db=-20.0            dB threshold for upward crossings\n"
+                  << "  transients_refractory_ms=1500.0       Target-time refractory between detections\n"
+                  << "  transients_anticipation_ms=100.0      Shift detections earlier (ms)\n"
+                  << "  transients_diag=false                 Write <output>-diag.wav with dirac spikes (mono)\n"
                   << "\n"
                   << "  limiter_enabled=true              Run the spectral limiter pass\n"
                   << "  limiter_ceiling_dbfs=-0.3         Peak ceiling in dBFS\n"
@@ -77,19 +72,16 @@ int main(int argc, char* argv[]) {
     };
 
     audio_stft.N            = ki("N",           4096);
-    audio_stft.flex_window  = ki("flex_window",     1);
 
-    auto& dp = audio_stft.detect_params;
-    dp.enabled              = kb("detect_enabled",              dp.enabled);
-    dp.xover_low            = kd("detect_xover_low",            dp.xover_low);
-    dp.xover_high           = kd("detect_xover_high",           dp.xover_high);
-    dp.tau_back_ms          = kd("detect_tau_back_ms",          dp.tau_back_ms);
-    dp.loud_thresh_db       = kd("detect_loud_thresh_db",       dp.loud_thresh_db);
-    dp.quiet_thresh_db      = kd("detect_quiet_thresh_db",      dp.quiet_thresh_db);
-    dp.refractory_ms        = kd("detect_refractory_ms",        dp.refractory_ms);
-    dp.loud_anticipation_ms = kd("detect_loud_anticipation_ms", dp.loud_anticipation_ms);
-    dp.quiet_delay_ms       = kd("detect_quiet_delay_ms",       dp.quiet_delay_ms);
-    audio_stft.transient_diag = kb("transient_diag", false);
+    auto& tp = audio_stft.transients_params;
+    tp.enabled              = kb("transients_enabled",              tp.enabled);
+    tp.xover_low            = kd("transients_xover_low",            tp.xover_low);
+    tp.xover_high           = kd("transients_xover_high",           tp.xover_high);
+    tp.tau_back_ms          = kd("transients_tau_back_ms",          tp.tau_back_ms);
+    tp.thresh_db            = kd("transients_thresh_db",            tp.thresh_db);
+    tp.refractory_ms        = kd("transients_refractory_ms",        tp.refractory_ms);
+    tp.anticipation_ms      = kd("transients_anticipation_ms",      tp.anticipation_ms);
+    audio_stft.transients_diag = kb("transients_diag", false);
 
     auto& lp = audio_stft.limiter_params;
     lp.enabled              = kb("limiter_enabled",         lp.enabled);
@@ -162,21 +154,19 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     PhaseVocoder   stft_engine;
     Transients     detector;
-    TransientApply apply;
     Limiter        limiter;
     Synthesis      synthesis;
 
-    std::cout << "[Pass 1/5] Analysis + virtual buffer........ " << std::flush;
+    std::cout << "[Pass 1/4] Analysis + virtual buffer........ " << std::flush;
     stft_engine.process(audio_stft);
     std::cout << "done\n";
 
-    detector.process(audio_stft);  // prints its own Pass 2 line
-    apply.process(audio_stft);     // prints its own Pass 3 line
-    limiter.process(audio_stft);   // prints its own Pass 4 line
-    synthesis.process(audio_stft); // prints its own Pass 5 line
+    detector.process(audio_stft);
+    limiter.process(audio_stft);
+    synthesis.process(audio_stft);
 
     // --- Transient diagnostic spike file (MONO) ---
-    if (audio_stft.transient_diag) {
+    if (audio_stft.transients_diag) {
         SF_INFO probe_info{};
         probe_info.format = 0;
         SNDFILE* probe = sf_open(audio_stft.output_audio_file.c_str(), SFM_READ, &probe_info);
@@ -208,10 +198,9 @@ int main(int argc, char* argv[]) {
 
                 for (const auto& m : audio_stft.transient_markers) {
                     int64_t center = static_cast<int64_t>(m.synth_frame) * R_s;
-                    float sign = m.is_loud ? 1.0f : -1.0f;
-                    poke(center - 1, 0.5f * sign);
-                    poke(center,     1.0f * sign);
-                    poke(center + 1, 0.5f * sign);
+                    poke(center - 1, 0.5f);
+                    poke(center,     1.0f);
+                    poke(center + 1, 0.5f);
                 }
 
                 sf_writef_float(diag_snd, diag_buf.data(), total);
