@@ -1,41 +1,43 @@
 #include "synthesis.h"
-#include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <complex>
+#include <cstring>
 #include <deque>
-#include <cstdio>
+#include <iostream>
+#include <iterator>
+#include <vector>
 
-void Synthesis::process(AudioSTFT& stft) {
-    std::cout << "\n[Pass 4] Executing Synthesis...\n";
-
-    const int N        = stft.N;
-    const int R_s      = stft.R_s;
-    const int channels = stft.channels;
-    const int K        = N / 2 + 1;
-    const auto& fm     = stft.frame_map;
+void Synthesis::synthesize_full(
+    AudioSTFT& stft,
+    bool apply_clipper,
+    std::complex<float>* spectra_cache,
+    std::function<void(const float*, size_t)> write_cb,
+    bool lock_transient_resets,
+    bool show_progress,
+    const char* pass_label) {
+    const int N          = stft.N;
+    const int R_s        = stft.R_s;
+    const int channels   = stft.channels;
+    const int K          = N / 2 + 1;
+    const auto& fm       = stft.frame_map;
     const int num_frames = static_cast<int>(fm.size());
-    const int fs       = stft.src_info.samplerate;
-
-    SF_INFO tgt_info = stft.src_info;
-    tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-
-    SNDFILE* output_snd = sf_open(stft.output_audio_file.c_str(), SFM_WRITE, &tgt_info);
-    std::cout << "  -> Output      : " << stft.output_audio_file << "\n";
+    const double ceiling_amp =
+        std::pow(10.0, stft.limiter_params.ceiling_dbfs / 20.0);
 
     stft.reset_phase_state();
 
-    // Allocated once, reused across all frames and channels (Issue 2)
     std::vector<double> M(K), phi(K), theta(K);
     std::vector<int> peaks;
     peaks.reserve(N / 8);
 
-    // Transient phase reset infrastructure
     const bool has_transients = !stft.transient_markers.empty();
     const int flex_win = stft.flex_window;
     const int ring_size = 2 * flex_win + 2;
     int transient_cursor = 0;
-    struct PendingEval { int marker_frame; int64_t src_frame; };
+    struct PendingEval { int marker_frame; int64_t src_frame; int marker_index; };
     std::deque<PendingEval> pending_evals;
+    bool fallback_warned = false;
     std::vector<std::vector<double>> ring_phi;
     std::vector<std::vector<int>> ring_peaks_buf;
     double recent_peak_amp = 1e-10;
@@ -46,14 +48,13 @@ void Synthesis::process(AudioSTFT& stft) {
 
     std::vector<std::vector<double>> ola_out(channels, std::vector<double>(N, 0.0));
 
-    auto evaluate_and_apply_reset = [&](const PendingEval& pe, int eval_frame) {
+    auto run_evaluator = [&](const PendingEval& pe, int eval_frame) -> int {
         int best_frame = pe.marker_frame;
         double best_score = -1.0;
 
         for (int cand = pe.marker_frame - flex_win; cand <= pe.marker_frame + flex_win; ++cand) {
             if (cand < 0 || cand >= num_frames || cand > eval_frame) continue;
 
-            // Criterion 1: Zero-crossing proximity
             int ola_pos = N / 2 + (cand - eval_frame) * R_s;
             double zc_score = 0.0;
             if (ola_pos >= 0 && ola_pos < N) {
@@ -64,7 +65,6 @@ void Synthesis::process(AudioSTFT& stft) {
                 zc_score = 1.0 - std::min(avg_val / (recent_peak_amp + 1e-10), 1.0);
             }
 
-            // Criterion 2: Phase lock group stability (Jaccard)
             double jaccard_avg = 0.0;
             int jaccard_count = 0;
             for (int c = 0; c < channels; ++c) {
@@ -107,29 +107,44 @@ void Synthesis::process(AudioSTFT& stft) {
                 best_frame = cand;
             }
         }
+        return best_frame;
+    };
 
-        // Apply reset: theta_prev = phi from chosen frame
+    auto apply_reset_from_frame = [&](int best_frame) {
         int best_slot = best_frame % ring_size;
         for (int c = 0; c < channels; ++c)
             for (int k = 0; k < K; ++k)
                 stft.theta_prev[c][k] = ring_phi[c * ring_size + best_slot][k];
+    };
 
-        // Diagnostic output
-        int delta = best_frame - pe.marker_frame;
-        int64_t flex_ta = fm[best_frame];
-        double secs = std::max(0.0, static_cast<double>(flex_ta) / fs);
-        int total_ms = static_cast<int>(secs * 1000);
-        int mm = total_ms / 60000;
-        int ss = (total_ms % 60000) / 1000;
-        int ms = total_ms % 1000;
-        std::printf("  transient src=%lld synth=%d flex=%d delta=%d at %02d:%02d.%03d\n",
-                    (long long)pe.src_frame, pe.marker_frame, best_frame, delta, mm, ss, ms);
+    auto evaluate_and_apply_reset = [&](const PendingEval& pe, int eval_frame) {
+        TransientMarker& marker = stft.transient_markers[pe.marker_index];
+        int best_frame;
+        if (lock_transient_resets) {
+            best_frame = run_evaluator(pe, eval_frame);
+            marker.chosen_reset_frame = best_frame;
+        } else if (marker.chosen_reset_frame >= 0) {
+            best_frame = marker.chosen_reset_frame;
+        } else {
+            if (!fallback_warned) {
+                std::cerr << "  ! Transient marker at synth_frame " << pe.marker_frame
+                          << " has no locked reset frame; falling back to evaluator\n";
+                fallback_warned = true;
+            }
+            best_frame = run_evaluator(pe, eval_frame);
+        }
+        apply_reset_from_frame(best_frame);
     };
 
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
 
-    const double inv_N = 1.0 / N;
+    // Start-trim: the first N/2 samples are OLA ramp-up. Mirrors phase_vocoder.cpp.
+    int frames_to_skip = N / 2;
+
+    // Progress reporting every ~1% of frames (or every 100 frames, whichever is rarer).
+    int progress_stride = std::max(100, num_frames / 100);
+    int last_pct = -1;
 
     for (int frame_idx = 0; frame_idx < num_frames; ++frame_idx) {
         const int64_t t_a_rounded = fm[frame_idx];
@@ -141,9 +156,11 @@ void Synthesis::process(AudioSTFT& stft) {
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
 
+        const double* atten_row = stft.attenuation_map[frame_idx].data();
+
         for (int ch = 0; ch < channels; ++ch) {
             stft.phase_vocoder_frame(ch, channels, R_a_actual, frame_idx,
-                                     read_buf.data(), M, phi, theta, peaks);
+                                     read_buf.data(), M, phi, theta, peaks, atten_row);
 
             if (has_transients) {
                 int slot = frame_idx % ring_size;
@@ -151,16 +168,22 @@ void Synthesis::process(AudioSTFT& stft) {
                 ring_peaks_buf[ch * ring_size + slot] = peaks;
             }
 
-            for (int k = 0; k < K; ++k) {
-                stft.ifft_in[k][0] = M[k] * std::cos(theta[k]);
-                stft.ifft_in[k][1] = M[k] * std::sin(theta[k]);
+            if (spectra_cache) {
+                std::complex<float>* dst = spectra_cache +
+                    (static_cast<size_t>(frame_idx) * channels + ch) * K;
+                for (int k = 0; k < K; ++k) {
+                    dst[k] = std::complex<float>(
+                        static_cast<float>(stft.ifft_in[k][0]),
+                        static_cast<float>(stft.ifft_in[k][1]));
+                }
             }
+
             fftw_execute(stft.plan_inv);
+            const double inv_N = 1.0 / N;
             for (int n = 0; n < N; ++n)
                 ola_out[ch][n] += (stft.ifft_out[n] * inv_N) * stft.synth_window[n];
         }
 
-        // Transient phase reset processing
         if (has_transients) {
             double frame_max = 0.0;
             for (int ch = 0; ch < channels; ++ch)
@@ -171,7 +194,8 @@ void Synthesis::process(AudioSTFT& stft) {
             while (transient_cursor < static_cast<int>(stft.transient_markers.size()) &&
                    stft.transient_markers[transient_cursor].synth_frame == frame_idx) {
                 pending_evals.push_back({frame_idx,
-                    stft.transient_markers[transient_cursor].src_frame});
+                    stft.transient_markers[transient_cursor].src_frame,
+                    transient_cursor});
                 ++transient_cursor;
             }
 
@@ -182,22 +206,47 @@ void Synthesis::process(AudioSTFT& stft) {
             }
         }
 
-        // Write R_s samples of completed overlap-add output (1:1 target:output mapping)
-        for (int n = 0; n < R_s; ++n)
-            for (int ch = 0; ch < channels; ++ch)
-                write_buf[n * channels + ch] = static_cast<float>(ola_out[ch][n]);
-        sf_writef_float(output_snd, write_buf.data(), R_s);
+        int write_offset = 0, write_len = R_s;
+        if (frames_to_skip > 0) {
+            if (frames_to_skip >= write_len) {
+                frames_to_skip -= write_len;
+                write_len = 0;
+            } else {
+                write_offset   = frames_to_skip;
+                write_len     -= frames_to_skip;
+                frames_to_skip = 0;
+            }
+        }
+        for (int n = write_offset; n < write_offset + write_len; ++n) {
+            for (int ch = 0; ch < channels; ++ch) {
+                double v = ola_out[ch][n];
+                if (apply_clipper) {
+                    if (v >  ceiling_amp) v =  ceiling_amp;
+                    if (v < -ceiling_amp) v = -ceiling_amp;
+                }
+                write_buf[(n - write_offset) * channels + ch] = static_cast<float>(v);
+            }
+        }
+        if (write_len > 0)
+            write_cb(write_buf.data(), static_cast<size_t>(write_len));
 
-        // Shift OLA buffers
         for (int ch = 0; ch < channels; ++ch) {
             for (int n = 0; n < N - R_s; ++n)
                 ola_out[ch][n] = ola_out[ch][n + R_s];
             for (int n = N - R_s; n < N; ++n)
                 ola_out[ch][n] = 0.0;
         }
+
+        // Live progress via carriage return, gated on show_progress.
+        if (show_progress && num_frames > 0 && (frame_idx % progress_stride) == 0) {
+            int pct = static_cast<int>((frame_idx * 100LL) / num_frames);
+            if (pct != last_pct) {
+                std::cout << "\r" << pass_label << pct << "%" << std::flush;
+                last_pct = pct;
+            }
+        }
     }
 
-    // Flush any remaining pending transient evaluations
     if (has_transients) {
         while (!pending_evals.empty()) {
             evaluate_and_apply_reset(pending_evals.front(), num_frames - 1);
@@ -205,15 +254,43 @@ void Synthesis::process(AudioSTFT& stft) {
         }
     }
 
-    // Flush remaining overlap
     const int remaining = N - R_s;
     if (remaining > 0) {
-        for (int ch = 0; ch < channels; ++ch)
-            for (int n = 0; n < remaining; ++n)
-                write_buf[n * channels + ch] = static_cast<float>(ola_out[ch][n]);
-        sf_writef_float(output_snd, write_buf.data(), remaining);
+        for (int ch = 0; ch < channels; ++ch) {
+            for (int n = 0; n < remaining; ++n) {
+                double v = ola_out[ch][n];
+                if (apply_clipper) {
+                    if (v >  ceiling_amp) v =  ceiling_amp;
+                    if (v < -ceiling_amp) v = -ceiling_amp;
+                }
+                write_buf[n * channels + ch] = static_cast<float>(v);
+            }
+        }
+        write_cb(write_buf.data(), static_cast<size_t>(remaining));
     }
 
+    if (show_progress) {
+        std::cout << "\r" << pass_label << "100%\n";
+    }
+}
+
+void Synthesis::process(AudioSTFT& stft) {
+    SF_INFO tgt_info = stft.src_info;
+    tgt_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+
+    SNDFILE* output_snd = sf_open(stft.output_audio_file.c_str(), SFM_WRITE, &tgt_info);
+    if (!output_snd) {
+        std::cerr << "  ! could not open output '" << stft.output_audio_file << "'\n";
+        return;
+    }
+
+    auto write_to_file = [output_snd](const float* buf, size_t n_frames) {
+        sf_writef_float(output_snd, buf, static_cast<sf_count_t>(n_frames));
+    };
+
+    synthesize_full(stft, stft.limiter_params.clipper_enabled, nullptr, write_to_file,
+                    /*lock_transient_resets=*/false,
+                    /*show_progress=*/true,
+                    /*pass_label=*/"[Pass 5/5] Synthesis........................ ");
     sf_close(output_snd);
-    std::cout << "[Success] Final Master Written.\n";
 }

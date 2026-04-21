@@ -7,6 +7,8 @@
 #include "stft_container.h"
 #include "phase_vocoder.h"
 #include "transients.h"
+#include "transient_apply.h"
+#include "limiter.h"
 #include "synthesis.h"
 
 int main(int argc, char* argv[]) {
@@ -30,9 +32,16 @@ int main(int argc, char* argv[]) {
                   << "  detect_quiet_thresh_db=-40.0      Quiet-path dB threshold (downward crossings)\n"
                   << "  detect_refractory_ms=1500.0       Unified target-time refractory (loud always fires;\n"
                   << "                                    quiet yields to recent loud activity)\n"
-                  << "  detect_loud_anticipation_ms=18.0  Shift loud detections earlier (ms)\n"
-                  << "  detect_quiet_delay_ms=18.0        Shift quiet detections later (ms)\n"
-                  << "  transient_diag=false              Write <output>-diag.wav with dirac spikes\n"
+                  << "  detect_loud_anticipation_ms=50.0  Shift loud detections earlier (ms)\n"
+                  << "  detect_quiet_delay_ms=50.0        Shift quiet detections later (ms)\n"
+                  << "  transient_diag=false              Write <output>-diag.wav with dirac spikes (mono)\n"
+                  << "\n"
+                  << "  limiter_enabled=true              Run the spectral limiter pass\n"
+                  << "  limiter_ceiling_dbfs=-0.3         Peak ceiling in dBFS\n"
+                  << "  limiter_tolerance_db=0.01         Half-width of success band centered on ceiling\n"
+                  << "  limiter_num_bands=0               Band count override (0 = auto 1/3-octave grid)\n"
+                  << "  limiter_diag=false                Write mono diagnostic spike WAV for limiter\n"
+                  << "  clipper_enabled=false             Hard clip output at ceiling after limiter\n"
 ;
         return 1;
     }
@@ -82,6 +91,14 @@ int main(int argc, char* argv[]) {
     dp.quiet_delay_ms       = kd("detect_quiet_delay_ms",       dp.quiet_delay_ms);
     audio_stft.transient_diag = kb("transient_diag", false);
 
+    auto& lp = audio_stft.limiter_params;
+    lp.enabled              = kb("limiter_enabled",         lp.enabled);
+    lp.ceiling_dbfs         = kd("limiter_ceiling_dbfs",    lp.ceiling_dbfs);
+    lp.tolerance_db         = kd("limiter_tolerance_db",    lp.tolerance_db);
+    lp.num_bands_override   = ki("limiter_num_bands",       lp.num_bands_override);
+    lp.diag                 = kb("limiter_diag",            lp.diag);
+    lp.clipper_enabled      = kb("clipper_enabled",         lp.clipper_enabled);
+
     // --- Derive output path from MD5 ---
     audio_stft.output_audio_file = "." + md5 + "-tmp.wav";
 
@@ -100,7 +117,6 @@ int main(int argc, char* argv[]) {
     while (file >> src_f >> tgt_f) audio_stft.timemap.push_back({src_f, tgt_f});
     file.close();
 
-    // Validate timemap: both src_frame and tgt_frame must be strictly monotonically increasing
     for (size_t i = 1; i < audio_stft.timemap.size(); ++i) {
         if (audio_stft.timemap[i].src_frame <= audio_stft.timemap[i - 1].src_frame) {
             std::cerr << "Error: timemap entry " << i << " has non-monotonic src_frame ("
@@ -116,7 +132,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // --- Open Source Audio ---
     audio_stft.src_info.format = 0;
     audio_stft.src_snd = sf_open(argv[1], SFM_READ, &audio_stft.src_info);
     if (!audio_stft.src_snd) {
@@ -128,31 +143,45 @@ int main(int argc, char* argv[]) {
     audio_stft.bin_hz_width = static_cast<double>(audio_stft.src_info.samplerate) / audio_stft.N;
     audio_stft.target_total_frames = audio_stft.timemap.back().tgt_frame + audio_stft.N;
 
-    // --- Init FFTW ---
     audio_stft.init_fftw();
-
-    // --- Generate canonical frame map (once, shared by all passes) ---
     audio_stft.frame_map = audio_stft.generate_frame_map();
-    std::cout << "[Frame Map] Generated " << audio_stft.frame_map.size() << " frames (int64_t).\n";
+
+    // Attenuation map defaults to identity; limiter may modify it in place.
+    audio_stft.attenuation_map.assign(audio_stft.frame_map.size(),
+        std::vector<double>(audio_stft.num_bands, 1.0));
+
+    // Consolidated header
+    double duration_sec = static_cast<double>(audio_stft.target_total_frames) /
+                          audio_stft.src_info.samplerate;
+    std::cout << "[WarpTempo] Source: " << argv[1]
+              << ", Target: " << std::fixed << duration_sec << "s at "
+              << audio_stft.src_info.samplerate << "Hz\n";
 
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
     // ========================================================================
-    PhaseVocoder stft_engine;
-    Transients   detector;
-    Synthesis    synthesis;
+    PhaseVocoder   stft_engine;
+    Transients     detector;
+    TransientApply apply;
+    Limiter        limiter;
+    Synthesis      synthesis;
 
+    std::cout << "[Pass 1/5] Analysis + virtual buffer........ " << std::flush;
     stft_engine.process(audio_stft);
-    detector.process(audio_stft);
-    synthesis.process(audio_stft);
+    std::cout << "done\n";
 
-    // --- Diagnostic spike file (separate WAV, spikes only) ---
+    detector.process(audio_stft);  // prints its own Pass 2 line
+    apply.process(audio_stft);     // prints its own Pass 3 line
+    limiter.process(audio_stft);   // prints its own Pass 4 line
+    synthesis.process(audio_stft); // prints its own Pass 5 line
+
+    // --- Transient diagnostic spike file (MONO) ---
     if (audio_stft.transient_diag) {
         SF_INFO probe_info{};
         probe_info.format = 0;
         SNDFILE* probe = sf_open(audio_stft.output_audio_file.c_str(), SFM_READ, &probe_info);
         if (!probe) {
-            std::cerr << "[Diag] Warning: could not reopen output to size diag file; skipping.\n";
+            std::cerr << "  ! could not reopen output to size transient diag file; skipping\n";
         } else {
             const sf_count_t total = probe_info.frames;
             sf_close(probe);
@@ -164,23 +193,21 @@ int main(int argc, char* argv[]) {
 
             SF_INFO diag_info = audio_stft.src_info;
             diag_info.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+            diag_info.channels = 1;
             SNDFILE* diag_snd = sf_open(diag_path.c_str(), SFM_WRITE, &diag_info);
             if (!diag_snd) {
-                std::cerr << "[Diag] Error: could not create diag file '" << diag_path << "'\n";
+                std::cerr << "  ! could not create transient diag file '" << diag_path << "'\n";
             } else {
-                const int ch      = audio_stft.channels;
                 const int64_t R_s = audio_stft.R_s;
-                std::vector<float> diag_buf(static_cast<size_t>(total) * ch, 0.0f);
+                std::vector<float> diag_buf(static_cast<size_t>(total), 0.0f);
 
                 auto poke = [&](int64_t pos, float amp) {
                     if (pos < 0 || pos >= total) return;
-                    for (int c = 0; c < ch; ++c)
-                        diag_buf[static_cast<size_t>(pos) * ch + c] = amp;
+                    diag_buf[static_cast<size_t>(pos)] = amp;
                 };
 
-                const int64_t half_N = audio_stft.N / 2;
                 for (const auto& m : audio_stft.transient_markers) {
-                    int64_t center = static_cast<int64_t>(m.synth_frame) * R_s + half_N;
+                    int64_t center = static_cast<int64_t>(m.synth_frame) * R_s;
                     float sign = m.is_loud ? 1.0f : -1.0f;
                     poke(center - 1, 0.5f * sign);
                     poke(center,     1.0f * sign);
@@ -189,13 +216,12 @@ int main(int argc, char* argv[]) {
 
                 sf_writef_float(diag_snd, diag_buf.data(), total);
                 sf_close(diag_snd);
-                std::cout << "[Diag] Wrote diagnostic spike file: " << diag_path << "\n";
             }
         }
     }
 
-    // --- Cleanup ---
-    audio_stft.cleanup();
+    std::cout << "[Success] " << audio_stft.output_audio_file << "\n";
 
+    audio_stft.cleanup();
     return 0;
 }

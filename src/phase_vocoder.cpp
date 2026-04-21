@@ -3,8 +3,6 @@
 #include <algorithm>
 
 void PhaseVocoder::process(AudioSTFT& stft) {
-    std::cout << "[Pass 1] Executing Dry Pass (N=" << stft.N << ") -> Virtual Memory Buffer...\n";
-
     const int N        = stft.N;
     const int R_s      = stft.R_s;
     const int channels = stft.channels;
@@ -34,14 +32,12 @@ void PhaseVocoder::process(AudioSTFT& stft) {
             sf_readf_float(stft.src_snd, read_buf.data(), N);
         }
 
+        const double* atten_row = stft.attenuation_map[frame_idx].data();
+
         for (int ch = 0; ch < channels; ++ch) {
             stft.phase_vocoder_frame(ch, channels, R_a_actual, frame_idx,
-                                     read_buf.data(), M, phi, theta, peaks);
+                                     read_buf.data(), M, phi, theta, peaks, atten_row);
 
-            for (int k = 0; k < K; ++k) {
-                stft.ifft_in[k][0] = M[k] * std::cos(theta[k]);
-                stft.ifft_in[k][1] = M[k] * std::sin(theta[k]);
-            }
             fftw_execute(stft.plan_inv);
 
             for (int n = 0; n < N; ++n)

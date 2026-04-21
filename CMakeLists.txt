@@ -15,6 +15,8 @@ add_executable(warptempo_engine
     src/main.cpp
     src/phase_vocoder.cpp
     src/transients.cpp
+    src/transient_apply.cpp
+    src/limiter.cpp
     src/synthesis.cpp
 )
 target_include_directories(warptempo_engine PRIVATE

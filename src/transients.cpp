@@ -11,11 +11,9 @@ void Transients::process(AudioSTFT& stft) {
     stft.transient_markers.clear();
 
     if (!dp.enabled) {
-        std::cout << "\n[Detector] Disabled; no transient markers produced.\n";
+        std::cout << "[Pass 2/5] Transient detection.............. disabled\n";
         return;
     }
-
-    std::cout << "\n[Detector] Analyzing transients (LR4 mid-band, two-path crossings)...\n";
 
     const int N          = stft.N;
     const int R_s        = stft.R_s;
@@ -27,7 +25,8 @@ void Transients::process(AudioSTFT& stft) {
     const int total_frames = static_cast<int>(fm.size());
 
     if (total_frames <= 1) {
-        std::cout << "[Detector] Fewer than two frames; no detection possible.\n";
+        std::cout << "[Pass 2/5] Transient detection.............. 0 loud, 0 quiet\n";
+        std::cout << "  ! fewer than two frames; no detection possible\n";
         return;
     }
 
@@ -118,38 +117,43 @@ void Transients::process(AudioSTFT& stft) {
     std::sort(warp_frames.begin(), warp_frames.end());
 
     // --- Unified asymmetric refractory ---
-    // Loud detections consult only the loud tracker; quiet detections consult
-    // both, yielding to any recent loud activity.
+    // Loud detections consult last_loud_for_loud_gate (reset by warp markers so
+    // musically significant attacks can fire immediately after warp points).
+    // Quiet detections consult both last_quiet and last_loud_for_quiet_gate;
+    // the latter is NOT reset by warp markers, preserving the rule that a quiet
+    // detection must yield to any genuinely recent loud activity regardless of
+    // whether a warp marker sits between them.
     const int refr = ms_to_frames(dp.refractory_ms);
-    int last_loud  = std::numeric_limits<int>::min() / 2;
-    int last_quiet = std::numeric_limits<int>::min() / 2;
+    int last_loud_for_loud_gate  = std::numeric_limits<int>::min() / 2;
+    int last_loud_for_quiet_gate = std::numeric_limits<int>::min() / 2;
+    int last_quiet               = std::numeric_limits<int>::min() / 2;
     std::vector<Crossing> accepted;
     accepted.reserve(merged_raw.size());
     size_t warp_cursor = 0;
-    int n_warp_resets = 0;
     auto apply_warps_upto = [&](int frame) {
         while (warp_cursor < warp_frames.size() &&
                warp_frames[warp_cursor] <= frame) {
-            last_loud = warp_frames[warp_cursor] - refr;
+            last_loud_for_loud_gate = warp_frames[warp_cursor] - refr;
             ++warp_cursor;
-            ++n_warp_resets;
         }
     };
     for (const auto& c : merged_raw) {
         apply_warps_upto(c.frame);
         if (c.is_loud) {
-            if (c.frame - last_loud >= refr) {
+            if (c.frame - last_loud_for_loud_gate >= refr) {
                 accepted.push_back(c);
-                last_loud = c.frame;
+                last_loud_for_loud_gate  = c.frame;
+                last_loud_for_quiet_gate = c.frame;
             }
         } else {
-            if (c.frame - last_quiet >= refr && c.frame - last_loud >= refr) {
+            if (c.frame - last_quiet >= refr &&
+                c.frame - last_loud_for_quiet_gate >= refr) {
                 accepted.push_back(c);
                 last_quiet = c.frame;
             }
         }
     }
-    while (warp_cursor < warp_frames.size()) { ++warp_cursor; ++n_warp_resets; }
+    while (warp_cursor < warp_frames.size()) ++warp_cursor;
 
     // --- Per-path shifts (loud earlier, quiet later) ---
     const int loud_shift  = ms_to_frames(dp.loud_anticipation_ms);
@@ -172,12 +176,8 @@ void Transients::process(AudioSTFT& stft) {
         stft.transient_markers.push_back({s.frame, fm[s.frame], s.is_loud});
 
     const int n_total = static_cast<int>(stft.transient_markers.size());
-    std::cout << "[Detector] Loud path: " << n_loud
-              << " detections. Quiet path: " << n_quiet
-              << " detections. Total: " << n_total << ".\n";
-    std::cout << "[Detector] Processed " << n_warp_resets
-              << " warp marker reset events.\n";
+    std::cout << "[Pass 2/5] Transient detection.............. "
+              << n_loud << " loud, " << n_quiet << " quiet\n";
     if (n_total < 3)
-        std::cout << "[Detector] Warning: fewer than 3 detections; "
-                     "output may be unusable without retuning thresholds.\n";
+        std::cout << "  ! fewer than 3 detections; output may be unusable\n";
 }

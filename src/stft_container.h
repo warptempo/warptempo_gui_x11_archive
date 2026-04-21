@@ -17,6 +17,7 @@ struct TransientMarker {
     int synth_frame;
     int64_t src_frame;
     bool is_loud = true;
+    int chosen_reset_frame = -1;   // -1 = not yet decided; set by TransientApply pass
 };
 
 struct DetectorParams {
@@ -27,8 +28,17 @@ struct DetectorParams {
     double loud_thresh_db        = -20.0;
     double quiet_thresh_db       = -40.0;
     double refractory_ms         = 1500.0;
-    double loud_anticipation_ms  = 18.0;
-    double quiet_delay_ms        = 18.0;
+    double loud_anticipation_ms  = 50.0;
+    double quiet_delay_ms        = 50.0;
+};
+
+struct LimiterParams {
+    bool   enabled               = true;
+    double ceiling_dbfs          = -0.3;
+    double tolerance_db          = 0.01;
+    int    num_bands_override    = 0;    // 0 = auto-derive from 1/3-octave grid
+    bool   diag                  = false;
+    bool   clipper_enabled       = false;
 };
 
 // --- DSP Helpers ---
@@ -74,6 +84,18 @@ inline double map_source_to_target(size_t src_frame, const std::vector<TimeMapSe
     return 0.0;
 }
 
+// --- Output sample timing convention ---
+// Both phase_vocoder.cpp (Pass 1) and synthesis.cpp (Pass 4) emit samples with the
+// same OLA ramp-up trim: the first N/2 samples are dropped via `frames_to_skip = N/2`.
+// Consequences any downstream module must respect:
+//   - Output sample 0 in the final WAV corresponds to pre-trim OLA position N/2.
+//   - A transient with synth_frame m lands at output sample m * R_s; the +N/2
+//     window-center offset is absorbed by the trim, so diag spikes must NOT add it.
+//   - Total output length = num_frames * R_s + N/2 - R_s.
+//     Any auxiliary buffer sized to match the output (limiter meas_ola, diag WAVs)
+//     must use this formula; target_total_frames describes the *input* plan, not
+//     the emitted sample count.
+//
 // --- Central Pipeline Container ---
 // Peak memory dominated by overlap-add buffers, FFTW planning, and phase vocoder state arrays.
 struct AudioSTFT {
@@ -119,6 +141,12 @@ struct AudioSTFT {
     // Automatic transient detector
     DetectorParams detect_params;
     bool transient_diag = false;
+
+    // Spectral limiter
+    LimiterParams limiter_params;
+    int num_bands = 0;
+    std::vector<int> bin_to_band;                        // size K = N/2+1
+    std::vector<std::vector<double>> attenuation_map;    // [num_frames][num_bands]
 
     // Output path (derived from MD5 of source audio)
     std::string output_audio_file;
@@ -183,6 +211,30 @@ struct AudioSTFT {
         phi_prev.assign(channels, std::vector<double>(N / 2 + 1, 0.0));
         theta_prev.assign(channels, std::vector<double>(N / 2 + 1, 0.0));
         overlap_add.assign(channels, std::vector<double>(N, 0.0));
+
+        // 1/3-octave bin-to-band lookup (centers at 1000 * 2^(n/3), 20 Hz .. Nyquist)
+        const int K = N / 2 + 1;
+        bin_to_band.assign(K, 0);
+        std::vector<double> centers;
+        int n_min = static_cast<int>(std::ceil(3.0 * std::log2(20.0 / 1000.0)));
+        int n_max = static_cast<int>(std::floor(3.0 * std::log2(nyquist / 1000.0)));
+        for (int n = n_min; n <= n_max; ++n)
+            centers.push_back(1000.0 * std::pow(2.0, n / 3.0));
+        if (centers.empty()) centers.push_back(1000.0);
+        num_bands = static_cast<int>(centers.size());
+        for (int k = 0; k < K; ++k) {
+            double hz = k * bin_hz_width;
+            if (hz <= centers.front()) { bin_to_band[k] = 0; continue; }
+            if (hz >= centers.back())  { bin_to_band[k] = num_bands - 1; continue; }
+            double log_hz = std::log2(hz);
+            int best = 0;
+            double best_dist = std::abs(log_hz - std::log2(centers[0]));
+            for (int b = 1; b < num_bands; ++b) {
+                double d = std::abs(log_hz - std::log2(centers[b]));
+                if (d < best_dist) { best_dist = d; best = b; }
+            }
+            bin_to_band[k] = best;
+        }
     }
 
     void reset_phase_state() {
@@ -197,12 +249,16 @@ struct AudioSTFT {
     // M, phi, theta must be pre-allocated to K = N/2+1.
     // peaks must be pre-reserved (e.g. N/8); cleared on each call.
     // frame_buf is the interleaved read buffer; ch_stride is the channel count.
-    // On return: M[k] holds magnitude, theta[k] holds synthesised phase.
+    // atten_row points to num_bands attenuation factors; nullptr means identity.
+    // On return: M[k] holds magnitude, theta[k] holds synthesised phase, and
+    //            ifft_in has been populated with the attenuated synthesis spectrum
+    //            ready for fftw_execute(plan_inv).
     // phi_prev[ch] and theta_prev[ch] are updated in place.
     void phase_vocoder_frame(int ch, int ch_stride, int64_t R_a_actual, int frame_idx,
                               const float* frame_buf,
                               std::vector<double>& M, std::vector<double>& phi,
-                              std::vector<double>& theta, std::vector<int>& peaks) {
+                              std::vector<double>& theta, std::vector<int>& peaks,
+                              const double* atten_row) {
         const int K = N / 2 + 1;
 
         for (int n = 0; n < N; ++n)
@@ -240,6 +296,20 @@ struct AudioSTFT {
         for (int k = 0; k < K; ++k) {
             phi_prev[ch][k]   = phi[k];
             theta_prev[ch][k] = theta[k];
+        }
+
+        // Synthesis: populate ifft_in with optional per-band attenuation
+        if (atten_row) {
+            for (int k = 0; k < K; ++k) {
+                double scaled = M[k] * atten_row[bin_to_band[k]];
+                ifft_in[k][0] = scaled * std::cos(theta[k]);
+                ifft_in[k][1] = scaled * std::sin(theta[k]);
+            }
+        } else {
+            for (int k = 0; k < K; ++k) {
+                ifft_in[k][0] = M[k] * std::cos(theta[k]);
+                ifft_in[k][1] = M[k] * std::sin(theta[k]);
+            }
         }
     }
 

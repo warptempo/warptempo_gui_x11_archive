@@ -326,9 +326,15 @@ if [[ "$engine" == warptempo ]]; then
 		detect_loud_thresh_db=-20.0 \
 		detect_quiet_thresh_db=-40.0 \
 		detect_refractory_ms=1500.0 \
-		detect_loud_anticipation_ms=18.0 \
-		detect_quiet_delay_ms=18.0 \
-		transient_diag=true
+		detect_loud_anticipation_ms=50.0 \
+		detect_quiet_delay_ms=50.0 \
+		transient_diag=true \
+		limiter_enabled=true \
+		limiter_ceiling_dbfs=-0.3 \
+		limiter_tolerance_db=0.01 \
+		limiter_num_bands=0 \
+		limiter_diag=false \
+		clipper_enabled=false
 		
 	#exit
 
