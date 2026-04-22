@@ -9,6 +9,7 @@ find_package(OpenMP)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
+find_library(FFTW3_THREADS_LIB fftw3_threads HINTS ${FFTW3_LIBRARY_DIRS} REQUIRED)
 
 # --- 1. Build the DSP Engine (Modular) ---
 add_executable(warptempo_engine
@@ -25,6 +26,7 @@ target_include_directories(warptempo_engine PRIVATE
 )
 target_link_libraries(warptempo_engine PRIVATE
     ${SNDFILE_LIBRARIES}
+    ${FFTW3_THREADS_LIB}
     ${FFTW3_LIBRARIES}
     m
     $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>

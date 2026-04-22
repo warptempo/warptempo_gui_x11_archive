@@ -1,8 +1,12 @@
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <fftw3.h>
 
 #include "stft_container.h"
 #include "phase_vocoder.h"
@@ -21,6 +25,7 @@ int main(int argc, char* argv[]) {
                   << "                      source do not silently produce mismatched output paths.\n"
                   << "\n"
                   << "  N=4096                                FFT size (divisible by 4)\n"
+                  << "  fftw_threads=0                        FFTW internal thread count (0 = hardware_concurrency / 2)\n"
                   << "\n"
                   << "  transients_enabled=true               Run detector (false produces zero markers)\n"
                   << "  transients_xover_low=120.0            Detection band lower edge (Hz)\n"
@@ -72,6 +77,29 @@ int main(int argc, char* argv[]) {
     };
 
     audio_stft.N            = ki("N",           4096);
+
+    // --- FFTW threading ---
+    // Default to hardware concurrency; CLI may override. 0 from either source
+    // means "auto-detect"; a non-zero CLI value (including 1) is honored verbatim.
+    int fftw_threads = ki("fftw_threads", 0);
+    if (fftw_threads <= 0) {
+        // hardware_concurrency() returns logical CPUs, which over-subscribes SMT
+        // for compute-bound FFT work. /2 approximates physical cores; override via CLI.
+        unsigned hc = std::thread::hardware_concurrency();
+        fftw_threads = static_cast<int>(std::max(1u, hc / 2));
+    }
+    // FFTW threading is deterministic for a given thread count — the transform
+    // result is mathematically identical to the serial version. Bit-identical
+    // output across runs holds as long as thread count is held constant;
+    // different counts can produce results that differ in the last few bits
+    // due to different internal summation orders. Regression tests comparing
+    // against prior renders must lock fftw_threads to match.
+    if (fftw_init_threads()) {
+        fftw_plan_with_nthreads(fftw_threads);
+        audio_stft.fftw_threads_inited = true;
+    } else {
+        std::cerr << "  ! fftw_init_threads failed; FFTW will run single-threaded.\n";
+    }
 
     auto& tp = audio_stft.transients_params;
     tp.enabled              = kb("transients_enabled",              tp.enabled);
@@ -152,6 +180,11 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
     // ========================================================================
+    // Note to the future Pass 3 (reset_check.cpp) implementer: the RMS
+    // trajectory loop over hop indices is per-iteration independent and
+    // should carry `#pragma omp parallel for`, matching the pattern used
+    // elsewhere in this pipeline. Deferred from the initial OpenMP/FFTW
+    // threading commit because the pass does not yet exist.
     PhaseVocoder   stft_engine;
     Transients     detector;
     Limiter        limiter;

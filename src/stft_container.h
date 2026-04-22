@@ -121,6 +121,7 @@ struct AudioSTFT {
     fftw_complex* ifft_in = nullptr;
     double* ifft_out = nullptr;
     fftw_plan plan_inv{};
+    bool fftw_threads_inited = false;
 
     // Phase vocoder accumulators
     std::vector<std::vector<double>> phi_prev;
@@ -260,6 +261,7 @@ struct AudioSTFT {
             fft_in[n] = frame_buf[n * ch_stride + ch] * window[n];
         fftw_execute(plan_fwd);
 
+        #pragma omp parallel for
         for (int k = 0; k < K; ++k) {
             M[k]   = std::hypot(fft_out[k][0], fft_out[k][1]);
             phi[k] = std::atan2(fft_out[k][1], fft_out[k][0]);
@@ -295,12 +297,14 @@ struct AudioSTFT {
 
         // Synthesis: populate ifft_in with optional per-band attenuation
         if (atten_row) {
+            #pragma omp parallel for
             for (int k = 0; k < K; ++k) {
                 double scaled = M[k] * atten_row[bin_to_band[k]];
                 ifft_in[k][0] = scaled * std::cos(theta[k]);
                 ifft_in[k][1] = scaled * std::sin(theta[k]);
             }
         } else {
+            #pragma omp parallel for
             for (int k = 0; k < K; ++k) {
                 ifft_in[k][0] = M[k] * std::cos(theta[k]);
                 ifft_in[k][1] = M[k] * std::sin(theta[k]);
@@ -315,6 +319,7 @@ struct AudioSTFT {
         fftw_free(fft_out);
         fftw_free(ifft_in);
         fftw_free(ifft_out);
+        if (fftw_threads_inited) fftw_cleanup_threads();
         if (src_snd) sf_close(src_snd);
     }
 };

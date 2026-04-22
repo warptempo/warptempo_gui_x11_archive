@@ -40,6 +40,7 @@ void PhaseVocoder::process(AudioSTFT& stft) {
 
             fftw_execute(stft.plan_inv);
 
+            #pragma omp parallel for
             for (int n = 0; n < N; ++n)
                 stft.overlap_add[ch][n] += (stft.ifft_out[n] / N) * stft.synth_window[n];
         }
@@ -60,7 +61,9 @@ void PhaseVocoder::process(AudioSTFT& stft) {
                 stft.virtual_tgt_buf.push_back(static_cast<float>(stft.overlap_add[ch][n]));
 
         for (int ch = 0; ch < channels; ++ch) {
+            #pragma omp parallel for
             for (int n = 0; n < N - R_s; ++n) stft.overlap_add[ch][n] = stft.overlap_add[ch][n + R_s];
+            #pragma omp parallel for
             for (int n = N - R_s; n < N; ++n)  stft.overlap_add[ch][n] = 0.0;
         }
     }

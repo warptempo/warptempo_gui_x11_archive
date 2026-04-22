@@ -318,6 +318,7 @@ if [[ "$engine" == warptempo ]]; then
 	fi
 	"$warptempo_engine_path" "$audio_input" .$md5-timemap $md5 \
 		N=4096 \
+		fftw_threads=16 \
 		transients_enabled=true \
 		transients_xover_low=120.0 \
 		transients_xover_high=3500.0 \

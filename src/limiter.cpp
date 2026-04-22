@@ -43,6 +43,7 @@ static void band_ifft(AudioSTFT& stft, const std::complex<float>* cached_spec,
     const int N = stft.N;
     const int K = N / 2 + 1;
     const auto& b2b = stft.bin_to_band;
+    #pragma omp parallel for
     for (int k = 0; k < K; ++k) {
         if (b2b[k] == band) {
             stft.ifft_in[k][0] = cached_spec[k].real() * gain;
@@ -54,6 +55,7 @@ static void band_ifft(AudioSTFT& stft, const std::complex<float>* cached_spec,
     }
     fftw_execute(stft.plan_inv);
     const double inv_N = 1.0 / N;
+    #pragma omp parallel for
     for (int n = 0; n < N; ++n)
         out_buf[n] = stft.ifft_out[n] * inv_N * stft.synth_window[n];
 }
@@ -65,6 +67,7 @@ static void full_ifft_with_map(AudioSTFT& stft, const std::complex<float>* cache
     const int K = N / 2 + 1;
     const auto& b2b = stft.bin_to_band;
     const double* row = stft.attenuation_map[frame_idx].data();
+    #pragma omp parallel for
     for (int k = 0; k < K; ++k) {
         double g = row[b2b[k]];
         stft.ifft_in[k][0] = cached_spec[k].real() * g;
@@ -72,6 +75,7 @@ static void full_ifft_with_map(AudioSTFT& stft, const std::complex<float>* cache
     }
     fftw_execute(stft.plan_inv);
     const double inv_N = 1.0 / N;
+    #pragma omp parallel for
     for (int n = 0; n < N; ++n)
         out_buf[n] = stft.ifft_out[n] * inv_N * stft.synth_window[n];
 }
