@@ -65,6 +65,9 @@ if [[ $preliminary_errors -gt 0 ]]; then
 	exit 1
 fi
 
+transients_tau_back_ms=30.0
+limiter_enabled=true
+
 # Load settings
 . "$settings_file"
 
@@ -318,12 +321,12 @@ if [[ "$engine" == warptempo ]]; then
 		transients_enabled=true \
 		transients_xover_low=120.0 \
 		transients_xover_high=3500.0 \
-		transients_tau_back_ms=30.0 \
+		transients_tau_back_ms=$transients_tau_back_ms \
 		transients_thresh_db=-20.0 \
 		transients_refractory_ms=1500.0 \
 		transients_anticipation_ms=100.0 \
 		transients_diag=true \
-		limiter_enabled=true \
+		limiter_enabled=$limiter_enabled \
 		limiter_ceiling_dbfs=-0.3 \
 		limiter_tolerance_db=0.01 \
 		limiter_num_bands=0 \

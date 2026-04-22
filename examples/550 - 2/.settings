@@ -6,4 +6,5 @@ limiter=false
 limit=-0.1
 browser=firefox
 engine=warptempo
+transients_tau_back_ms=300.0
 
