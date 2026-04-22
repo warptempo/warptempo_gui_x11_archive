@@ -392,10 +392,12 @@ if $limiter; then
 
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -af "$af" "$audio_output"
 else
-	clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
 	mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"
-	echo
-	echo -e "$clip_warning"
+	if ! $limiter_enabled; then
+		clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
+		echo
+		echo -e "$clip_warning"
+	fi
 fi
 
 rm -f .$md5-timemap* .$md5-labels* .$md5-trimmed.wav .$md5-tmp*.wav .$md5-tmp*.png
