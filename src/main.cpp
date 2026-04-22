@@ -180,11 +180,6 @@ int main(int argc, char* argv[]) {
     // ========================================================================
     // Pipeline Execution (order is acoustically critical — do not reorder)
     // ========================================================================
-    // Note to the future Pass 3 (reset_check.cpp) implementer: the RMS
-    // trajectory loop over hop indices is per-iteration independent and
-    // should carry `#pragma omp parallel for`, matching the pattern used
-    // elsewhere in this pipeline. Deferred from the initial OpenMP/FFTW
-    // threading commit because the pass does not yet exist.
     PhaseVocoder   stft_engine;
     Transients     detector;
     Limiter        limiter;

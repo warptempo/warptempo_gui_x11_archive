@@ -1,6 +1,7 @@
 #include "phase_vocoder.h"
-#include <iostream>
 #include <algorithm>
+#include <cstring>
+#include <iostream>
 
 void PhaseVocoder::process(AudioSTFT& stft) {
     const int N        = stft.N;
@@ -61,10 +62,10 @@ void PhaseVocoder::process(AudioSTFT& stft) {
                 stft.virtual_tgt_buf.push_back(static_cast<float>(stft.overlap_add[ch][n]));
 
         for (int ch = 0; ch < channels; ++ch) {
-            #pragma omp parallel for
-            for (int n = 0; n < N - R_s; ++n) stft.overlap_add[ch][n] = stft.overlap_add[ch][n + R_s];
-            #pragma omp parallel for
-            for (int n = N - R_s; n < N; ++n)  stft.overlap_add[ch][n] = 0.0;
+            std::memmove(stft.overlap_add[ch].data(), stft.overlap_add[ch].data() + R_s,
+                         static_cast<size_t>(N - R_s) * sizeof(double));
+            std::fill(stft.overlap_add[ch].data() + (N - R_s),
+                      stft.overlap_add[ch].data() + N, 0.0);
         }
     }
 }

@@ -61,7 +61,6 @@ void Synthesis::synthesize_full(
             if (spectra_cache) {
                 std::complex<float>* dst = spectra_cache +
                     (static_cast<size_t>(frame_idx) * channels + ch) * K;
-                #pragma omp parallel for
                 for (int k = 0; k < K; ++k) {
                     dst[k] = std::complex<float>(
                         static_cast<float>(stft.ifft_in[k][0]),
@@ -95,7 +94,6 @@ void Synthesis::synthesize_full(
                 frames_to_skip = 0;
             }
         }
-        #pragma omp parallel for
         for (int n = write_offset; n < write_offset + write_len; ++n) {
             for (int ch = 0; ch < channels; ++ch) {
                 double v = ola_out[ch][n];
@@ -110,12 +108,9 @@ void Synthesis::synthesize_full(
             write_cb(write_buf.data(), static_cast<size_t>(write_len));
 
         for (int ch = 0; ch < channels; ++ch) {
-            #pragma omp parallel for
-            for (int n = 0; n < N - R_s; ++n)
-                ola_out[ch][n] = ola_out[ch][n + R_s];
-            #pragma omp parallel for
-            for (int n = N - R_s; n < N; ++n)
-                ola_out[ch][n] = 0.0;
+            std::memmove(ola_out[ch].data(), ola_out[ch].data() + R_s,
+                         static_cast<size_t>(N - R_s) * sizeof(double));
+            std::fill(ola_out[ch].data() + (N - R_s), ola_out[ch].data() + N, 0.0);
         }
 
         // Live progress via carriage return, gated on show_progress.
@@ -131,7 +126,6 @@ void Synthesis::synthesize_full(
     const int remaining = N - R_s;
     if (remaining > 0) {
         for (int ch = 0; ch < channels; ++ch) {
-            #pragma omp parallel for
             for (int n = 0; n < remaining; ++n) {
                 double v = ola_out[ch][n];
                 if (apply_clipper) {

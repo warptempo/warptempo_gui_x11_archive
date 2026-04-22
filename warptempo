@@ -326,7 +326,7 @@ if [[ "$engine" == warptempo ]]; then
 		transients_thresh_db=-20.0 \
 		transients_refractory_ms=1500.0 \
 		transients_anticipation_ms=100.0 \
-		transients_diag=true \
+		transients_diag=false \
 		limiter_enabled=$limiter_enabled \
 		limiter_ceiling_dbfs=-0.3 \
 		limiter_tolerance_db=0.01 \
@@ -381,6 +381,8 @@ fi
 
 mv .$md5-timemap .timemap
 [[ -f .$md5-tmp-diag.wav ]] && mv .$md5-tmp-diag.wav .diag.wav
+[[ -f .$md5-tmp-precheck.wav ]] && mv .$md5-tmp-precheck.wav .precheck.wav
+[[ -f .$md5-tmp-precheck-diag.wav ]] && mv .$md5-tmp-precheck-diag.wav .precheck-diag.wav
 
 # Apply limiting or copy
 if $limiter; then
@@ -393,11 +395,13 @@ if $limiter; then
 
 	ffmpeg -i .$md5-tmp.wav -c:a pcm_s24le -af "$af" "$audio_output"
 else
-	mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"
 	if ! $limiter_enabled; then
 		clip_warning="\033[31mWarning:\033[0m Output may contain clipping. Use an external limiter to prevent clipping."
 		echo
 		echo -e "$clip_warning"
+		mv .$md5-tmp.wav "engine=$engine;limiter=$limiter;$audio_output"
+	else
+		mv .$md5-tmp.wav "$audio_output"
 	fi
 fi
 
