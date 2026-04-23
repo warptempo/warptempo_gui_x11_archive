@@ -17,9 +17,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <set>
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -33,7 +36,7 @@ constexpr GuiColor kPlayheadColor     = {0.95, 0.85, 0.35};
 constexpr GuiColor kTimestampColor    = {0.80, 0.80, 0.82};
 constexpr GuiColor kMarkerColor       = {0.85, 0.82, 0.78};
 constexpr GuiColor kMarkerDimColor    = {0.45, 0.42, 0.40};
-constexpr GuiColor kSelectedColor     = {1.00, 0.95, 0.70};
+constexpr GuiColor kSelectedColor     = kPlayheadColor;
 constexpr GuiColor kFlagHighlightColor= {0.30, 0.28, 0.22};
 constexpr GuiColor kDirtyColor        = {0.90, 0.65, 0.35};
 constexpr double   kFlagFontSize      = 13.0;
@@ -69,6 +72,91 @@ constexpr double kDirtyGapPx              = 8.0;
 // pixels total — generous enough to cover 1px line plus subpixel rounding.
 constexpr int kPlayheadHalfPx = 1;
 
+// Ctrl+drag state. `active` gates motion handling; the rest captures the
+// pre-drag snapshot so Escape can restore positions and clamps can be
+// evaluated without re-scanning the marker list on every motion event.
+//
+// Storing per-marker (min_allowed, max_allowed) as the spec suggests works
+// for a contiguous drag set, but a non-contiguous set (e.g. indices 2 and
+// 5 selected, 3 and 4 not) can be bounded more tightly by the nearest
+// non-selected neighbors of every dragged marker. We precompute a single
+// scalar `delta_min` / `delta_max` that's correct for both cases: the delta
+// is applied uniformly, so its feasible range is the intersection of per-
+// marker per-neighbor bounds. Also incorporates the trim bounds.
+struct DragState {
+    bool                active = false;
+    std::vector<int>    dragging_markers;   // sorted ascending
+    std::vector<double> original_times;     // parallel to dragging_markers
+    double              anchor_mouse_time_seconds = 0.0;
+    double              delta_min = -std::numeric_limits<double>::infinity();
+    double              delta_max =  std::numeric_limits<double>::infinity();
+    bool                moved = false;
+    // Full pre-drag marker state. Captured at button-press so commit_drag
+    // can push it onto the undo stack. Escape-cancel discards it implicitly
+    // (DragState is reset wholesale there).
+    std::vector<GuiMarker> pre_drag_snapshot;
+};
+
+// Two-stack undo/redo history for marker mutations. Entries are full
+// snapshots of the marker vector — small enough to store directly rather
+// than diff. Both stacks are capped at kCap; the oldest undo entry is
+// evicted when the cap is exceeded.
+//
+// The saved reference is a signed distance from the current position to the
+// snapshot corresponding to what's on disk. Positive = ahead on the redo
+// stack; negative = behind on the undo stack; 0 = at current. `saved_valid`
+// tracks whether the saved reference is still reachable: a new mutation
+// that clears the redo stack while saved was ahead orphans it (saved_valid
+// becomes false), and dirty stays true until the next save rebinds it.
+struct UndoHistory {
+    static constexpr size_t kCap = 500;
+    std::vector<std::vector<GuiMarker>> undo_stack;
+    std::vector<std::vector<GuiMarker>> redo_stack;
+    int  saved_distance = 0;
+    bool saved_valid    = true;
+
+    bool is_dirty() const {
+        return !(saved_valid && saved_distance == 0);
+    }
+
+    // Push the pre-mutation snapshot. Clears the redo stack. If the saved
+    // reference was on the redo stack, it's orphaned (saved_valid = false).
+    // If pushing would evict the bottom of the undo stack and the saved
+    // reference pointed at or below the evicted entry, it's pinned to the
+    // new bottom — per Part 5 of the chunk brief, that's the least-
+    // surprising user-facing behavior even though it's not strictly correct.
+    void push(std::vector<GuiMarker> pre_state) {
+        if (saved_valid && saved_distance > 0) saved_valid = false;
+        redo_stack.clear();
+        if (saved_valid) saved_distance -= 1;
+        undo_stack.push_back(std::move(pre_state));
+        if (undo_stack.size() > kCap) {
+            undo_stack.erase(undo_stack.begin());
+            if (saved_valid &&
+                saved_distance < -static_cast<int>(undo_stack.size())) {
+                saved_distance = -static_cast<int>(undo_stack.size());
+            }
+        }
+    }
+
+    void mark_saved() {
+        saved_distance = 0;
+        saved_valid    = true;
+    }
+
+    void reset() {
+        undo_stack.clear();
+        redo_stack.clear();
+        saved_distance = 0;
+        saved_valid    = true;
+    }
+};
+
+struct ViewportPanState {
+    bool active        = false;
+    int  last_mouse_x  = 0;
+};
+
 struct AppState {
     int     width                 = 1400;
     int     height                = 800;
@@ -98,10 +186,26 @@ struct AppState {
     // failure or before the first audio load.
     GuiMarkers  markers;
 
-    // Index into markers.markers(). -1 means nothing selected.
-    int         selected_marker      = -1;
+    // Multi-selection set + focus. `last_selected_marker` is either -1 or
+    // a member of `selected_markers`; keyed operations (Tab cycling, `j`)
+    // anchor on it.
+    std::set<int> selected_markers;
+    int           last_selected_marker = -1;
+
+    // Ctrl+drag state. Not reset across file loads — explicitly cleared
+    // there and on button release / Escape.
+    DragState     drag;
+
+    // Alt+drag viewport-pan state. Cleared on button release.
+    ViewportPanState viewport_pan;
+
+    // Undo/redo history for marker mutations. `dirty` below becomes a
+    // derived signal: dirty = history.is_dirty(). Save/load reshape the
+    // saved reference rather than touching dirty directly.
+    UndoHistory history;
 
     // True if the marker list has been modified since load or last save.
+    // Derived from `history`: mirrors history.is_dirty() after every op.
     bool        dirty                = false;
 
     // True until the first save in this session; used to log a one-time
@@ -579,7 +683,9 @@ int main(int argc, char** argv) {
                 render_markers(cr, area, app.markers.markers(),
                                vp_start, vp_end, sr,
                                kMarkerColor, kMarkerDimColor,
-                               kSelectedColor, app.selected_marker);
+                               kSelectedColor,
+                               app.selected_markers,
+                               app.last_selected_marker);
             }
 
             // Playhead on top of the waveform, within the waveform area.
@@ -594,7 +700,9 @@ int main(int argc, char** argv) {
                              vp_start, vp_end, sr,
                              kMarkerColor, kMarkerDimColor,
                              kSelectedColor, kFlagHighlightColor,
-                             kFlagFontSize, app.selected_marker);
+                             kFlagFontSize,
+                             app.selected_markers,
+                             app.last_selected_marker);
             }
 
             // Timestamp in the bottom status strip.
@@ -689,22 +797,140 @@ int main(int argc, char** argv) {
         gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
     };
 
-    // Switches the selection to `new_sel` (may be -1) and invalidates the
-    // minimum necessary regions: old and new marker columns, plus the flag
-    // strip. No playhead movement is done here; callers decide whether to
-    // follow the selection with move_playhead_to.
-    auto set_selection = [&](int new_sel) {
-        if (new_sel == app.selected_marker) return;
-        const int old_sel = app.selected_marker;
-        app.selected_marker = new_sel;
-        invalidate_marker_column(old_sel);
-        invalidate_marker_column(new_sel);
+    auto invalidate_markers_columns = [&](const std::set<int>& idxs) {
+        for (int i : idxs) invalidate_marker_column(i);
+    };
+
+    // Restore the `last_selected ∈ selected ∪ {-1}` invariant. Callers
+    // invoke this after any mutation that might have invalidated the
+    // previous focus (removal from the set, marker deletion).
+    auto repair_last_selected = [&]() {
+        if (app.last_selected_marker < 0) return;
+        if (app.selected_markers.count(app.last_selected_marker)) return;
+        if (app.selected_markers.empty()) {
+            app.last_selected_marker = -1;
+        } else {
+            // Pick the largest remaining index (spec: "the largest remaining
+            // index in selected_markers, or -1 if empty").
+            app.last_selected_marker = *app.selected_markers.rbegin();
+        }
+    };
+
+    // Replace the selection with a single marker. Invalidates the affected
+    // columns and the flag strip. No playhead movement here.
+    auto set_single_selection = [&](int idx) {
+        const std::set<int> old = app.selected_markers;
+        app.selected_markers.clear();
+        if (idx >= 0) app.selected_markers.insert(idx);
+        app.last_selected_marker = (idx >= 0) ? idx : -1;
+        invalidate_markers_columns(old);
+        invalidate_markers_columns(app.selected_markers);
         invalidate_top_strip();
+    };
+
+    auto clear_selection = [&]() {
+        if (app.selected_markers.empty() && app.last_selected_marker == -1) return;
+        const std::set<int> old = app.selected_markers;
+        app.selected_markers.clear();
+        app.last_selected_marker = -1;
+        invalidate_markers_columns(old);
+        invalidate_top_strip();
+    };
+
+    // Shift+click toggle. Returns whether the marker ended up in the set.
+    auto toggle_selection_membership = [&](int idx) -> bool {
+        if (idx < 0) return false;
+        bool added;
+        auto it = app.selected_markers.find(idx);
+        if (it == app.selected_markers.end()) {
+            app.selected_markers.insert(idx);
+            app.last_selected_marker = idx;
+            added = true;
+        } else {
+            app.selected_markers.erase(it);
+            if (app.last_selected_marker == idx) repair_last_selected();
+            added = false;
+        }
+        invalidate_marker_column(idx);
+        invalidate_top_strip();
+        return added;
     };
 
     auto invalidate_dirty_and_timestamp = [&]() {
         const GuiRect t = timestamp_invalidate_rect(app.height);
         gui.invalidate_region(t.x, t.y, t.w, t.h);
+    };
+
+    // -- Undo/redo helpers --------------------------------------------------
+
+    // Mirror history.is_dirty() into app.dirty. Caller decides whether to
+    // invalidate the dirty-indicator region; most mutation sites follow
+    // this with invalidate_dirty_and_timestamp() unconditionally because
+    // they're already invalidating adjacent regions anyway.
+    auto recompute_dirty = [&]() {
+        app.dirty = app.history.is_dirty();
+    };
+
+    // Drop out-of-range indices from selected_markers after a restore.
+    // Spec: if the sanitized set no longer contains last_selected_marker,
+    // set last_selected_marker = -1; otherwise leave it alone.
+    auto sanitize_selection_after_restore = [&]() {
+        const int n = static_cast<int>(app.markers.markers().size());
+        std::set<int> cleaned;
+        for (int idx : app.selected_markers) {
+            if (idx >= 0 && idx < n) cleaned.insert(idx);
+        }
+        app.selected_markers = std::move(cleaned);
+        if (!app.selected_markers.count(app.last_selected_marker)) {
+            app.last_selected_marker = -1;
+        }
+    };
+
+    // Push the pre-mutation snapshot onto the undo stack. Every mutation
+    // site calls this at the point the mutation is confirmed to land
+    // (i.e. wherever the old code did `app.dirty = true`).
+    auto push_undo = [&](std::vector<GuiMarker> pre_state) {
+        app.history.push(std::move(pre_state));
+    };
+
+    // Ctrl+Z. Silent no-op on empty stack. Restores the top undo entry;
+    // current state is pushed onto redo. Selection is sanitized to drop
+    // out-of-range indices. Playhead/viewport are untouched by design.
+    auto do_undo = [&]() {
+        if (app.history.undo_stack.empty()) return;
+        std::vector<GuiMarker> current = app.markers.markers();
+        std::vector<GuiMarker> prev =
+            std::move(app.history.undo_stack.back());
+        app.history.undo_stack.pop_back();
+        app.history.redo_stack.push_back(std::move(current));
+        if (app.history.redo_stack.size() > UndoHistory::kCap) {
+            app.history.redo_stack.erase(app.history.redo_stack.begin());
+        }
+        if (app.history.saved_valid) app.history.saved_distance += 1;
+        app.markers.markers_mut() = std::move(prev);
+        sanitize_selection_after_restore();
+        recompute_dirty();
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    // Ctrl+Shift+Z. Mirror of do_undo. Silent no-op on empty redo stack.
+    auto do_redo = [&]() {
+        if (app.history.redo_stack.empty()) return;
+        std::vector<GuiMarker> current = app.markers.markers();
+        std::vector<GuiMarker> next =
+            std::move(app.history.redo_stack.back());
+        app.history.redo_stack.pop_back();
+        app.history.undo_stack.push_back(std::move(current));
+        if (app.history.undo_stack.size() > UndoHistory::kCap) {
+            app.history.undo_stack.erase(app.history.undo_stack.begin());
+        }
+        if (app.history.saved_valid) app.history.saved_distance -= 1;
+        app.markers.markers_mut() = std::move(next);
+        sanitize_selection_after_restore();
+        recompute_dirty();
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
     };
 
     // True if marker i's resolved sample falls inside the current trim
@@ -719,78 +945,93 @@ int main(int argc, char** argv) {
     };
 
     // Tab / Shift+Tab: cycle through markers. Rules per spec:
-    //   With selection: strict next/prev by time.
-    //   No selection: pick the nearest marker in the requested direction
-    //   (>= playhead for next, <= playhead for prev).
-    // Trim range acts as a hard filter — markers outside trim are invisible
-    // to cycling.
-    auto select_next_marker = [&]() {
+    //   0 or 1 selected: cycle through all markers.
+    //     1 selected acts as the anchor; 0 selected falls back to playhead.
+    //   2+ selected: cycle within the selection set only, anchored on
+    //     last_selected_marker. Wraps at the set's extremes.
+    // Trim range acts as a hard filter for the all-markers case but not for
+    // the within-set case — the user built the set explicitly, so respecting
+    // it beats surprising omissions at trim boundaries.
+    auto cycle_selection = [&](bool forward) {
         const auto& mv = app.markers.markers();
         if (mv.empty()) return;
-        int new_sel = -1;
         const int sr = audio.sample_rate();
-        if (app.selected_marker < 0) {
+
+        const int sel_size = static_cast<int>(app.selected_markers.size());
+        int new_sel = -1;
+
+        if (sel_size >= 2) {
+            const int anchor = app.last_selected_marker;
+            if (forward) {
+                auto it = app.selected_markers.upper_bound(anchor);
+                if (it == app.selected_markers.end()) {
+                    it = app.selected_markers.begin();
+                }
+                new_sel = *it;
+            } else {
+                auto it = app.selected_markers.lower_bound(anchor);
+                if (it == app.selected_markers.begin()) {
+                    it = app.selected_markers.end();
+                }
+                --it;
+                new_sel = *it;
+            }
+        } else if (sel_size == 1) {
+            const int cur = *app.selected_markers.begin();
+            const double cur_t = mv[cur].time_seconds;
+            if (forward) {
+                for (size_t i = cur + 1; i < mv.size(); ++i) {
+                    if (!marker_in_trim(static_cast<int>(i))) continue;
+                    if (mv[i].time_seconds > cur_t) { new_sel = i; break; }
+                }
+            } else {
+                for (int i = cur - 1; i >= 0; --i) {
+                    if (!marker_in_trim(i)) continue;
+                    if (mv[i].time_seconds < cur_t) { new_sel = i; break; }
+                }
+            }
+        } else {
+            // No selection — seed from the playhead direction.
             const double ph_s = (sr > 0)
                 ? static_cast<double>(app.playhead_sample) /
                   static_cast<double>(sr)
                 : 0.0;
-            for (size_t i = 0; i < mv.size(); ++i) {
-                if (!marker_in_trim(static_cast<int>(i))) continue;
-                if (mv[i].time_seconds >= ph_s) {
-                    new_sel = static_cast<int>(i);
-                    break;
+            if (forward) {
+                for (size_t i = 0; i < mv.size(); ++i) {
+                    if (!marker_in_trim(static_cast<int>(i))) continue;
+                    if (mv[i].time_seconds >= ph_s) { new_sel = i; break; }
                 }
-            }
-        } else {
-            const double cur_t = mv[app.selected_marker].time_seconds;
-            for (size_t i = app.selected_marker + 1; i < mv.size(); ++i) {
-                if (!marker_in_trim(static_cast<int>(i))) continue;
-                if (mv[i].time_seconds > cur_t) {
-                    new_sel = static_cast<int>(i);
-                    break;
+            } else {
+                for (int i = static_cast<int>(mv.size()) - 1; i >= 0; --i) {
+                    if (!marker_in_trim(i)) continue;
+                    if (mv[i].time_seconds <= ph_s) { new_sel = i; break; }
                 }
             }
         }
-        if (new_sel < 0 || new_sel == app.selected_marker) return;
-        set_selection(new_sel);
+
+        if (new_sel < 0) return;
+
+        if (sel_size >= 2) {
+            // Within-set cycling: only the focus changes.
+            if (new_sel == app.last_selected_marker) return;
+            const int old_focus = app.last_selected_marker;
+            app.last_selected_marker = new_sel;
+            invalidate_marker_column(old_focus);
+            invalidate_marker_column(new_sel);
+            invalidate_top_strip();
+        } else {
+            if (app.selected_markers.count(new_sel) &&
+                app.last_selected_marker == new_sel) return;
+            set_single_selection(new_sel);
+        }
+
         const int64_t sample = static_cast<int64_t>(std::llround(
             mv[new_sel].time_seconds * static_cast<double>(sr)));
         move_playhead_to(sample);
     };
 
-    auto select_prev_marker = [&]() {
-        const auto& mv = app.markers.markers();
-        if (mv.empty()) return;
-        int new_sel = -1;
-        const int sr = audio.sample_rate();
-        if (app.selected_marker < 0) {
-            const double ph_s = (sr > 0)
-                ? static_cast<double>(app.playhead_sample) /
-                  static_cast<double>(sr)
-                : 0.0;
-            for (int i = static_cast<int>(mv.size()) - 1; i >= 0; --i) {
-                if (!marker_in_trim(i)) continue;
-                if (mv[i].time_seconds <= ph_s) {
-                    new_sel = i;
-                    break;
-                }
-            }
-        } else {
-            const double cur_t = mv[app.selected_marker].time_seconds;
-            for (int i = app.selected_marker - 1; i >= 0; --i) {
-                if (!marker_in_trim(i)) continue;
-                if (mv[i].time_seconds < cur_t) {
-                    new_sel = i;
-                    break;
-                }
-            }
-        }
-        if (new_sel < 0 || new_sel == app.selected_marker) return;
-        set_selection(new_sel);
-        const int64_t sample = static_cast<int64_t>(std::llround(
-            mv[new_sel].time_seconds * static_cast<double>(sr)));
-        move_playhead_to(sample);
-    };
+    auto select_next_marker = [&]() { cycle_selection(true);  };
+    auto select_prev_marker = [&]() { cycle_selection(false); };
 
     // Core drop logic shared by `s`, `Shift+S`, double-click, and
     // Shift+double-click. `time_seconds` is the location (not necessarily the
@@ -810,6 +1051,9 @@ int main(int argc, char** argv) {
                 return;
             }
         }
+        // Snapshot pre-mutation state for undo. Captured after the dup
+        // check so rejected drops don't leave a no-op entry on the stack.
+        std::vector<GuiMarker> pre_state = mv;
         GuiMarker nm;
         nm.time_seconds    = time_seconds;
         nm.tempo_inherits  = inherit;
@@ -832,8 +1076,20 @@ int main(int argc, char** argv) {
             nm.tempo_scale.clear();
         }
         const int new_idx = app.markers.insert_marker(std::move(nm));
-        app.selected_marker = new_idx;
-        app.dirty = true;
+        // Insertion may have shifted indices of existing selections.
+        // Rebuild selected_markers to reflect the shift.
+        std::set<int> shifted;
+        for (int i : app.selected_markers) {
+            shifted.insert(i >= new_idx ? i + 1 : i);
+        }
+        app.selected_markers = std::move(shifted);
+        if (app.last_selected_marker >= new_idx) app.last_selected_marker += 1;
+        // Newly-dropped marker becomes the sole selection per chunk I.
+        app.selected_markers.clear();
+        app.selected_markers.insert(new_idx);
+        app.last_selected_marker = new_idx;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
 
@@ -865,23 +1121,30 @@ int main(int argc, char** argv) {
 
     auto delete_selected_marker = [&]() {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
+        if (app.selected_markers.empty()) return;
         const auto& mv = app.markers.markers();
-        if (app.selected_marker >= static_cast<int>(mv.size())) return;
-        const GuiMarker& doomed = mv[app.selected_marker];
-        if (doomed.time_seconds == 0.0) {
-            std::fprintf(stderr,
-                "warptempo_gui: cannot delete first marker (time 0)\n");
-            return;
-        }
-        if (!doomed.label_def.empty()) {
-            // Reject if any other marker references this label.
+
+        // Validate the batch. Reject the whole operation if any member is
+        // the time-0 first marker or has a label_def referenced from outside
+        // the selection set.
+        for (int idx : app.selected_markers) {
+            if (idx < 0 || idx >= static_cast<int>(mv.size())) {
+                std::fprintf(stderr,
+                    "warptempo_gui: delete rejected: stale selection index\n");
+                return;
+            }
+            if (mv[idx].time_seconds == 0.0) {
+                std::fprintf(stderr,
+                    "warptempo_gui: cannot delete first marker (time 0)\n");
+                return;
+            }
+            if (mv[idx].label_def.empty()) continue;
             std::string refs;
             int ref_count = 0;
             for (size_t i = 0; i < mv.size(); ++i) {
-                if (static_cast<int>(i) == app.selected_marker) continue;
+                if (app.selected_markers.count(static_cast<int>(i))) continue;
                 if (!mv[i].label_ref.empty() &&
-                    mv[i].label_ref == doomed.label_def) {
+                    mv[i].label_ref == mv[idx].label_def) {
                     char tbuf[32];
                     std::snprintf(tbuf, sizeof(tbuf), "%.3fs",
                                   mv[i].time_seconds);
@@ -894,115 +1157,144 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,
                     "warptempo_gui: cannot delete marker: label '%s' is "
                     "referenced at %s\n",
-                    doomed.label_def.c_str(), refs.c_str());
+                    mv[idx].label_def.c_str(), refs.c_str());
                 return;
             }
         }
-        app.markers.remove_marker(app.selected_marker);
-        app.selected_marker = -1;
-        app.dirty = true;
+
+        // All validations passed — capture snapshot before mutating.
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        // Delete in descending order so earlier indices stay valid.
+        for (auto it = app.selected_markers.rbegin();
+             it != app.selected_markers.rend(); ++it) {
+            app.markers.remove_marker(*it);
+        }
+        app.selected_markers.clear();
+        app.last_selected_marker = -1;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
 
-    // Toggle the tempo source of the selected marker between owned and
-    // inherit. Caches current tempo_base/tempo_scale on the marker itself
-    // — both states — so round-tripping through the toggle is lossless.
+    // Toggle the tempo source of each selected marker between owned and
+    // inherit. Markers that can't inherit (first marker, label refs) are
+    // silently skipped per chunk I single-marker rules.
     auto toggle_inherits = [&]() {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
-        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
-        if (!m) return;
-        if (app.selected_marker == 0) {
-            std::fprintf(stderr,
-                "warptempo_gui: first marker cannot inherit tempo\n");
-            return;
+        if (app.selected_markers.empty()) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        bool changed = false;
+        for (int idx : app.selected_markers) {
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            if (idx == 0) continue;
+            if (!m->label_ref.empty()) continue;
+            m->tempo_inherits = !m->tempo_inherits;
+            changed = true;
         }
-        if (!m->label_ref.empty()) {
-            // Label refs always effectively inherit; toggling is meaningless.
-            return;
-        }
-        m->tempo_inherits = !m->tempo_inherits;
-        app.dirty = true;
+        if (!changed) return;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
 
-    // Toggle the disabled flag on the selected marker's label definition.
-    // Silent no-op if the marker has no label definition (including label
-    // references, which inherit disabled state from their definition).
+    // Toggle the disabled flag on each selected marker that has a label_def.
+    // Others are silently skipped (label_refs inherit disabled from the def).
     auto toggle_disabled = [&]() {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
-        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
-        if (!m) return;
-        if (m->label_def.empty()) return;
-        m->disabled = !m->disabled;
-        app.dirty = true;
+        if (app.selected_markers.empty()) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        bool changed = false;
+        for (int idx : app.selected_markers) {
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            if (m->label_def.empty()) continue;
+            m->disabled = !m->disabled;
+            changed = true;
+        }
+        if (!changed) return;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
 
+    // `b` / `e` are single-marker operations. With 2+ selected they silent
+    // no-op; with exactly 1, they use last_selected_marker as the target.
     auto toggle_begin_time = [&]() {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
-        auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
+        if (app.selected_markers.size() != 1) return;
+        const int idx = app.last_selected_marker;
+        if (idx < 0) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        auto& mv_mut = *app.markers.marker_mut(idx);
         const bool new_state = !mv_mut.is_begin_time;
         if (new_state) {
-            // Clear any other begin-time flag so the invariant "at most one"
-            // holds. Silent per spec.
             const auto& mv = app.markers.markers();
             for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
-                if (i == app.selected_marker) continue;
+                if (i == idx) continue;
                 if (mv[i].is_begin_time) {
                     app.markers.marker_mut(i)->is_begin_time = false;
                 }
             }
         }
         mv_mut.is_begin_time = new_state;
-        app.dirty = true;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
 
     auto toggle_end_time = [&]() {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
-        auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
+        if (app.selected_markers.size() != 1) return;
+        const int idx = app.last_selected_marker;
+        if (idx < 0) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        auto& mv_mut = *app.markers.marker_mut(idx);
         const bool new_state = !mv_mut.is_end_time;
         if (new_state) {
             const auto& mv = app.markers.markers();
             for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
-                if (i == app.selected_marker) continue;
+                if (i == idx) continue;
                 if (mv[i].is_end_time) {
                     app.markers.marker_mut(i)->is_end_time = false;
                 }
             }
         }
         mv_mut.is_end_time = new_state;
-        app.dirty = true;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
 
-    // Nudge the selected marker's tempo. Silent no-op if nothing is selected,
-    // if the selection is a label reference (tempo is inherited from its
-    // definition), if the selection is an inherit marker (tempo is computed),
-    // or if the playhead is outside the trim range. Clamps to [0.01, 9.99].
+    // Nudge every owned-tempo selected marker by `delta`. Inherit markers
+    // and label refs in the set are silently skipped. Clamps to [0.01, 9.99].
+    // Only dirties / invalidates if at least one marker's tempo changed.
     auto adjust_tempo = [&](double delta) {
         if (!is_playhead_in_trim()) return;
-        if (app.selected_marker < 0) return;
-        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
-        if (!m) return;
-        if (!m->label_ref.empty()) return;
-        if (m->tempo_inherits) return;
-        double new_tempo = m->tempo_base + delta;
-        if (new_tempo < 0.01) new_tempo = 0.01;
-        if (new_tempo > 9.99) new_tempo = 9.99;
-        if (new_tempo == m->tempo_base) return;
-        m->tempo_base = new_tempo;
-        app.dirty = true;
-        invalidate_marker_column(app.selected_marker);
+        if (app.selected_markers.empty()) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        bool changed = false;
+        for (int idx : app.selected_markers) {
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            if (!m->label_ref.empty()) continue;
+            if (m->tempo_inherits) continue;
+            double new_tempo = m->tempo_base + delta;
+            if (new_tempo < 0.01) new_tempo = 0.01;
+            if (new_tempo > 9.99) new_tempo = 9.99;
+            if (new_tempo == m->tempo_base) continue;
+            m->tempo_base = new_tempo;
+            invalidate_marker_column(idx);
+            changed = true;
+        }
+        if (!changed) return;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_top_strip();
         invalidate_dirty_and_timestamp();
     };
@@ -1010,6 +1302,7 @@ int main(int argc, char** argv) {
     // Clear any b= / e= flags so the whole file becomes editable again.
     // No-op if no marker carries either flag.
     auto clear_trim = [&]() {
+        std::vector<GuiMarker> pre_state = app.markers.markers();
         bool changed = false;
         for (auto& m : app.markers.markers_mut()) {
             if (m.is_begin_time || m.is_end_time) {
@@ -1019,7 +1312,8 @@ int main(int argc, char** argv) {
             }
         }
         if (!changed) return;
-        app.dirty = true;
+        push_undo(std::move(pre_state));
+        recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
     };
@@ -1041,8 +1335,12 @@ int main(int argc, char** argv) {
             return;
         }
         app.first_save_pending = false;
-        if (app.dirty) {
-            app.dirty = false;
+        // Save rebinds the saved reference to the current timeline position
+        // without touching either stack — undo still reverts the last op.
+        const bool was_dirty = app.dirty;
+        app.history.mark_saved();
+        recompute_dirty();
+        if (was_dirty != app.dirty) {
             invalidate_dirty_and_timestamp();
         }
     };
@@ -1076,6 +1374,347 @@ int main(int argc, char** argv) {
         playback.set_speed(s);
     };
 
+    // A waveform click during playback reseats the audio thread's cursor to
+    // the new playhead. Without this, the visual playhead jumps but the audio
+    // keeps playing from its old position. Only click-driven playhead moves
+    // restart; arrow keys, Tab, Home/End deliberately do not.
+    auto click_restart_playback_if_active = [&]() {
+        if (playback.is_playing()) {
+            playback.stop();
+            playback.play(app.playhead_sample, trim_end_sample());
+        }
+    };
+
+    // Hit-test a marker line in the waveform area. Returns index or -1.
+    auto hit_test_marker_line = [&](int mouse_x) -> int {
+        const GuiRect area = waveform_area(app);
+        const double spp = current_samples_per_pixel(app, audio);
+        if (spp <= 0.0) return -1;
+        const int sr = audio.sample_rate();
+        const int click_rel_x = mouse_x - area.x;
+        const double vp = static_cast<double>(app.viewport_start_sample);
+        const int64_t visible = samples_visible(app, audio);
+        const auto& mv = app.markers.markers();
+        int best_hit = -1;
+        int best_dist = kMarkerHitHalfPx + 1;
+        for (size_t i = 0; i < mv.size(); ++i) {
+            if (!marker_in_trim(static_cast<int>(i))) continue;
+            const double ms = mv[i].time_seconds * static_cast<double>(sr);
+            if (ms < vp) continue;
+            if (ms >= vp + static_cast<double>(visible)) continue;
+            const int m_px = static_cast<int>(std::llround((ms - vp) / spp));
+            const int d = std::abs(m_px - click_rel_x);
+            if (d <= kMarkerHitHalfPx && d < best_dist) {
+                best_dist = d;
+                best_hit  = static_cast<int>(i);
+            }
+        }
+        return best_hit;
+    };
+
+    // Hit-test a flag rectangle in the top strip. Returns marker index or -1.
+    auto hit_test_flag = [&](int mouse_x, int mouse_y) -> int {
+        const GuiRect area = waveform_area(app);
+        const GuiRect top  = top_strip_area(app);
+        cairo_surface_t* scratch_s = cairo_image_surface_create(
+            CAIRO_FORMAT_ARGB32, 1, 1);
+        cairo_t* scratch_cr = cairo_create(scratch_s);
+        const double spp = current_samples_per_pixel(app, audio);
+        const int64_t vp_start = app.viewport_start_sample;
+        const int64_t vp_end = vp_start +
+            static_cast<int64_t>(std::llround(spp * area.w));
+        auto rects = compute_flag_hit_rects(
+            scratch_cr, top, app.markers.markers(),
+            vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
+        cairo_destroy(scratch_cr);
+        cairo_surface_destroy(scratch_s);
+        for (const auto& r : rects) {
+            if (mouse_x >= r.x && mouse_x < r.x + r.w &&
+                mouse_y >= r.y && mouse_y < r.y + r.h) {
+                if (!marker_in_trim(r.marker_index)) continue;
+                return r.marker_index;
+            }
+        }
+        return -1;
+    };
+
+    // Begin a Ctrl+drag. Expects caller to have already applied the initial
+    // selection change (ctrl semantics). Returns true if drag was started.
+    auto begin_drag = [&](int hit, int mouse_x) -> bool {
+        if (hit < 0) return false;
+        const auto& mv = app.markers.markers();
+        if (hit >= static_cast<int>(mv.size())) return false;
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return false;
+
+        // Drag target: entire selection if hit is in it, else just the hit.
+        // In the single-drag case, also collapse the selection to that marker
+        // so the visible selection matches what's actually being dragged.
+        std::set<int> drag_set;
+        if (app.selected_markers.count(hit)) {
+            drag_set = app.selected_markers;
+        } else {
+            const std::set<int> old = app.selected_markers;
+            app.selected_markers.clear();
+            app.selected_markers.insert(hit);
+            app.last_selected_marker = hit;
+            invalidate_markers_columns(old);
+            invalidate_marker_column(hit);
+            invalidate_top_strip();
+            drag_set.insert(hit);
+        }
+
+        // First-marker protection: if the set includes index 0, cancel.
+        // Also refuse any time-0 marker (defensive in case first isn't
+        // index 0 somehow).
+        for (int idx : drag_set) {
+            if (idx == 0 || mv[idx].time_seconds == 0.0) {
+                std::fprintf(stderr,
+                    "warptempo_gui: first marker cannot be dragged\n");
+                return false;
+            }
+        }
+
+        DragState d;
+        d.active = true;
+        d.dragging_markers.assign(drag_set.begin(), drag_set.end());
+        d.original_times.reserve(d.dragging_markers.size());
+        for (int idx : d.dragging_markers) {
+            d.original_times.push_back(mv[idx].time_seconds);
+        }
+
+        // Anchor mouse time — computed at mouse_x in the waveform's X axis.
+        const GuiRect area = waveform_area(app);
+        const double spp = current_samples_per_pixel(app, audio);
+        const double sr_d = static_cast<double>(sr);
+        const double vp_time = static_cast<double>(app.viewport_start_sample) / sr_d;
+        d.anchor_mouse_time_seconds =
+            vp_time + static_cast<double>(mouse_x - area.x) * spp / sr_d;
+
+        // Compute scalar delta_min / delta_max from per-marker neighbor
+        // bounds. Correct for both contiguous and non-contiguous drag sets.
+        // eps enforces a 3-pixel visual gap at the current zoom — markers
+        // never stack even at the tightest clamp.
+        const double eps = 3.0 * spp / sr_d;
+        const auto [tb_samples, te_samples] = trim_range();
+        const double trim_begin_t = static_cast<double>(tb_samples) / sr_d;
+        const double trim_end_t   = static_cast<double>(te_samples) / sr_d;
+
+        d.delta_min = -std::numeric_limits<double>::infinity();
+        d.delta_max =  std::numeric_limits<double>::infinity();
+
+        for (size_t k = 0; k < d.dragging_markers.size(); ++k) {
+            const int idx = d.dragging_markers[k];
+            const double orig_t = d.original_times[k];
+
+            // Nearest non-dragged neighbor to the left.
+            int prev = idx - 1;
+            while (prev >= 0 && drag_set.count(prev)) --prev;
+            if (prev >= 0) {
+                const double lb = (mv[prev].time_seconds + eps) - orig_t;
+                if (lb > d.delta_min) d.delta_min = lb;
+            }
+
+            // Nearest non-dragged neighbor to the right.
+            int next = idx + 1;
+            while (next < static_cast<int>(mv.size()) &&
+                   drag_set.count(next)) ++next;
+            if (next < static_cast<int>(mv.size())) {
+                const double ub = (mv[next].time_seconds - eps) - orig_t;
+                if (ub < d.delta_max) d.delta_max = ub;
+            }
+
+            // Trim clamps (>= trim_begin_t, < trim_end_t).
+            const double lb_trim = trim_begin_t - orig_t;
+            if (lb_trim > d.delta_min) d.delta_min = lb_trim;
+            const double ub_trim = (trim_end_t - eps) - orig_t;
+            if (ub_trim < d.delta_max) d.delta_max = ub_trim;
+        }
+
+        d.moved = false;
+        // Capture the pre-drag marker vector for undo. Commit pushes this
+        // if motion actually landed; Escape-cancel discards it by resetting
+        // DragState wholesale.
+        d.pre_drag_snapshot = mv;
+        app.drag = std::move(d);
+        return true;
+    };
+
+    // Apply a raw delta (mouse-derived) to the dragging markers, clamped.
+    // Updates marker times in place; invalidates touched areas.
+    auto apply_drag_motion = [&](double raw_delta) {
+        if (!app.drag.active) return;
+        double delta = raw_delta;
+        if (delta < app.drag.delta_min) delta = app.drag.delta_min;
+        if (delta > app.drag.delta_max) delta = app.drag.delta_max;
+
+        bool any_changed = false;
+        for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
+            const int idx = app.drag.dragging_markers[k];
+            const double new_t = app.drag.original_times[k] + delta;
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            if (m->time_seconds != new_t) {
+                m->time_seconds = new_t;
+                any_changed = true;
+            }
+        }
+        if (any_changed) {
+            app.drag.moved = true;
+            invalidate_waveform_area();
+        }
+    };
+
+    // Restore each dragged marker's original time and clear drag state.
+    auto cancel_drag = [&]() {
+        if (!app.drag.active) return;
+        for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
+            const int idx = app.drag.dragging_markers[k];
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (m) m->time_seconds = app.drag.original_times[k];
+        }
+        app.drag = DragState{};
+        invalidate_waveform_area();
+    };
+
+    // Commit the current drag. Caller ensures drag was active. Sets dirty
+    // only if the markers actually moved.
+    auto commit_drag = [&]() {
+        if (!app.drag.active) return;
+        const bool moved = app.drag.moved;
+        std::vector<GuiMarker> snap = std::move(app.drag.pre_drag_snapshot);
+        app.drag = DragState{};
+        if (moved) {
+            push_undo(std::move(snap));
+            recompute_dirty();
+            invalidate_dirty_and_timestamp();
+        }
+        invalidate_waveform_area();
+    };
+
+    // Compute (delta_min, delta_max) scalar bounds for shifting the current
+    // selection set by a uniform delta. Neighbors: for each selected marker,
+    // the nearest non-selected marker on each side. Trim bounds apply too.
+    // Returns (0, 0) if empty or time-0 marker present (move forbidden).
+    auto compute_selection_delta_bounds = [&](bool& ok)
+        -> std::pair<double, double> {
+        ok = false;
+        const auto& mv = app.markers.markers();
+        if (app.selected_markers.empty()) return {0.0, 0.0};
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return {0.0, 0.0};
+        for (int idx : app.selected_markers) {
+            if (idx < 0 || idx >= static_cast<int>(mv.size())) return {0.0, 0.0};
+            if (idx == 0 || mv[idx].time_seconds == 0.0) return {0.0, 0.0};
+        }
+        const double sr_d = static_cast<double>(sr);
+        const double spp  = current_samples_per_pixel(app, audio);
+        const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
+        const auto [tb_samples, te_samples] = trim_range();
+        const double trim_begin_t = static_cast<double>(tb_samples) / sr_d;
+        const double trim_end_t   = static_cast<double>(te_samples) / sr_d;
+
+        double d_min = -std::numeric_limits<double>::infinity();
+        double d_max =  std::numeric_limits<double>::infinity();
+        for (int idx : app.selected_markers) {
+            const double orig_t = mv[idx].time_seconds;
+            int prev = idx - 1;
+            while (prev >= 0 && app.selected_markers.count(prev)) --prev;
+            if (prev >= 0) {
+                const double lb = (mv[prev].time_seconds + eps) - orig_t;
+                if (lb > d_min) d_min = lb;
+            }
+            int next = idx + 1;
+            while (next < static_cast<int>(mv.size()) &&
+                   app.selected_markers.count(next)) ++next;
+            if (next < static_cast<int>(mv.size())) {
+                const double ub = (mv[next].time_seconds - eps) - orig_t;
+                if (ub < d_max) d_max = ub;
+            }
+            const double lb_trim = trim_begin_t - orig_t;
+            if (lb_trim > d_min) d_min = lb_trim;
+            const double ub_trim = (trim_end_t - eps) - orig_t;
+            if (ub_trim < d_max) d_max = ub_trim;
+        }
+        ok = true;
+        return {d_min, d_max};
+    };
+
+    // Shift every selected marker by the clamped delta. Returns whether any
+    // marker actually moved.
+    auto apply_selection_shift = [&](double raw_delta) -> bool {
+        bool ok = false;
+        auto [d_min, d_max] = compute_selection_delta_bounds(ok);
+        if (!ok) return false;
+        double delta = raw_delta;
+        if (delta < d_min) delta = d_min;
+        if (delta > d_max) delta = d_max;
+        if (delta == 0.0) return false;
+        for (int idx : app.selected_markers) {
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            m->time_seconds += delta;
+        }
+        return true;
+    };
+
+    // Nudge selected markers by +/- 1 pixel of source time at current zoom.
+    // direction: -1 for earlier (up/left), +1 for later (down/right).
+    auto nudge_selected_markers = [&](int direction) {
+        if (app.loading || audio.total_frames() <= 0) return;
+        if (app.selected_markers.empty()) return;
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const double spp = current_samples_per_pixel(app, audio);
+        const double delta_s =
+            static_cast<double>(direction) * spp / static_cast<double>(sr);
+        if (delta_s == 0.0) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        if (apply_selection_shift(delta_s)) {
+            push_undo(std::move(pre_state));
+            recompute_dirty();
+            invalidate_waveform_area();
+            invalidate_dirty_and_timestamp();
+        }
+    };
+
+    // `j`: move every selected marker so last_selected lands on the playhead.
+    // All-or-nothing: if any resulting position would violate monotonicity
+    // or trim, reject the whole operation with a stderr note.
+    auto jump_selection_to_playhead = [&]() {
+        if (app.selected_markers.empty()) return;
+        if (app.last_selected_marker < 0) return;
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const auto& mv = app.markers.markers();
+        if (app.last_selected_marker >= static_cast<int>(mv.size())) return;
+        const double anchor_t = mv[app.last_selected_marker].time_seconds;
+        const double ph_t =
+            static_cast<double>(app.playhead_sample) /
+            static_cast<double>(sr);
+        const double delta = ph_t - anchor_t;
+        if (delta == 0.0) return;
+
+        bool ok = false;
+        auto [d_min, d_max] = compute_selection_delta_bounds(ok);
+        if (!ok || delta < d_min || delta > d_max) {
+            std::fprintf(stderr,
+                "warptempo_gui: jump rejected: would violate marker "
+                "ordering or trim range\n");
+            return;
+        }
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        for (int idx : app.selected_markers) {
+            GuiMarker* m = app.markers.marker_mut(idx);
+            if (!m) continue;
+            m->time_seconds += delta;
+        }
+        push_undo(std::move(pre_state));
+        recompute_dirty();
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
     gui.set_on_key([&](KeySym keysym, unsigned int mods) {
         if (app.loading || audio.total_frames() <= 0) {
             if (keysym == XK_Escape) gui.request_exit();
@@ -1083,6 +1722,12 @@ int main(int argc, char** argv) {
         }
         const bool ctrl  = (mods & ControlMask) != 0;
         const bool shift = (mods & ShiftMask)   != 0;
+
+        // Escape during a Ctrl+drag cancels the drag instead of exiting.
+        if (keysym == XK_Escape && app.drag.active) {
+            cancel_drag();
+            return;
+        }
 
         // Space-bar is modifier-independent.
         if (keysym == XK_space) { toggle_playback(); return; }
@@ -1105,6 +1750,15 @@ int main(int argc, char** argv) {
             case XK_9: set_playback_speed(0.9f); return;
             default: break;
             }
+        }
+
+        // Ctrl+Z undo / Ctrl+Shift+Z redo. Placed before the XK_s save
+        // handling so modifier dispatch reads left-to-right in the source.
+        // Both are silent no-ops when their respective stack is empty.
+        if (ctrl && keysym == XK_z) {
+            if (shift) do_redo();
+            else       do_undo();
+            return;
         }
 
         // XLookupKeysym with index 0 returns the unshifted keysym, so a
@@ -1134,9 +1788,30 @@ int main(int argc, char** argv) {
             adjust_tempo(-0.01); return;
         }
 
-        // `l` clears any b= / e= flags. Trim authoring, not navigation — so
-        // it honors the modifier guard for future extensions.
-        if (keysym == XK_l && !shift && !ctrl) { clear_trim(); return; }
+        // `l` (no modifier) clears any b= / e= flags. `Shift+L` clears the
+        // selection set (UI-only — no dirty, no playhead move).
+        if (keysym == XK_l && !ctrl) {
+            if (shift) clear_selection();
+            else       clear_trim();
+            return;
+        }
+
+        // `j` jumps the selected set to the playhead, anchored on
+        // last_selected_marker. All-or-nothing clamp check.
+        if (keysym == XK_j && !shift && !ctrl) {
+            jump_selection_to_playhead();
+            return;
+        }
+
+        // Ctrl+Left / Ctrl+Right: nudge selected markers by one pixel.
+        if (ctrl && !shift && keysym == XK_Left) {
+            nudge_selected_markers(-1);
+            return;
+        }
+        if (ctrl && !shift && keysym == XK_Right) {
+            nudge_selected_markers(+1);
+            return;
+        }
 
         switch (keysym) {
         case XK_Escape: gui.request_exit();               break;
@@ -1158,17 +1833,6 @@ int main(int argc, char** argv) {
 
     gui.set_on_close([&]() { gui.request_exit(); });
 
-    // A waveform click during playback reseats the audio thread's cursor to
-    // the new playhead. Without this, the visual playhead jumps but the audio
-    // keeps playing from its old position. Only click-driven playhead moves
-    // restart; arrow keys, Tab, Home/End deliberately do not.
-    auto click_restart_playback_if_active = [&]() {
-        if (playback.is_playing()) {
-            playback.stop();
-            playback.play(app.playhead_sample, trim_end_sample());
-        }
-    };
-
     gui.set_on_button_press([&](unsigned int button, int x, int y,
                                 unsigned int mods) {
         if (app.loading || audio.total_frames() <= 0) return;
@@ -1183,6 +1847,20 @@ int main(int argc, char** argv) {
         const bool ctrl  = (mods & ControlMask) != 0;
         const bool shift = (mods & ShiftMask)   != 0;
         const bool alt   = (mods & Mod1Mask) != 0;
+
+        // Defensive: a second press during a drag is ignored (left button
+        // should still be held down for a drag to exist).
+        if (app.drag.active) return;
+        if (app.viewport_pan.active) return;
+
+        // Alt + left-button anywhere in the waveform area or top flag strip
+        // begins a viewport pan. Alt takes precedence over Ctrl so the
+        // lower-frequency pan gesture wins if both mods are held.
+        if (alt && button == 1 && (inside_waveform || inside_top)) {
+            app.viewport_pan.active       = true;
+            app.viewport_pan.last_mouse_x = x;
+            return;
+        }
 
         if (button == 1) {
             // Detect double-click from timing + position deltas.
@@ -1199,7 +1877,7 @@ int main(int argc, char** argv) {
             // the click position (not the playhead). Shift forces inherit.
             // Rejection on duplicate positions is handled inside drop_marker.
             // Clicks in dimmed (outside-trim) regions are silent no-ops.
-            if (is_double && inside_waveform) {
+            if (is_double && inside_waveform && !ctrl) {
                 const double spp = current_samples_per_pixel(app, audio);
                 const int click_rel_x = x - area.x;
                 const int sr = audio.sample_rate();
@@ -1224,113 +1902,74 @@ int main(int argc, char** argv) {
             app.last_click_y        = y;
             app.last_click_consumed = false;
 
+            // Consolidated hit-test across waveform (marker line) and top
+            // strip (flag rect). A flag click behaves exactly like a click
+            // on its marker line.
+            int hit = -1;
+            bool in_click_region = false;
             if (inside_waveform) {
-                const double spp = current_samples_per_pixel(app, audio);
-                const int click_rel_x = x - area.x;
-                const int sr = audio.sample_rate();
-                const int64_t click_sample = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(click_rel_x * spp));
+                hit = hit_test_marker_line(x);
+                in_click_region = true;
+            } else if (inside_top) {
+                hit = hit_test_flag(x, y);
+                in_click_region = true;
+            }
 
-                // Hit-test markers in pixel space within ±kMarkerHitHalfPx.
-                // Markers themselves are gated on trim so a flag line in a
-                // dimmed region doesn't accidentally win the hit test.
-                int best_hit = -1;
-                int best_dist = kMarkerHitHalfPx + 1;
-                const auto& mv = app.markers.markers();
-                const double vp = static_cast<double>(app.viewport_start_sample);
-                const int64_t visible = samples_visible(app, audio);
-                for (size_t i = 0; i < mv.size(); ++i) {
-                    if (!marker_in_trim(static_cast<int>(i))) continue;
-                    const double ms = mv[i].time_seconds *
-                                      static_cast<double>(sr);
-                    if (ms < vp) continue;
-                    if (ms >= vp + static_cast<double>(visible)) continue;
-                    const int m_px = static_cast<int>(std::llround(
-                        (ms - vp) / spp));
-                    const int d = std::abs(m_px - click_rel_x);
-                    if (d <= kMarkerHitHalfPx && d < best_dist) {
-                        best_dist = d;
-                        best_hit  = static_cast<int>(i);
-                    }
-                }
+            if (!in_click_region) return;
 
-                if (best_hit >= 0) {
-                    set_selection(best_hit);
-                    if (!ctrl) {
-                        const int64_t sample =
-                            static_cast<int64_t>(std::llround(
-                                mv[best_hit].time_seconds *
-                                static_cast<double>(sr)));
-                        move_playhead_to(sample);
-                        click_restart_playback_if_active();
+            if (hit >= 0) {
+                if (ctrl) {
+                    // Ctrl held: prime a drag. begin_drag preserves the
+                    // multi-selection if `hit` is in it, else collapses to
+                    // just `hit`. Motion decides whether it actually becomes
+                    // a drag vs. a plain click.
+                    begin_drag(hit, x);
+                } else {
+                    if (shift) {
+                        toggle_selection_membership(hit);
+                    } else {
+                        set_single_selection(hit);
                     }
-                } else if (!ctrl) {
-                    // Ctrl+click on empty space is a no-op (doesn't deselect).
-                    // Clicks in dimmed regions are silent — no selection
-                    // change, no playhead move.
-                    if (!sample_in_trim(click_sample)) return;
-                    set_selection(-1);
-                    move_playhead_to(click_sample);
+                    const int sr = audio.sample_rate();
+                    const int64_t sample = static_cast<int64_t>(std::llround(
+                        app.markers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                    move_playhead_to(sample);
                     click_restart_playback_if_active();
                 }
-            } else if (inside_top) {
-                // Flag strip. Hit-test actual rendered flag rects. A flag
-                // click behaves like clicking the marker line (select +
-                // move playhead), modulated by Ctrl. A click that misses a
-                // flag deselects and moves the playhead to the click's
-                // horizontal position (matching empty-waveform behavior).
-                cairo_surface_t* scratch_s = cairo_image_surface_create(
-                    CAIRO_FORMAT_ARGB32, 1, 1);
-                cairo_t* scratch_cr = cairo_create(scratch_s);
+            } else {
+                // Missed any marker/flag.
+                if (ctrl) {
+                    // Ctrl+click on empty space: no-op (doesn't deselect).
+                    return;
+                }
                 const double spp = current_samples_per_pixel(app, audio);
-                const int64_t vp_start = app.viewport_start_sample;
-                const int64_t vp_end = vp_start +
-                    static_cast<int64_t>(std::llround(spp * area.w));
-                auto rects = compute_flag_hit_rects(
-                    scratch_cr, top, app.markers.markers(),
-                    vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-                cairo_destroy(scratch_cr);
-                cairo_surface_destroy(scratch_s);
-
-                int hit = -1;
-                for (const auto& r : rects) {
-                    if (x >= r.x && x < r.x + r.w &&
-                        y >= r.y && y < r.y + r.h) {
-                        if (!marker_in_trim(r.marker_index)) continue;
-                        hit = r.marker_index;
-                        break;
-                    }
+                const int click_rel_x = x - area.x;
+                if (click_rel_x < 0 || click_rel_x >= area.w) {
+                    // Far left/right of the waveform region — just deselect.
+                    clear_selection();
+                    return;
                 }
-
-                if (hit >= 0) {
-                    set_selection(hit);
-                    if (!ctrl) {
-                        const int sr = audio.sample_rate();
-                        const int64_t sample =
-                            static_cast<int64_t>(std::llround(
-                                app.markers.markers()[hit].time_seconds *
-                                static_cast<double>(sr)));
-                        move_playhead_to(sample);
-                        click_restart_playback_if_active();
-                    }
-                } else if (!ctrl) {
-                    const int click_rel_x = x - area.x;
-                    if (click_rel_x >= 0 && click_rel_x < area.w) {
-                        const int64_t sample = app.viewport_start_sample +
-                            static_cast<int64_t>(std::llround(click_rel_x * spp));
-                        if (!sample_in_trim(sample)) return;
-                        set_selection(-1);
-                        move_playhead_to(sample);
-                        click_restart_playback_if_active();
-                    } else {
-                        set_selection(-1);
-                    }
+                const int64_t sample = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(click_rel_x * spp));
+                if (!sample_in_trim(sample)) {
+                    // Click in dimmed region: silent no-op.
+                    return;
                 }
+                clear_selection();
+                move_playhead_to(sample);
+                click_restart_playback_if_active();
             }
         } else if (button == 4 || button == 5) {
             // Wheel in flag strip or window margins is ignored per spec.
             if (!inside_waveform) return;
-            if (ctrl) return; // reserved
+            if (ctrl) {
+                // Ctrl+wheel nudges selected markers by 1 source pixel.
+                // Up (button 4) = earlier, Down (button 5) = later, to
+                // match the Ctrl+Left / Ctrl+Right convention.
+                nudge_selected_markers(button == 4 ? -1 : +1);
+                return;
+            }
             if (alt) {
                 const int64_t step = std::max<int64_t>(
                     1, samples_visible(app, audio) / 10);
@@ -1342,8 +1981,48 @@ int main(int argc, char** argv) {
         }
     });
 
-    gui.set_on_button_release([](unsigned int, int, int, unsigned int) {});
-    gui.set_on_motion        ([](int, int, unsigned int) {});
+    gui.set_on_button_release([&](unsigned int button, int, int, unsigned int) {
+        if (button != 1) return;
+        if (app.viewport_pan.active) {
+            app.viewport_pan.active = false;
+            return;
+        }
+        if (!app.drag.active) return;
+        commit_drag();
+    });
+
+    gui.set_on_motion([&](int mouse_x, int /*mouse_y*/, unsigned int mods) {
+        if (app.viewport_pan.active) {
+            // Pan continues as long as we keep seeing motion events, even
+            // if Button1Mask flickers on a busy system — only the release
+            // callback ends the gesture. Dragging right (positive dx)
+            // scrolls the viewport earlier (negative delta_samples).
+            const double spp = current_samples_per_pixel(app, audio);
+            const int dx = mouse_x - app.viewport_pan.last_mouse_x;
+            const int64_t delta_samples = static_cast<int64_t>(
+                std::llround(-dx * spp));
+            app.viewport_start_sample += delta_samples;
+            clamp_viewport_start(app, audio);
+            app.viewport_pan.last_mouse_x = mouse_x;
+            invalidate_waveform_area();
+            return;
+        }
+        if (!app.drag.active) return;
+        // Left button must still be held down — otherwise release was lost.
+        if ((mods & Button1Mask) == 0) {
+            commit_drag();
+            return;
+        }
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const GuiRect area = waveform_area(app);
+        const double spp = current_samples_per_pixel(app, audio);
+        const double sr_d = static_cast<double>(sr);
+        const double vp_time = static_cast<double>(app.viewport_start_sample) / sr_d;
+        const double mouse_time = vp_time +
+            static_cast<double>(mouse_x - area.x) * spp / sr_d;
+        apply_drag_motion(mouse_time - app.drag.anchor_mouse_time_seconds);
+    });
 
     // -- File loading --------------------------------------------------------
 
@@ -1432,7 +2111,12 @@ int main(int argc, char** argv) {
         // error to stderr and leave app.markers empty. The GUI still works
         // as a waveform viewer.
         app.markers.clear();
-        app.selected_marker    = -1;
+        app.selected_markers.clear();
+        app.last_selected_marker = -1;
+        app.drag = DragState{};
+        // Fresh file = fresh history. Both stacks cleared; the loaded state
+        // is the saved baseline (signed_distance = 0, valid).
+        app.history.reset();
         app.dirty              = false;
         app.first_save_pending = true;
         const bool markers_ok = app.markers.load(wm_path.string());

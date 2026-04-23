@@ -196,7 +196,7 @@ void render_playhead(cairo_t* cr,
     if (playhead_pixel_x < 0.0) return;
     if (playhead_pixel_x > static_cast<double>(area.w - 1)) return;
 
-    const double x_px = area.x + playhead_pixel_x + 0.5;
+    const double x_px = area.x + std::floor(playhead_pixel_x + 0.5) + 0.5;
 
     cairo_save(cr);
     cairo_set_source_rgb(cr, color.r, color.g, color.b);
@@ -247,7 +247,8 @@ void render_markers(cairo_t* cr,
                     GuiColor enabled_color,
                     GuiColor disabled_color,
                     GuiColor selected_color,
-                    int selected_index) {
+                    const std::set<int>& selected_set,
+                    int /*last_selected*/) {
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -264,15 +265,16 @@ void render_markers(cairo_t* cr,
     cairo_save(cr);
     cairo_set_line_width(cr, 1.0);
 
-    // Two passes — one path per color — so the whole set of enabled markers
-    // strokes in a single call, then disabled. The selected marker is
-    // skipped here and drawn on top afterwards in its own color.
+    // Two passes — one path per color — for the unselected markers, split by
+    // enabled/disabled. Selected markers are drawn on top afterwards so
+    // their selected_color wins regardless of z-order within the unselected
+    // set.
     for (int pass = 0; pass < 2; pass++) {
         const bool this_disabled = (pass == 1);
         const GuiColor& c = this_disabled ? disabled_color : enabled_color;
         cairo_set_source_rgb(cr, c.r, c.g, c.b);
         for (size_t i = 0; i < markers.size(); ++i) {
-            if (static_cast<int>(i) == selected_index) continue;
+            if (selected_set.count(static_cast<int>(i))) continue;
             const bool dis = effective_disabled(markers, static_cast<int>(i));
             if (dis != this_disabled) continue;
             const auto& m = markers[i];
@@ -288,24 +290,23 @@ void render_markers(cairo_t* cr,
         cairo_stroke(cr);
     }
 
-    if (selected_index >= 0 &&
-        selected_index < static_cast<int>(markers.size())) {
-        const auto& m = markers[selected_index];
+    for (int idx : selected_set) {
+        if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
+        const auto& m = markers[idx];
         const double ms = m.time_seconds * sr;
-        if (ms >= static_cast<double>(viewport_start_sample) &&
-            ms <  static_cast<double>(viewport_end_sample)) {
-            GuiColor c = selected_color;
-            if (effective_disabled(markers, selected_index)) {
-                c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
-            }
-            cairo_set_source_rgb(cr, c.r, c.g, c.b);
-            const double x_px = waveform_area.x +
-                (ms - static_cast<double>(viewport_start_sample))
-                    / samples_per_pixel + 0.5;
-            cairo_move_to(cr, x_px, y0);
-            cairo_line_to(cr, x_px, y1);
-            cairo_stroke(cr);
+        if (ms < static_cast<double>(viewport_start_sample)) continue;
+        if (ms >= static_cast<double>(viewport_end_sample)) continue;
+        GuiColor c = selected_color;
+        if (effective_disabled(markers, idx)) {
+            c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
         }
+        cairo_set_source_rgb(cr, c.r, c.g, c.b);
+        const double x_px = waveform_area.x +
+            (ms - static_cast<double>(viewport_start_sample))
+                / samples_per_pixel + 0.5;
+        cairo_move_to(cr, x_px, y0);
+        cairo_line_to(cr, x_px, y1);
+        cairo_stroke(cr);
     }
 
     cairo_restore(cr);
@@ -374,7 +375,8 @@ void render_flags(cairo_t* cr,
                   GuiColor selected_color,
                   GuiColor highlight_color,
                   double font_size,
-                  int selected_index) {
+                  const std::set<int>& selected_set,
+                  int last_selected) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -392,10 +394,12 @@ void render_flags(cairo_t* cr,
                           sample_rate,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
-            const bool is_selected = (i == selected_index);
-            const bool dis = effective_disabled(markers, i);
+            const bool is_selected = selected_set.count(i) > 0;
+            const bool is_last     = (i == last_selected) && is_selected;
+            const bool dis         = effective_disabled(markers, i);
 
-            if (is_selected) {
+            // Only the last-selected flag gets the background highlight.
+            if (is_last) {
                 cairo_set_source_rgb(cr, highlight_color.r,
                                      highlight_color.g, highlight_color.b);
                 cairo_rectangle(cr,

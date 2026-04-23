@@ -2,6 +2,7 @@
 #include "gui_markers.h"
 
 #include <cairo/cairo.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -72,9 +73,11 @@ void render_timestamp(cairo_t* cr,
 // Draws vertical 1-pixel lines across `waveform_area` for each marker whose
 // resolved sample falls inside [viewport_start_sample, viewport_end_sample).
 // Effective disabled state is computed inline from the marker list (a label
-// reference inherits the disabled flag of its defining marker). The marker
-// at `selected_index` (if in range) paints in `selected_color`; if that
+// reference inherits the disabled flag of its defining marker). Markers whose
+// indices appear in `selected_set` paint in `selected_color`; if such a
 // marker is also effectively disabled, the selected color is dimmed.
+// `last_selected` is unused by this renderer (flag-only visual) but kept in
+// the signature for symmetry with render_flags.
 void render_markers(cairo_t* cr,
                     GuiRect waveform_area,
                     const std::vector<GuiMarker>& markers,
@@ -84,7 +87,8 @@ void render_markers(cairo_t* cr,
                     GuiColor enabled_color,
                     GuiColor disabled_color,
                     GuiColor selected_color,
-                    int selected_index = -1);
+                    const std::set<int>& selected_set,
+                    int last_selected);
 
 // Draws flag annotations in `top_strip_area` above visible markers. Iterates
 // left-to-right and greedily skips any flag whose left edge would collide
@@ -92,8 +96,9 @@ void render_markers(cairo_t* cr,
 // derives from the marker's state: owned tempo `1.28`, owned+def
 // `1.28 (a.01)`, inherit `(1.28)` where the value is resolved by walking
 // backward, inherit+def `(1.28) (a.01)`, reference `a.01`. Scale factor is
-// not surfaced. The flag at `selected_index` (if rendered) has a background
-// highlight rectangle drawn behind its text in `highlight_color`.
+// not surfaced. Flags whose indices appear in `selected_set` paint text in
+// `selected_color`; only the `last_selected` flag (if rendered and in the
+// set) gets the background highlight rectangle in `highlight_color`.
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
                   const std::vector<GuiMarker>& markers,
@@ -105,7 +110,8 @@ void render_flags(cairo_t* cr,
                   GuiColor selected_color,
                   GuiColor highlight_color,
                   double font_size,
-                  int selected_index = -1);
+                  const std::set<int>& selected_set,
+                  int last_selected);
 
 // Same greedy-pack and elision logic as render_flags, without drawing —
 // returns the screen-coord rects of the flags that would be rendered. The
