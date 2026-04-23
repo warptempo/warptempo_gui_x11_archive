@@ -37,8 +37,31 @@ add_executable(parser src/parser.cpp)
 # (Assuming the parser is pure C++ and doesn't need external audio libs.
 # If it does, we can add a target_link_libraries block for it here.)
 
+# --- 3. Build the GUI (Xlib + Cairo) ---
+pkg_check_modules(X11 REQUIRED x11)
+pkg_check_modules(CAIRO REQUIRED cairo)
+
+add_executable(warptempo_gui
+    src/gui_main.cpp
+    src/gui_x11.cpp
+    src/gui_audio.cpp
+    src/gui_render.cpp
+)
+target_include_directories(warptempo_gui PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${X11_INCLUDE_DIRS}
+    ${CAIRO_INCLUDE_DIRS}
+    ${SNDFILE_INCLUDE_DIRS}
+)
+target_link_libraries(warptempo_gui PRIVATE
+    ${X11_LIBRARIES}
+    ${CAIRO_LIBRARIES}
+    ${SNDFILE_LIBRARIES}
+)
+
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(parser PRIVATE -Wall -Wextra -O3 -march=native)
+    target_compile_options(warptempo_gui PRIVATE -Wall -Wextra -O3 -march=native)
 endif()
