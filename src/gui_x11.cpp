@@ -5,6 +5,8 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 
+#include <poll.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -473,9 +475,25 @@ void GuiX11::dispatch_event(XEvent& ev) {
 
 void GuiX11::run() {
     XEvent ev;
+    const int xfd = ConnectionNumber(dpy_);
     while (!should_exit_) {
-        XNextEvent(dpy_, &ev);
-        dispatch_event(ev);
+        // If there are no events already queued, wait on the X connection
+        // (plus an optional idle timer so the tick callback can drive
+        // playback cursor updates while input is quiet).
+        if (XPending(dpy_) == 0) {
+            XFlush(dpy_);
+            int timeout_ms = idle_timeout_ ? idle_timeout_() : -1;
+            struct pollfd pfd{};
+            pfd.fd     = xfd;
+            pfd.events = POLLIN;
+            (void)poll(&pfd, 1, timeout_ms);
+        }
+        while (XPending(dpy_) > 0) {
+            XNextEvent(dpy_, &ev);
+            dispatch_event(ev);
+            if (should_exit_) return;
+        }
+        if (on_tick_) on_tick_();
     }
 }
 

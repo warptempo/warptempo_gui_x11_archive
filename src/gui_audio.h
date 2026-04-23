@@ -23,6 +23,13 @@ public:
     int     channels()        const { return channels_; }
     int     render_channels() const { return render_channels_; }
 
+    // Raw interleaved float32 sample buffer. The pointer is valid as long as
+    // this GuiAudio instance is alive and no new load() has been called. The
+    // playback engine reads samples off the audio callback thread; the caller
+    // must orchestrate lifetime so the device is stopped before the buffer
+    // goes away (see GuiPlayback::shutdown).
+    const float* samples_ptr() const { return samples_.data(); }
+
     // Total number of pyramid levels, counting level 0 (raw samples).
     int num_levels() const;
 

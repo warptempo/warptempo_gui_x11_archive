@@ -1,5 +1,6 @@
 #include "gui_audio.h"
 #include "gui_markers.h"
+#include "gui_playback.h"
 #include "gui_render.h"
 #include "gui_x11.h"
 
@@ -78,6 +79,15 @@ struct AppState {
     int     zoom_level            = 0;
     int64_t viewport_start_sample = 0;
     bool    follow_mode           = false;
+
+    // Playback state. `playback_cursor` is the last sample read from the
+    // audio thread; `is_playing` mirrors the audio thread's flag so the
+    // main loop can detect natural end-of-playback. `playback_speed` is
+    // authoritative on the main thread and pushed to the playback engine
+    // on every change.
+    int64_t playback_cursor = 0;
+    bool    is_playing      = false;
+    float   playback_speed  = 1.0f;
 
     // Companion files discovered alongside the loaded audio. Chunk E just
     // records these; later chunks will parse their contents.
@@ -326,12 +336,30 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    AppState app;
-    GuiAudio audio;
-    GuiX11   gui;
+    AppState    app;
+    GuiAudio    audio;
+    GuiPlayback playback;
+    GuiX11      gui;
     if (!gui.init(app.width, app.height, "Warptempo")) {
         return 1;
     }
+
+    // -- Trim helpers --------------------------------------------------------
+
+    auto trim_range = [&]() -> std::pair<int64_t, int64_t> {
+        if (audio.total_frames() <= 0) return {0, 0};
+        return compute_trim_samples(
+            app.markers.markers(), audio.sample_rate(), audio.total_frames());
+    };
+    auto trim_begin_sample = [&]() -> int64_t { return trim_range().first; };
+    auto trim_end_sample   = [&]() -> int64_t { return trim_range().second; };
+    auto sample_in_trim = [&](int64_t s) -> bool {
+        const auto tr = trim_range();
+        return s >= tr.first && s < tr.second;
+    };
+    auto is_playhead_in_trim = [&]() -> bool {
+        return sample_in_trim(app.playhead_sample);
+    };
 
     // -- Navigation/viewport helpers ----------------------------------------
 
@@ -369,12 +397,17 @@ int main(int argc, char** argv) {
     };
 
     // move_playhead_to: update playhead, keep viewport so playhead stays
-    // visible. Invalidate only what changed.
+    // visible. Invalidate only what changed. Clamps into the current trim
+    // range rather than the whole file so arrow navigation can't wander
+    // into dimmed territory.
     auto move_playhead_to = [&](int64_t new_sample) {
         if (audio.total_frames() <= 0) return;
-        const int64_t total = audio.total_frames();
-        if (new_sample < 0) new_sample = 0;
-        if (new_sample > total - 1) new_sample = total - 1;
+        const int64_t tb = trim_begin_sample();
+        const int64_t te = trim_end_sample();
+        const int64_t lo = tb;
+        const int64_t hi = (te > tb) ? te - 1 : tb;
+        if (new_sample < lo) new_sample = lo;
+        if (new_sample > hi) new_sample = hi;
 
         const double old_px = playhead_pixel_x(app, audio);
         const int64_t old_vp = app.viewport_start_sample;
@@ -674,10 +707,23 @@ int main(int argc, char** argv) {
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
+    // True if marker i's resolved sample falls inside the current trim
+    // range. Trim enforcement hides out-of-range markers from Tab cycling.
+    auto marker_in_trim = [&](int i) -> bool {
+        const auto& mv = app.markers.markers();
+        if (i < 0 || i >= static_cast<int>(mv.size())) return false;
+        const int sr = audio.sample_rate();
+        const int64_t s = static_cast<int64_t>(std::llround(
+            mv[i].time_seconds * static_cast<double>(sr)));
+        return sample_in_trim(s);
+    };
+
     // Tab / Shift+Tab: cycle through markers. Rules per spec:
     //   With selection: strict next/prev by time.
     //   No selection: pick the nearest marker in the requested direction
     //   (>= playhead for next, <= playhead for prev).
+    // Trim range acts as a hard filter — markers outside trim are invisible
+    // to cycling.
     auto select_next_marker = [&]() {
         const auto& mv = app.markers.markers();
         if (mv.empty()) return;
@@ -689,6 +735,7 @@ int main(int argc, char** argv) {
                   static_cast<double>(sr)
                 : 0.0;
             for (size_t i = 0; i < mv.size(); ++i) {
+                if (!marker_in_trim(static_cast<int>(i))) continue;
                 if (mv[i].time_seconds >= ph_s) {
                     new_sel = static_cast<int>(i);
                     break;
@@ -697,6 +744,7 @@ int main(int argc, char** argv) {
         } else {
             const double cur_t = mv[app.selected_marker].time_seconds;
             for (size_t i = app.selected_marker + 1; i < mv.size(); ++i) {
+                if (!marker_in_trim(static_cast<int>(i))) continue;
                 if (mv[i].time_seconds > cur_t) {
                     new_sel = static_cast<int>(i);
                     break;
@@ -721,6 +769,7 @@ int main(int argc, char** argv) {
                   static_cast<double>(sr)
                 : 0.0;
             for (int i = static_cast<int>(mv.size()) - 1; i >= 0; --i) {
+                if (!marker_in_trim(i)) continue;
                 if (mv[i].time_seconds <= ph_s) {
                     new_sel = i;
                     break;
@@ -729,6 +778,7 @@ int main(int argc, char** argv) {
         } else {
             const double cur_t = mv[app.selected_marker].time_seconds;
             for (int i = app.selected_marker - 1; i >= 0; --i) {
+                if (!marker_in_trim(i)) continue;
                 if (mv[i].time_seconds < cur_t) {
                     new_sel = i;
                     break;
@@ -796,6 +846,7 @@ int main(int argc, char** argv) {
     };
 
     auto drop_marker_at_playhead = [&]() {
+        if (!is_playhead_in_trim()) return;
         const int sr = audio.sample_rate();
         if (sr <= 0) return;
         const double t = static_cast<double>(app.playhead_sample) /
@@ -804,6 +855,7 @@ int main(int argc, char** argv) {
     };
 
     auto drop_inherit_marker_at_playhead = [&]() {
+        if (!is_playhead_in_trim()) return;
         const int sr = audio.sample_rate();
         if (sr <= 0) return;
         const double t = static_cast<double>(app.playhead_sample) /
@@ -812,6 +864,7 @@ int main(int argc, char** argv) {
     };
 
     auto delete_selected_marker = [&]() {
+        if (!is_playhead_in_trim()) return;
         if (app.selected_marker < 0) return;
         const auto& mv = app.markers.markers();
         if (app.selected_marker >= static_cast<int>(mv.size())) return;
@@ -856,6 +909,7 @@ int main(int argc, char** argv) {
     // inherit. Caches current tempo_base/tempo_scale on the marker itself
     // — both states — so round-tripping through the toggle is lossless.
     auto toggle_inherits = [&]() {
+        if (!is_playhead_in_trim()) return;
         if (app.selected_marker < 0) return;
         GuiMarker* m = app.markers.marker_mut(app.selected_marker);
         if (!m) return;
@@ -878,6 +932,7 @@ int main(int argc, char** argv) {
     // Silent no-op if the marker has no label definition (including label
     // references, which inherit disabled state from their definition).
     auto toggle_disabled = [&]() {
+        if (!is_playhead_in_trim()) return;
         if (app.selected_marker < 0) return;
         GuiMarker* m = app.markers.marker_mut(app.selected_marker);
         if (!m) return;
@@ -889,6 +944,7 @@ int main(int argc, char** argv) {
     };
 
     auto toggle_begin_time = [&]() {
+        if (!is_playhead_in_trim()) return;
         if (app.selected_marker < 0) return;
         auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
         const bool new_state = !mv_mut.is_begin_time;
@@ -910,6 +966,7 @@ int main(int argc, char** argv) {
     };
 
     auto toggle_end_time = [&]() {
+        if (!is_playhead_in_trim()) return;
         if (app.selected_marker < 0) return;
         auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
         const bool new_state = !mv_mut.is_end_time;
@@ -923,6 +980,45 @@ int main(int argc, char** argv) {
             }
         }
         mv_mut.is_end_time = new_state;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    // Nudge the selected marker's tempo. Silent no-op if nothing is selected,
+    // if the selection is a label reference (tempo is inherited from its
+    // definition), if the selection is an inherit marker (tempo is computed),
+    // or if the playhead is outside the trim range. Clamps to [0.01, 9.99].
+    auto adjust_tempo = [&](double delta) {
+        if (!is_playhead_in_trim()) return;
+        if (app.selected_marker < 0) return;
+        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
+        if (!m) return;
+        if (!m->label_ref.empty()) return;
+        if (m->tempo_inherits) return;
+        double new_tempo = m->tempo_base + delta;
+        if (new_tempo < 0.01) new_tempo = 0.01;
+        if (new_tempo > 9.99) new_tempo = 9.99;
+        if (new_tempo == m->tempo_base) return;
+        m->tempo_base = new_tempo;
+        app.dirty = true;
+        invalidate_marker_column(app.selected_marker);
+        invalidate_top_strip();
+        invalidate_dirty_and_timestamp();
+    };
+
+    // Clear any b= / e= flags so the whole file becomes editable again.
+    // No-op if no marker carries either flag.
+    auto clear_trim = [&]() {
+        bool changed = false;
+        for (auto& m : app.markers.markers_mut()) {
+            if (m.is_begin_time || m.is_end_time) {
+                m.is_begin_time = false;
+                m.is_end_time   = false;
+                changed = true;
+            }
+        }
+        if (!changed) return;
         app.dirty = true;
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -951,6 +1047,35 @@ int main(int argc, char** argv) {
         }
     };
 
+    // Space-bar: start/stop playback. Playback runs from the playhead to
+    // trim_end (or total_frames if no e= marker). Pressing space with the
+    // playhead at or past trim-end is a silent no-op.
+    auto toggle_playback = [&]() {
+        if (playback.is_playing()) {
+            // Stop the audio thread; leave app.is_playing true so the next
+            // tick sees the transition and snaps the playhead to the final
+            // cursor position (acceptance criterion: "Playhead stays at the
+            // position playback reached").
+            playback.stop();
+            return;
+        }
+        const int64_t end = trim_end_sample();
+        if (app.playhead_sample >= end) return;
+        // Clamp the start position into the trim range in case the playhead
+        // is sitting at trim_end - 1 (valid) or somehow slipped.
+        const int64_t start = std::max(app.playhead_sample, trim_begin_sample());
+        app.playback_cursor = start;
+        app.is_playing = true;
+        playback.set_speed(app.playback_speed);
+        playback.play(start, end);
+    };
+
+    // Helpers for Shift+<digit> speed selection.
+    auto set_playback_speed = [&](float s) {
+        app.playback_speed = s;
+        playback.set_speed(s);
+    };
+
     gui.set_on_key([&](KeySym keysym, unsigned int mods) {
         if (app.loading || audio.total_frames() <= 0) {
             if (keysym == XK_Escape) gui.request_exit();
@@ -958,6 +1083,29 @@ int main(int argc, char** argv) {
         }
         const bool ctrl  = (mods & ControlMask) != 0;
         const bool shift = (mods & ShiftMask)   != 0;
+
+        // Space-bar is modifier-independent.
+        if (keysym == XK_space) { toggle_playback(); return; }
+
+        // Shift+<digit> selects a playback speed. Shift+0 is 1.00, Shift+1
+        // is 0.10, Shift+9 is 0.90. Applies immediately whether or not
+        // playback is active — the audio callback picks up the new atomic
+        // on the next buffer.
+        if (shift && !ctrl) {
+            switch (keysym) {
+            case XK_0: set_playback_speed(1.0f); return;
+            case XK_1: set_playback_speed(0.1f); return;
+            case XK_2: set_playback_speed(0.2f); return;
+            case XK_3: set_playback_speed(0.3f); return;
+            case XK_4: set_playback_speed(0.4f); return;
+            case XK_5: set_playback_speed(0.5f); return;
+            case XK_6: set_playback_speed(0.6f); return;
+            case XK_7: set_playback_speed(0.7f); return;
+            case XK_8: set_playback_speed(0.8f); return;
+            case XK_9: set_playback_speed(0.9f); return;
+            default: break;
+            }
+        }
 
         // XLookupKeysym with index 0 returns the unshifted keysym, so a
         // Shift+letter press arrives as the lowercase XK_* with ShiftMask in
@@ -978,6 +1126,18 @@ int main(int argc, char** argv) {
         if (keysym == XK_Tab && shift)  { select_prev_marker(); return; }
         if (keysym == XK_ISO_Left_Tab)  { select_prev_marker(); return; }
 
+        // Tempo nudge. Plain `=` and `-` only — no Shift / Ctrl variants yet.
+        if (keysym == XK_equal && !shift && !ctrl) {
+            adjust_tempo(+0.01); return;
+        }
+        if (keysym == XK_minus && !shift && !ctrl) {
+            adjust_tempo(-0.01); return;
+        }
+
+        // `l` clears any b= / e= flags. Trim authoring, not navigation — so
+        // it honors the modifier guard for future extensions.
+        if (keysym == XK_l && !shift && !ctrl) { clear_trim(); return; }
+
         switch (keysym) {
         case XK_Escape: gui.request_exit();               break;
         case XK_Left:   move_playhead_pixels(-1);         break;
@@ -986,8 +1146,8 @@ int main(int argc, char** argv) {
         case XK_Down:   zoom_out();                       break;
         case XK_f:      app.follow_mode = !app.follow_mode; break;
         case XK_c:      center_viewport_on_playhead();    break;
-        case XK_Home:   move_playhead_to(0);              break;
-        case XK_End:    move_playhead_to(audio.total_frames() - 1); break;
+        case XK_Home:   move_playhead_to(trim_begin_sample()); break;
+        case XK_End:    move_playhead_to(trim_end_sample() - 1); break;
         case XK_b:      toggle_begin_time();              break;
         case XK_e:      toggle_end_time();                break;
         case XK_Delete: delete_selected_marker();         break;
@@ -997,6 +1157,17 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_close([&]() { gui.request_exit(); });
+
+    // A waveform click during playback reseats the audio thread's cursor to
+    // the new playhead. Without this, the visual playhead jumps but the audio
+    // keeps playing from its old position. Only click-driven playhead moves
+    // restart; arrow keys, Tab, Home/End deliberately do not.
+    auto click_restart_playback_if_active = [&]() {
+        if (playback.is_playing()) {
+            playback.stop();
+            playback.play(app.playhead_sample, trim_end_sample());
+        }
+    };
 
     gui.set_on_button_press([&](unsigned int button, int x, int y,
                                 unsigned int mods) {
@@ -1027,12 +1198,17 @@ int main(int argc, char** argv) {
             // A double-click in the waveform area creates a new marker at
             // the click position (not the playhead). Shift forces inherit.
             // Rejection on duplicate positions is handled inside drop_marker.
+            // Clicks in dimmed (outside-trim) regions are silent no-ops.
             if (is_double && inside_waveform) {
                 const double spp = current_samples_per_pixel(app, audio);
                 const int click_rel_x = x - area.x;
                 const int sr = audio.sample_rate();
                 const int64_t sample = app.viewport_start_sample +
                     static_cast<int64_t>(std::llround(click_rel_x * spp));
+                if (!sample_in_trim(sample)) {
+                    app.last_click_consumed = true;
+                    return;
+                }
                 const double t = (sr > 0)
                     ? static_cast<double>(sample) / static_cast<double>(sr)
                     : 0.0;
@@ -1052,14 +1228,19 @@ int main(int argc, char** argv) {
                 const double spp = current_samples_per_pixel(app, audio);
                 const int click_rel_x = x - area.x;
                 const int sr = audio.sample_rate();
+                const int64_t click_sample = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(click_rel_x * spp));
 
                 // Hit-test markers in pixel space within ±kMarkerHitHalfPx.
+                // Markers themselves are gated on trim so a flag line in a
+                // dimmed region doesn't accidentally win the hit test.
                 int best_hit = -1;
                 int best_dist = kMarkerHitHalfPx + 1;
                 const auto& mv = app.markers.markers();
                 const double vp = static_cast<double>(app.viewport_start_sample);
                 const int64_t visible = samples_visible(app, audio);
                 for (size_t i = 0; i < mv.size(); ++i) {
+                    if (!marker_in_trim(static_cast<int>(i))) continue;
                     const double ms = mv[i].time_seconds *
                                       static_cast<double>(sr);
                     if (ms < vp) continue;
@@ -1081,13 +1262,16 @@ int main(int argc, char** argv) {
                                 mv[best_hit].time_seconds *
                                 static_cast<double>(sr)));
                         move_playhead_to(sample);
+                        click_restart_playback_if_active();
                     }
                 } else if (!ctrl) {
                     // Ctrl+click on empty space is a no-op (doesn't deselect).
+                    // Clicks in dimmed regions are silent — no selection
+                    // change, no playhead move.
+                    if (!sample_in_trim(click_sample)) return;
                     set_selection(-1);
-                    const int64_t sample = app.viewport_start_sample +
-                        static_cast<int64_t>(std::llround(click_rel_x * spp));
-                    move_playhead_to(sample);
+                    move_playhead_to(click_sample);
+                    click_restart_playback_if_active();
                 }
             } else if (inside_top) {
                 // Flag strip. Hit-test actual rendered flag rects. A flag
@@ -1112,6 +1296,7 @@ int main(int argc, char** argv) {
                 for (const auto& r : rects) {
                     if (x >= r.x && x < r.x + r.w &&
                         y >= r.y && y < r.y + r.h) {
+                        if (!marker_in_trim(r.marker_index)) continue;
                         hit = r.marker_index;
                         break;
                     }
@@ -1126,14 +1311,19 @@ int main(int argc, char** argv) {
                                 app.markers.markers()[hit].time_seconds *
                                 static_cast<double>(sr)));
                         move_playhead_to(sample);
+                        click_restart_playback_if_active();
                     }
                 } else if (!ctrl) {
-                    set_selection(-1);
                     const int click_rel_x = x - area.x;
                     if (click_rel_x >= 0 && click_rel_x < area.w) {
                         const int64_t sample = app.viewport_start_sample +
                             static_cast<int64_t>(std::llround(click_rel_x * spp));
+                        if (!sample_in_trim(sample)) return;
+                        set_selection(-1);
                         move_playhead_to(sample);
+                        click_restart_playback_if_active();
+                    } else {
+                        set_selection(-1);
                     }
                 }
             }
@@ -1176,6 +1366,14 @@ int main(int argc, char** argv) {
             sf_close(probe);
         }
 
+        // Stop and tear down the audio device before the sample buffer it
+        // borrows is replaced. Playing into a freed buffer would crash the
+        // audio thread. Order (stop → shutdown → load → init) is fixed.
+        playback.stop();
+        playback.shutdown();
+        app.is_playing     = false;
+        app.playback_cursor = 0;
+
         app.loading       = true;
         app.load_progress = 0.0f;
         gui.invalidate_region(0, 0, app.width, app.height);
@@ -1208,6 +1406,10 @@ int main(int argc, char** argv) {
             waveform_area(app).w, audio.total_frames(), audio.sample_rate());
         app.zoom_level = (max_num >= 0) ? 0 : kFitFileLevel;
         clamp_viewport_start(app, audio);
+
+        // Reset playback bookkeeping; the device is brought up after markers
+        // are parsed so the initial playhead has the final trim-begin.
+        app.playback_speed = 1.0f;
 
         // Companion files: discover paths, create defaults if missing.
         std::filesystem::path apath(path);
@@ -1255,6 +1457,24 @@ int main(int argc, char** argv) {
                          wm_path.string().c_str());
         }
 
+        // Initial playhead: land at trim-begin if a b= marker was parsed,
+        // otherwise sample 0. Must happen after marker parse so the trim
+        // range reflects the on-disk state. Scroll the viewport so the
+        // playhead is visible rather than lurking off the left edge.
+        app.playhead_sample = trim_begin_sample();
+        if (app.zoom_level != kFitFileLevel) {
+            app.viewport_start_sample = app.playhead_sample;
+            clamp_viewport_start(app, audio);
+        }
+
+        // Bring up the audio device bound to the new sample buffer. Init
+        // failure disables playback but leaves the rest of the GUI usable.
+        if (!playback.init(audio.sample_rate(), audio.channels(),
+                           audio.samples_ptr(), audio.total_frames())) {
+            std::fprintf(stderr,
+                "warptempo_gui: playback disabled; space bar will no-op.\n");
+        }
+
         const double load_ms =
             std::chrono::duration<double, std::milli>(t1 - t0).count();
         std::fprintf(stderr,
@@ -1293,6 +1513,73 @@ int main(int argc, char** argv) {
         load_then_drain(path);
     });
 
+    // Follow-mode scroll: when the playhead drifts off the visible viewport
+    // during playback, advance the viewport by one pixel-page so the cursor
+    // stays in view. Only the first move beyond vp_end triggers a scroll,
+    // and it lands the playhead ~10% into the new viewport so there's room
+    // to keep playing.
+    auto follow_scroll_if_needed = [&]() {
+        const int64_t visible = samples_visible(app, audio);
+        if (visible <= 0) return;
+        const int64_t vp_end = app.viewport_start_sample + visible;
+        if (app.playhead_sample < app.viewport_start_sample ||
+            app.playhead_sample >= vp_end) {
+            const int64_t lead = visible / 10;
+            const int64_t old_vp = app.viewport_start_sample;
+            app.viewport_start_sample =
+                std::max<int64_t>(0, app.playhead_sample - lead);
+            clamp_viewport_start(app, audio);
+            if (app.viewport_start_sample != old_vp) invalidate_waveform_area();
+        }
+    };
+
+    // Tick: runs once per event-loop iteration. During playback, snapshots
+    // the audio thread's cursor and mirrors it into the main-thread playhead,
+    // invalidating just the columns and timestamp that changed. Also
+    // detects natural end-of-playback via the atomic playing flag.
+    gui.set_on_tick([&]() {
+        if (app.loading || audio.total_frames() <= 0) return;
+
+        const bool ma_playing = playback.is_playing();
+        if (!app.is_playing && !ma_playing) return;
+
+        if (ma_playing) {
+            const int64_t cur = playback.cursor();
+            if (cur != app.playhead_sample) {
+                const double old_px = playhead_pixel_x(app, audio);
+                app.playback_cursor = cur;
+                app.playhead_sample = cur;
+                const double new_px = playhead_pixel_x(app, audio);
+                invalidate_playhead_columns(old_px, new_px);
+                invalidate_timestamp_area();
+                if (app.follow_mode) follow_scroll_if_needed();
+            }
+            app.is_playing = true;
+            return;
+        }
+
+        // Playing was true last tick, now false — natural end. Snap the
+        // playhead to the final cursor position and refresh the column /
+        // timestamp one last time.
+        if (app.is_playing) {
+            const int64_t cur = playback.cursor();
+            const double old_px = playhead_pixel_x(app, audio);
+            app.playback_cursor = cur;
+            app.playhead_sample = cur;
+            const double new_px = playhead_pixel_x(app, audio);
+            invalidate_playhead_columns(old_px, new_px);
+            invalidate_timestamp_area();
+            if (app.follow_mode) follow_scroll_if_needed();
+            app.is_playing = false;
+        }
+    });
+
+    // Idle timeout: wake the poll loop every ~16 ms during playback so the
+    // tick can advance the playhead even in the absence of input events.
+    gui.set_idle_timeout_provider([&]() -> int {
+        return (app.is_playing || playback.is_playing()) ? 16 : -1;
+    });
+
     // Paint the initial background before any synchronous load begins so the
     // window isn't briefly blank on fast disks.
     gui.invalidate_region(0, 0, app.width, app.height);
@@ -1312,6 +1599,8 @@ int main(int argc, char** argv) {
     }
 
     gui.run();
+    // Tear the audio device down before the sample buffer goes out of scope.
+    playback.shutdown();
     gui.shutdown();
     return 0;
 }

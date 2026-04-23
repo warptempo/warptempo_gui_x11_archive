@@ -47,6 +47,8 @@ add_executable(warptempo_gui
     src/gui_audio.cpp
     src/gui_render.cpp
     src/gui_markers.cpp
+    src/gui_playback.cpp
+    src/miniaudio_impl.cpp
 )
 target_include_directories(warptempo_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/src
@@ -58,7 +60,16 @@ target_link_libraries(warptempo_gui PRIVATE
     ${X11_LIBRARIES}
     ${CAIRO_LIBRARIES}
     ${SNDFILE_LIBRARIES}
+    pthread
+    dl
+    m
 )
+
+# miniaudio is vendored third-party C. Suppress the warnings that its macro
+# soup trips — only on its dedicated implementation TU, so our own code stays
+# under -Wall -Wextra.
+set_source_files_properties(src/miniaudio_impl.cpp PROPERTIES
+    COMPILE_FLAGS "-w")
 
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

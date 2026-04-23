@@ -74,6 +74,12 @@ public:
         return &markers_[index];
     }
 
+    // Bulk-mutable accessor. Callers must not reorder by time_seconds; the
+    // class assumes strict-monotonic order. Exposed for operations that
+    // twiddle a flag across many markers at once (e.g. clearing all
+    // is_begin_time/is_end_time markers).
+    std::vector<GuiMarker>& markers_mut() { return markers_; }
+
     void clear() {
         markers_.clear();
         errors_.clear();

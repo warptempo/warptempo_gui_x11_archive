@@ -17,6 +17,11 @@ public:
     using CloseCallback        = std::function<void()>;
     using FileDropCallback     = std::function<void(const std::string& path)>;
     using DropAcceptPredicate  = std::function<bool(int x, int y)>;
+    using TickCallback         = std::function<void()>;
+    // Return < 0 to block indefinitely until the next X event; return a
+    // non-negative millisecond value to wake up on that timer in addition
+    // to any X event. Called once per run()-loop iteration before waiting.
+    using IdleTimeoutProvider  = std::function<int()>;
 
     bool init(int width, int height, const char* title);
     void shutdown();
@@ -42,6 +47,14 @@ public:
     void set_on_file_drop(FileDropCallback cb)     { on_file_drop_      = std::move(cb); }
     void set_drop_accept_predicate(DropAcceptPredicate p)
                                                    { drop_accept_       = std::move(p); }
+    // Invoked once per run-loop iteration after all pending X events have
+    // been dispatched. Used for per-frame polling of non-X state (playback
+    // cursor advancement, etc.).
+    void set_on_tick(TickCallback cb)              { on_tick_           = std::move(cb); }
+    // Supplies the idle timeout for poll(). Without this, the loop blocks
+    // on the X connection until the next event.
+    void set_idle_timeout_provider(IdleTimeoutProvider p)
+                                                   { idle_timeout_      = std::move(p); }
 
 private:
     Display*         dpy_      = nullptr;
@@ -85,6 +98,8 @@ private:
     CloseCallback        on_close_;
     FileDropCallback     on_file_drop_;
     DropAcceptPredicate  drop_accept_;
+    TickCallback         on_tick_;
+    IdleTimeoutProvider  idle_timeout_;
 
     void recreate_buffer(int w, int h);
     void destroy_buffer();
