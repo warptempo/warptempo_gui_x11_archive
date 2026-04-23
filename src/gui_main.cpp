@@ -13,11 +13,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
+#include <utility>
 
 namespace {
 
 constexpr int      kProgressBarHeight = 4;
-constexpr double   kFlagStripRatio    = 0.20;
+constexpr double   kTopStripRatio     = 0.10;
+constexpr double   kBottomStripRatio  = 0.10;
 constexpr int      kChannelGapPx      = 2;
 constexpr GuiColor kWaveformColor     = {0.55, 0.75, 0.90};
 constexpr GuiColor kPlayheadColor     = {0.95, 0.85, 0.35};
@@ -34,11 +40,11 @@ constexpr int kNumZoomLevels = static_cast<int>(
 // resize time, not stored as a fixed ms/pixel.
 constexpr int kFitFileLevel = kNumZoomLevels;
 
-// Timestamp text layout (top-left of the flag strip).
-constexpr int kTimestampPadX   = 8;
-constexpr int kTimestampBaselineY = 22;
-constexpr int kTimestampRegionW = 160;
-constexpr int kTimestampRegionH = 30;
+// Timestamp text layout (bottom-left of the status strip).
+constexpr int kTimestampPadX              = 8;
+constexpr int kTimestampBaselineFromBottom = 12;
+constexpr int kTimestampRegionW           = 160;
+constexpr int kTimestampRegionH           = 30;
 
 // Half-width of the column invalidated around a playhead position. Three
 // pixels total — generous enough to cover 1px line plus subpixel rounding.
@@ -47,13 +53,22 @@ constexpr int kPlayheadHalfPx = 1;
 struct AppState {
     int     width                 = 1400;
     int     height                = 800;
-    bool    loading               = true;
+    bool    loading               = false;
     float   load_progress         = 0.0f;
 
     int64_t playhead_sample       = 0;
     int     zoom_level            = 0;
     int64_t viewport_start_sample = 0;
     bool    follow_mode           = false;
+
+    // Companion files discovered alongside the loaded audio. Chunk E just
+    // records these; later chunks will parse their contents.
+    std::string warpmarkers_path;
+    std::string settings_path;
+
+    // If a drop arrives mid-load, the path is stashed here and processed
+    // after the active load returns. Empty means "no pending drop."
+    std::string pending_drop_path;
 
     // For redraw-time diagnostics (acceptance criterion 15).
     std::chrono::steady_clock::time_point stats_last_report =
@@ -62,13 +77,18 @@ struct AppState {
     int     stats_over_1ms_count = 0;
 };
 
-int flag_strip_height(int window_height) {
-    return static_cast<int>(std::lround(window_height * kFlagStripRatio));
+int top_strip_height(int window_height) {
+    return static_cast<int>(std::lround(window_height * kTopStripRatio));
+}
+
+int bottom_strip_height(int window_height) {
+    return static_cast<int>(std::lround(window_height * kBottomStripRatio));
 }
 
 GuiRect waveform_area(const AppState& a) {
-    const int strip_h = flag_strip_height(a.height);
-    return GuiRect{0, strip_h, a.width, a.height - strip_h};
+    const int top_h = top_strip_height(a.height);
+    const int bot_h = bottom_strip_height(a.height);
+    return GuiRect{0, top_h, a.width, a.height - top_h - bot_h};
 }
 
 double samples_per_pixel_at(int zoom_level,
@@ -199,32 +219,40 @@ GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x) {
     return GuiRect{x0, area.y, x1 - x0, area.h};
 }
 
-GuiRect timestamp_invalidate_rect() {
-    return GuiRect{0, 0, kTimestampRegionW, kTimestampRegionH};
+GuiRect timestamp_invalidate_rect(int window_height) {
+    return GuiRect{0, window_height - kTimestampRegionH,
+                   kTimestampRegionW, kTimestampRegionH};
+}
+
+// Ensure `p` exists with `contents`. If the file already exists, leave it
+// alone. Returns true on success or if file already exists. Failures are
+// non-fatal — the audio load still proceeds.
+bool create_if_missing(const std::filesystem::path& p,
+                       const std::string& contents) {
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) return true;
+    std::ofstream f(p);
+    if (!f) {
+        std::fprintf(stderr,
+                     "warptempo_gui: could not create '%s'\n",
+                     p.string().c_str());
+        return false;
+    }
+    f << contents;
+    return static_cast<bool>(f);
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: warptempo_gui <audio_file>\n");
+    const char* cli_path = nullptr;
+    if (argc == 1) {
+        // Empty window; wait for a drag-and-drop.
+    } else if (argc == 2) {
+        cli_path = argv[1];
+    } else {
+        std::fprintf(stderr, "usage: warptempo_gui [<audio_file>]\n");
         return 1;
-    }
-    const char* path = argv[1];
-
-    // Preflight: confirm libsndfile can open the file before we bring up a
-    // window. Avoids a blank window flashing on the obvious failures.
-    {
-        SF_INFO probe_info;
-        std::memset(&probe_info, 0, sizeof(probe_info));
-        SNDFILE* probe = sf_open(path, SFM_READ, &probe_info);
-        if (!probe) {
-            std::fprintf(stderr,
-                         "warptempo_gui: could not open '%s': %s\n",
-                         path, sf_strerror(nullptr));
-            return 1;
-        }
-        sf_close(probe);
     }
 
     AppState app;
@@ -242,7 +270,7 @@ int main(int argc, char** argv) {
     };
 
     auto invalidate_timestamp_area = [&]() {
-        const GuiRect t = timestamp_invalidate_rect();
+        const GuiRect t = timestamp_invalidate_rect(app.height);
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
@@ -399,7 +427,7 @@ int main(int argc, char** argv) {
             const int bar_y = app.height - kProgressBarHeight;
             render_progress_bar(cr, 0, bar_y, app.width, kProgressBarHeight,
                                 app.load_progress);
-        } else {
+        } else if (audio.total_frames() > 0) {
             const GuiRect area = waveform_area(app);
             const GuiRect exposed{x, y, w, h};
             const double spp = current_samples_per_pixel(app, audio);
@@ -426,14 +454,15 @@ int main(int argc, char** argv) {
                 render_playhead(cr, area, px_x, kPlayheadColor);
             }
 
-            // Timestamp in the flag strip (top-left).
-            const GuiRect ts = timestamp_invalidate_rect();
+            // Timestamp in the bottom status strip.
+            const GuiRect ts = timestamp_invalidate_rect(app.height);
             if (rects_intersect(exposed, ts)) {
                 const double seconds = (audio.sample_rate() > 0)
                     ? static_cast<double>(app.playhead_sample) /
                       static_cast<double>(audio.sample_rate())
                     : 0.0;
-                render_timestamp(cr, kTimestampPadX, kTimestampBaselineY,
+                const int baseline_y = app.height - kTimestampBaselineFromBottom;
+                render_timestamp(cr, kTimestampPadX, baseline_y,
                                  seconds, kTimestampColor);
             }
         }
@@ -489,9 +518,8 @@ int main(int argc, char** argv) {
         case XK_Escape: gui.request_exit();               break;
         case XK_Left:   move_playhead_pixels(-1);         break;
         case XK_Right:  move_playhead_pixels(+1);         break;
-        case XK_plus:
-        case XK_equal:  zoom_in();                        break;
-        case XK_minus:  zoom_out();                       break;
+        case XK_Up:     zoom_in();                        break;
+        case XK_Down:   zoom_out();                       break;
         case XK_f:      app.follow_mode = !app.follow_mode; break;
         case XK_c:      center_viewport_on_playhead();    break;
         case XK_Home:   move_playhead_to(0);              break;
@@ -510,6 +538,7 @@ int main(int argc, char** argv) {
             x >= area.x && x < area.x + area.w &&
             y >= area.y && y < area.y + area.h;
         const bool ctrl = (mods & ControlMask) != 0;
+        const bool alt  = (mods & Mod1Mask) != 0;
 
         if (button == 1) {
             if (inside_waveform) {
@@ -521,22 +550,14 @@ int main(int argc, char** argv) {
         } else if (button == 4 || button == 5) {
             // Wheel in flag strip or window margins is ignored per spec.
             if (!inside_waveform) return;
-            if (button == 4) {
-                if (ctrl) {
-                    const int64_t step = std::max<int64_t>(
-                        1, samples_visible(app, audio) / 5);
-                    scroll_viewport(-step);
-                } else {
-                    zoom_in();
-                }
+            if (ctrl) return; // reserved
+            if (alt) {
+                const int64_t step = std::max<int64_t>(
+                    1, samples_visible(app, audio) / 10);
+                scroll_viewport(button == 4 ? -step : +step);
             } else {
-                if (ctrl) {
-                    const int64_t step = std::max<int64_t>(
-                        1, samples_visible(app, audio) / 5);
-                    scroll_viewport(+step);
-                } else {
-                    zoom_out();
-                }
+                if (button == 4) zoom_out();
+                else             zoom_in();
             }
         }
     });
@@ -544,49 +565,132 @@ int main(int argc, char** argv) {
     gui.set_on_button_release([](unsigned int, int, int, unsigned int) {});
     gui.set_on_motion        ([](int, int, unsigned int) {});
 
-    // Paint the initial background before the synchronous load begins so the
+    // -- File loading --------------------------------------------------------
+
+    // Loads `path` into a fresh GuiAudio, preflights via libsndfile, and
+    // swaps the new audio in on success. On failure, the prior audio (if
+    // any) remains loaded unchanged. Resets per-file navigation state;
+    // follow_mode is intentionally preserved across reloads.
+    auto load_file = [&](const std::string& path) -> bool {
+        // Preflight.
+        {
+            SF_INFO probe_info;
+            std::memset(&probe_info, 0, sizeof(probe_info));
+            SNDFILE* probe = sf_open(path.c_str(), SFM_READ, &probe_info);
+            if (!probe) {
+                std::fprintf(stderr,
+                             "warptempo_gui: '%s': %s\n",
+                             path.c_str(), sf_strerror(nullptr));
+                return false;
+            }
+            sf_close(probe);
+        }
+
+        app.loading       = true;
+        app.load_progress = 0.0f;
+        gui.invalidate_region(0, 0, app.width, app.height);
+        gui.drain_events();
+
+        GuiAudio next;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = next.load(path, [&](float p) {
+            app.load_progress = p;
+            const int bar_y = app.height - kProgressBarHeight;
+            gui.invalidate_region(0, bar_y, app.width, kProgressBarHeight);
+            gui.drain_events();
+        });
+        const auto t1 = std::chrono::steady_clock::now();
+
+        if (!ok) {
+            app.loading       = false;
+            app.load_progress = 0.0f;
+            gui.invalidate_region(0, 0, app.width, app.height);
+            return false;
+        }
+
+        audio = std::move(next);
+        app.loading       = false;
+        app.load_progress = 0.0f;
+
+        app.playhead_sample       = 0;
+        app.viewport_start_sample = 0;
+        const int max_num = max_valid_numeric_level(
+            waveform_area(app).w, audio.total_frames(), audio.sample_rate());
+        app.zoom_level = (max_num >= 0) ? 0 : kFitFileLevel;
+        clamp_viewport_start(app, audio);
+
+        // Companion files: discover paths, create defaults if missing.
+        std::filesystem::path apath(path);
+        std::filesystem::path parent = apath.parent_path();
+        if (parent.empty()) parent = std::filesystem::path(".");
+        const std::filesystem::path wm_path  = parent / ".warpmarkers";
+        const std::filesystem::path set_path = parent / ".settings";
+        app.warpmarkers_path = wm_path.string();
+        app.settings_path    = set_path.string();
+
+        create_if_missing(wm_path, "00:00.000|1.00\n");
+        std::string settings_default =
+            "title=\n"
+            "audio_input=" + apath.filename().string() + "\n"
+            "scale=1\n"
+            "N=4096\n";
+        create_if_missing(set_path, settings_default);
+
+        const double load_ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::fprintf(stderr,
+                     "[warptempo_gui] loaded %s: sr=%d, channels=%d, frames=%lld, "
+                     "pyramid_levels=%d, load_time=%.1f ms\n",
+                     path.c_str(), audio.sample_rate(), audio.channels(),
+                     static_cast<long long>(audio.total_frames()),
+                     audio.num_levels(), load_ms);
+
+        gui.invalidate_region(0, 0, app.width, app.height);
+        return true;
+    };
+
+    // Process `path` and any drops that arrived while the load was running.
+    // Pending slot is last-wins, not a queue; rapid drags collapse.
+    auto load_then_drain = [&](std::string path) {
+        while (true) {
+            load_file(path);
+            if (app.pending_drop_path.empty()) break;
+            path = std::move(app.pending_drop_path);
+            app.pending_drop_path.clear();
+        }
+    };
+
+    gui.set_drop_accept_predicate([&](int x, int y) -> bool {
+        const GuiRect area = waveform_area(app);
+        return x >= area.x && x < area.x + area.w &&
+               y >= area.y && y < area.y + area.h;
+    });
+
+    gui.set_on_file_drop([&](const std::string& path) {
+        if (app.loading) {
+            app.pending_drop_path = path;
+            return;
+        }
+        load_then_drain(path);
+    });
+
+    // Paint the initial background before any synchronous load begins so the
     // window isn't briefly blank on fast disks.
     gui.invalidate_region(0, 0, app.width, app.height);
     gui.drain_events();
 
-    const auto t0 = std::chrono::steady_clock::now();
-    const bool ok = audio.load(path, [&](float p) {
-        app.load_progress = p;
-        const int bar_y = app.height - kProgressBarHeight;
-        gui.invalidate_region(0, bar_y, app.width, kProgressBarHeight);
-        gui.drain_events();
-    });
-    const auto t1 = std::chrono::steady_clock::now();
-    if (!ok) {
-        gui.shutdown();
-        return 1;
+    if (cli_path) {
+        if (!load_file(cli_path)) {
+            gui.shutdown();
+            return 1;
+        }
+        // Any drops queued during the startup load run now.
+        while (!app.pending_drop_path.empty()) {
+            std::string next = std::move(app.pending_drop_path);
+            app.pending_drop_path.clear();
+            load_file(next);
+        }
     }
-
-    const double load_ms =
-        std::chrono::duration<double, std::milli>(t1 - t0).count();
-    std::fprintf(stderr,
-                 "[warptempo_gui] loaded %s: sr=%d, channels=%d, frames=%lld, "
-                 "pyramid_levels=%d, load_time=%.1f ms\n",
-                 path, audio.sample_rate(), audio.channels(),
-                 static_cast<long long>(audio.total_frames()),
-                 audio.num_levels(), load_ms);
-
-    app.loading       = false;
-    app.load_progress = 0.0f;
-
-    // Initial zoom: level 0 if valid for this file/width, else fit-file.
-    const int max_num = max_valid_numeric_level(
-        waveform_area(app).w, audio.total_frames(), audio.sample_rate());
-    if (max_num >= 0) {
-        app.zoom_level = 0;
-    } else {
-        app.zoom_level = kFitFileLevel;
-    }
-    app.playhead_sample       = 0;
-    app.viewport_start_sample = 0;
-    clamp_viewport_start(app, audio);
-
-    gui.invalidate_region(0, 0, app.width, app.height);
 
     gui.run();
     gui.shutdown();
