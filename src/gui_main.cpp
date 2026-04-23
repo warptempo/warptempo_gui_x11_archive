@@ -1,4 +1,5 @@
 #include "gui_audio.h"
+#include "gui_markers.h"
 #include "gui_render.h"
 #include "gui_x11.h"
 
@@ -26,8 +27,23 @@ constexpr double   kTopStripRatio     = 0.10;
 constexpr double   kBottomStripRatio  = 0.10;
 constexpr int      kChannelGapPx      = 2;
 constexpr GuiColor kWaveformColor     = {0.55, 0.75, 0.90};
+constexpr GuiColor kWaveformDimColor  = {0.30, 0.38, 0.45};
 constexpr GuiColor kPlayheadColor     = {0.95, 0.85, 0.35};
 constexpr GuiColor kTimestampColor    = {0.80, 0.80, 0.82};
+constexpr GuiColor kMarkerColor       = {0.85, 0.82, 0.78};
+constexpr GuiColor kMarkerDimColor    = {0.45, 0.42, 0.40};
+constexpr GuiColor kSelectedColor     = {1.00, 0.95, 0.70};
+constexpr GuiColor kFlagHighlightColor= {0.30, 0.28, 0.22};
+constexpr GuiColor kDirtyColor        = {0.90, 0.65, 0.35};
+constexpr double   kFlagFontSize      = 13.0;
+
+// Half-width in pixels of the selection-hit window when clicking on a marker.
+constexpr int kMarkerHitHalfPx = 3;
+
+// Double-click detection thresholds. X11 doesn't synthesize DoubleClick; we
+// roll it from ButtonPress timing + position deltas.
+constexpr int kDoubleClickMs      = 300;
+constexpr int kDoubleClickPixels  = 5;
 
 // ms-per-pixel for each numeric zoom level. Level 0 is most zoomed in.
 constexpr double kZoomMsPerPixel[] = {
@@ -43,8 +59,10 @@ constexpr int kFitFileLevel = kNumZoomLevels;
 // Timestamp text layout (bottom-left of the status strip).
 constexpr int kTimestampPadX              = 8;
 constexpr int kTimestampBaselineFromBottom = 12;
-constexpr int kTimestampRegionW           = 160;
+// Region width includes room for the dirty indicator 8 px past the text edge.
+constexpr int kTimestampRegionW           = 200;
 constexpr int kTimestampRegionH           = 30;
+constexpr double kDirtyGapPx              = 8.0;
 
 // Half-width of the column invalidated around a playhead position. Three
 // pixels total — generous enough to cover 1px line plus subpixel rounding.
@@ -66,9 +84,31 @@ struct AppState {
     std::string warpmarkers_path;
     std::string settings_path;
 
+    // Parsed warp markers for the currently loaded audio. Empty on load
+    // failure or before the first audio load.
+    GuiMarkers  markers;
+
+    // Index into markers.markers(). -1 means nothing selected.
+    int         selected_marker      = -1;
+
+    // True if the marker list has been modified since load or last save.
+    bool        dirty                = false;
+
+    // True until the first save in this session; used to log a one-time
+    // notice if the on-disk file had content the canonical form drops.
+    bool        first_save_pending   = true;
+
     // If a drop arrives mid-load, the path is stashed here and processed
     // after the active load returns. Empty means "no pending drop."
     std::string pending_drop_path;
+
+    // Double-click detection state. Tracks the most recent left-button
+    // press so the next one can compare and upgrade to a double-click.
+    std::chrono::steady_clock::time_point last_click_time =
+        std::chrono::steady_clock::time_point{};
+    int          last_click_x        = -10000;
+    int          last_click_y        = -10000;
+    bool         last_click_consumed = true;
 
     // For redraw-time diagnostics (acceptance criterion 15).
     std::chrono::steady_clock::time_point stats_last_report =
@@ -89,6 +129,33 @@ GuiRect waveform_area(const AppState& a) {
     const int top_h = top_strip_height(a.height);
     const int bot_h = bottom_strip_height(a.height);
     return GuiRect{0, top_h, a.width, a.height - top_h - bot_h};
+}
+
+GuiRect top_strip_area(const AppState& a) {
+    return GuiRect{0, 0, a.width, top_strip_height(a.height)};
+}
+
+// Scan `markers` for begin_time / end_time flags; fall back to full file if
+// either is absent. Returns the pair in source samples.
+std::pair<long long, long long> compute_trim_samples(
+    const std::vector<GuiMarker>& markers, int sample_rate,
+    long long total_frames) {
+    long long begin = 0;
+    long long end   = total_frames;
+    for (const auto& m : markers) {
+        if (m.is_begin_time) {
+            begin = static_cast<long long>(std::llround(
+                m.time_seconds * static_cast<double>(sample_rate)));
+        }
+        if (m.is_end_time) {
+            end = static_cast<long long>(std::llround(
+                m.time_seconds * static_cast<double>(sample_rate)));
+        }
+    }
+    if (begin < 0) begin = 0;
+    if (end > total_frames) end = total_frames;
+    if (end < begin) end = begin;
+    return {begin, end};
 }
 
 double samples_per_pixel_at(int zoom_level,
@@ -186,7 +253,10 @@ void render_waveform_exposed(cairo_t* cr,
                              int channel,
                              int64_t viewport_start,
                              double samples_per_pixel,
-                             GuiColor color) {
+                             int64_t trim_begin,
+                             int64_t trim_end,
+                             GuiColor bright_color,
+                             GuiColor dim_color) {
     const int xa = std::max(channel_area.x, exposed.x);
     const int xb = std::min(channel_area.x + channel_area.w,
                             exposed.x + exposed.w);
@@ -202,7 +272,8 @@ void render_waveform_exposed(cairo_t* cr,
         static_cast<int64_t>(std::llround(ox * samples_per_pixel));
     const int64_t sub_end = sub_start +
         static_cast<int64_t>(std::llround(sub.w * samples_per_pixel));
-    render_waveform(cr, sub, audio, channel, sub_start, sub_end, color);
+    render_waveform(cr, sub, audio, channel, sub_start, sub_end,
+                    trim_begin, trim_end, bright_color, dim_color);
 }
 
 bool rects_intersect(GuiRect a, GuiRect b) {
@@ -264,9 +335,15 @@ int main(int argc, char** argv) {
 
     // -- Navigation/viewport helpers ----------------------------------------
 
+    // Viewport changes repaint the waveform area and the top strip together:
+    // flag positions depend on the viewport, so any pan/zoom has to refresh
+    // flags as well as waveform. Playhead-only moves keep using the narrow
+    // column invalidation below.
     auto invalidate_waveform_area = [&]() {
         const GuiRect a = waveform_area(app);
-        gui.invalidate_region(a.x, a.y, a.w, a.h);
+        const int y0 = 0;
+        const int y1 = a.y + a.h;
+        gui.invalidate_region(0, y0, app.width, y1 - y0);
     };
 
     auto invalidate_timestamp_area = [&]() {
@@ -428,24 +505,48 @@ int main(int argc, char** argv) {
             render_progress_bar(cr, 0, bar_y, app.width, kProgressBarHeight,
                                 app.load_progress);
         } else if (audio.total_frames() > 0) {
-            const GuiRect area = waveform_area(app);
+            const GuiRect area       = waveform_area(app);
+            const GuiRect top_strip  = top_strip_area(app);
             const GuiRect exposed{x, y, w, h};
-            const double spp = current_samples_per_pixel(app, audio);
-            const int64_t vp_start = app.viewport_start_sample;
+            const double  spp        = current_samples_per_pixel(app, audio);
+            const int64_t vp_start   = app.viewport_start_sample;
+            const int64_t vp_end     = vp_start +
+                static_cast<int64_t>(std::llround(spp * area.w));
+            const int     sr         = audio.sample_rate();
+
+            const auto trim = compute_trim_samples(
+                app.markers.markers(), sr, audio.total_frames());
+            const int64_t trim_begin = trim.first;
+            const int64_t trim_end   = trim.second;
 
             const int rc = audio.render_channels();
             if (rc == 1) {
                 render_waveform_exposed(cr, area, exposed, audio, 0,
-                                        vp_start, spp, kWaveformColor);
+                                        vp_start, spp,
+                                        trim_begin, trim_end,
+                                        kWaveformColor, kWaveformDimColor);
             } else if (rc >= 2) {
                 const int ch_h = (area.h - kChannelGapPx) / 2;
                 const GuiRect ch0{area.x, area.y, area.w, ch_h};
                 const GuiRect ch1{area.x, area.y + ch_h + kChannelGapPx,
                                   area.w, ch_h};
                 render_waveform_exposed(cr, ch0, exposed, audio, 0,
-                                        vp_start, spp, kWaveformColor);
+                                        vp_start, spp,
+                                        trim_begin, trim_end,
+                                        kWaveformColor, kWaveformDimColor);
                 render_waveform_exposed(cr, ch1, exposed, audio, 1,
-                                        vp_start, spp, kWaveformColor);
+                                        vp_start, spp,
+                                        trim_begin, trim_end,
+                                        kWaveformColor, kWaveformDimColor);
+            }
+
+            // Markers: vertical lines in the waveform area, beneath the
+            // playhead. Cairo's outer clip confines painting to `exposed`.
+            if (rects_intersect(exposed, area)) {
+                render_markers(cr, area, app.markers.markers(),
+                               vp_start, vp_end, sr,
+                               kMarkerColor, kMarkerDimColor,
+                               kSelectedColor, app.selected_marker);
             }
 
             // Playhead on top of the waveform, within the waveform area.
@@ -454,16 +555,34 @@ int main(int argc, char** argv) {
                 render_playhead(cr, area, px_x, kPlayheadColor);
             }
 
+            // Flag annotations in the top strip.
+            if (rects_intersect(exposed, top_strip)) {
+                render_flags(cr, top_strip, app.markers.markers(),
+                             vp_start, vp_end, sr,
+                             kMarkerColor, kMarkerDimColor,
+                             kSelectedColor, kFlagHighlightColor,
+                             kFlagFontSize, app.selected_marker);
+            }
+
             // Timestamp in the bottom status strip.
             const GuiRect ts = timestamp_invalidate_rect(app.height);
             if (rects_intersect(exposed, ts)) {
-                const double seconds = (audio.sample_rate() > 0)
+                const double seconds = (sr > 0)
                     ? static_cast<double>(app.playhead_sample) /
-                      static_cast<double>(audio.sample_rate())
+                      static_cast<double>(sr)
                     : 0.0;
                 const int baseline_y = app.height - kTimestampBaselineFromBottom;
                 render_timestamp(cr, kTimestampPadX, baseline_y,
                                  seconds, kTimestampColor);
+
+                if (app.dirty) {
+                    const double w = measure_timestamp_width(cr, seconds);
+                    const double cx = static_cast<double>(kTimestampPadX) +
+                                      w + kDirtyGapPx + 3.0;
+                    const double cy =
+                        static_cast<double>(baseline_y) - 5.0;
+                    render_dirty_indicator(cr, cx, cy, kDirtyColor);
+                }
             }
         }
 
@@ -509,11 +628,356 @@ int main(int argc, char** argv) {
         clamp_viewport_start(app, audio);
     });
 
-    gui.set_on_key([&](KeySym keysym, unsigned int /*mods*/) {
+    // Invalidate a narrow column around a marker's on-screen x (same width
+    // as the playhead invalidation). No-op if the marker is off-screen.
+    auto invalidate_marker_column = [&](int marker_idx) {
+        if (marker_idx < 0 ||
+            marker_idx >= static_cast<int>(app.markers.markers().size())) return;
+        if (audio.total_frames() <= 0) return;
+        const double spp = current_samples_per_pixel(app, audio);
+        if (spp <= 0.0) return;
+        const GuiRect area = waveform_area(app);
+        const int sr = audio.sample_rate();
+        const double ms = app.markers.markers()[marker_idx].time_seconds *
+                          static_cast<double>(sr);
+        const double vp = static_cast<double>(app.viewport_start_sample);
+        const int64_t visible = samples_visible(app, audio);
+        if (ms < vp) return;
+        if (ms >= vp + static_cast<double>(visible)) return;
+        const double px = area.x + (ms - vp) / spp;
+        const GuiRect r = playhead_invalidate_rect(area, px);
+        if (r.w > 0 && r.h > 0) {
+            gui.invalidate_region(r.x, r.y, r.w, r.h);
+        }
+    };
+
+    auto invalidate_top_strip = [&]() {
+        const GuiRect ts = top_strip_area(app);
+        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+    };
+
+    // Switches the selection to `new_sel` (may be -1) and invalidates the
+    // minimum necessary regions: old and new marker columns, plus the flag
+    // strip. No playhead movement is done here; callers decide whether to
+    // follow the selection with move_playhead_to.
+    auto set_selection = [&](int new_sel) {
+        if (new_sel == app.selected_marker) return;
+        const int old_sel = app.selected_marker;
+        app.selected_marker = new_sel;
+        invalidate_marker_column(old_sel);
+        invalidate_marker_column(new_sel);
+        invalidate_top_strip();
+    };
+
+    auto invalidate_dirty_and_timestamp = [&]() {
+        const GuiRect t = timestamp_invalidate_rect(app.height);
+        gui.invalidate_region(t.x, t.y, t.w, t.h);
+    };
+
+    // Tab / Shift+Tab: cycle through markers. Rules per spec:
+    //   With selection: strict next/prev by time.
+    //   No selection: pick the nearest marker in the requested direction
+    //   (>= playhead for next, <= playhead for prev).
+    auto select_next_marker = [&]() {
+        const auto& mv = app.markers.markers();
+        if (mv.empty()) return;
+        int new_sel = -1;
+        const int sr = audio.sample_rate();
+        if (app.selected_marker < 0) {
+            const double ph_s = (sr > 0)
+                ? static_cast<double>(app.playhead_sample) /
+                  static_cast<double>(sr)
+                : 0.0;
+            for (size_t i = 0; i < mv.size(); ++i) {
+                if (mv[i].time_seconds >= ph_s) {
+                    new_sel = static_cast<int>(i);
+                    break;
+                }
+            }
+        } else {
+            const double cur_t = mv[app.selected_marker].time_seconds;
+            for (size_t i = app.selected_marker + 1; i < mv.size(); ++i) {
+                if (mv[i].time_seconds > cur_t) {
+                    new_sel = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        if (new_sel < 0 || new_sel == app.selected_marker) return;
+        set_selection(new_sel);
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            mv[new_sel].time_seconds * static_cast<double>(sr)));
+        move_playhead_to(sample);
+    };
+
+    auto select_prev_marker = [&]() {
+        const auto& mv = app.markers.markers();
+        if (mv.empty()) return;
+        int new_sel = -1;
+        const int sr = audio.sample_rate();
+        if (app.selected_marker < 0) {
+            const double ph_s = (sr > 0)
+                ? static_cast<double>(app.playhead_sample) /
+                  static_cast<double>(sr)
+                : 0.0;
+            for (int i = static_cast<int>(mv.size()) - 1; i >= 0; --i) {
+                if (mv[i].time_seconds <= ph_s) {
+                    new_sel = i;
+                    break;
+                }
+            }
+        } else {
+            const double cur_t = mv[app.selected_marker].time_seconds;
+            for (int i = app.selected_marker - 1; i >= 0; --i) {
+                if (mv[i].time_seconds < cur_t) {
+                    new_sel = i;
+                    break;
+                }
+            }
+        }
+        if (new_sel < 0 || new_sel == app.selected_marker) return;
+        set_selection(new_sel);
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            mv[new_sel].time_seconds * static_cast<double>(sr)));
+        move_playhead_to(sample);
+    };
+
+    // Core drop logic shared by `s`, `Shift+S`, double-click, and
+    // Shift+double-click. `time_seconds` is the location (not necessarily the
+    // playhead); `inherit` controls whether the new marker inherits its
+    // tempo from the nearest earlier owner. Moves the playhead to the new
+    // marker to keep drop-then-select behavior consistent.
+    auto drop_marker = [&](double time_seconds, bool inherit) {
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const double one_sample = 1.0 / static_cast<double>(sr);
+        const auto& mv = app.markers.markers();
+        for (const auto& m : mv) {
+            if (std::abs(m.time_seconds - time_seconds) < one_sample) {
+                std::fprintf(stderr,
+                    "warptempo_gui: marker already exists at %.3fs\n",
+                    time_seconds);
+                return;
+            }
+        }
+        GuiMarker nm;
+        nm.time_seconds    = time_seconds;
+        nm.tempo_inherits  = inherit;
+        // For inherit markers, pre-seed the cached tempo from the nearest
+        // earlier owning marker. `insert_marker` returns the index; we
+        // compute the source now based on the marker list as it will be
+        // after insertion — equivalent to resolving from the insertion
+        // point, since the walk-backward stops at the first owner.
+        if (inherit) {
+            // Find the index we'll be inserted at, then walk backward.
+            int insertion_idx = 0;
+            for (const auto& m : mv) {
+                if (m.time_seconds < time_seconds) insertion_idx++;
+                else break;
+            }
+            nm.tempo_base  = resolve_inherited_tempo(mv, insertion_idx);
+            nm.tempo_scale = resolve_inherited_tempo_scale(mv, insertion_idx);
+        } else {
+            nm.tempo_base = 1.0;
+            nm.tempo_scale.clear();
+        }
+        const int new_idx = app.markers.insert_marker(std::move(nm));
+        app.selected_marker = new_idx;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+
+        // Move the playhead to the new marker for consistency with click-
+        // to-select behavior. Done last so invalidations in the helper
+        // don't double-paint with the ones above.
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            time_seconds * static_cast<double>(sr)));
+        move_playhead_to(sample);
+    };
+
+    auto drop_marker_at_playhead = [&]() {
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const double t = static_cast<double>(app.playhead_sample) /
+                         static_cast<double>(sr);
+        drop_marker(t, /*inherit=*/false);
+    };
+
+    auto drop_inherit_marker_at_playhead = [&]() {
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const double t = static_cast<double>(app.playhead_sample) /
+                         static_cast<double>(sr);
+        drop_marker(t, /*inherit=*/true);
+    };
+
+    auto delete_selected_marker = [&]() {
+        if (app.selected_marker < 0) return;
+        const auto& mv = app.markers.markers();
+        if (app.selected_marker >= static_cast<int>(mv.size())) return;
+        const GuiMarker& doomed = mv[app.selected_marker];
+        if (doomed.time_seconds == 0.0) {
+            std::fprintf(stderr,
+                "warptempo_gui: cannot delete first marker (time 0)\n");
+            return;
+        }
+        if (!doomed.label_def.empty()) {
+            // Reject if any other marker references this label.
+            std::string refs;
+            int ref_count = 0;
+            for (size_t i = 0; i < mv.size(); ++i) {
+                if (static_cast<int>(i) == app.selected_marker) continue;
+                if (!mv[i].label_ref.empty() &&
+                    mv[i].label_ref == doomed.label_def) {
+                    char tbuf[32];
+                    std::snprintf(tbuf, sizeof(tbuf), "%.3fs",
+                                  mv[i].time_seconds);
+                    if (!refs.empty()) refs += ", ";
+                    refs += tbuf;
+                    ++ref_count;
+                }
+            }
+            if (ref_count > 0) {
+                std::fprintf(stderr,
+                    "warptempo_gui: cannot delete marker: label '%s' is "
+                    "referenced at %s\n",
+                    doomed.label_def.c_str(), refs.c_str());
+                return;
+            }
+        }
+        app.markers.remove_marker(app.selected_marker);
+        app.selected_marker = -1;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    // Toggle the tempo source of the selected marker between owned and
+    // inherit. Caches current tempo_base/tempo_scale on the marker itself
+    // — both states — so round-tripping through the toggle is lossless.
+    auto toggle_inherits = [&]() {
+        if (app.selected_marker < 0) return;
+        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
+        if (!m) return;
+        if (app.selected_marker == 0) {
+            std::fprintf(stderr,
+                "warptempo_gui: first marker cannot inherit tempo\n");
+            return;
+        }
+        if (!m->label_ref.empty()) {
+            // Label refs always effectively inherit; toggling is meaningless.
+            return;
+        }
+        m->tempo_inherits = !m->tempo_inherits;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    // Toggle the disabled flag on the selected marker's label definition.
+    // Silent no-op if the marker has no label definition (including label
+    // references, which inherit disabled state from their definition).
+    auto toggle_disabled = [&]() {
+        if (app.selected_marker < 0) return;
+        GuiMarker* m = app.markers.marker_mut(app.selected_marker);
+        if (!m) return;
+        if (m->label_def.empty()) return;
+        m->disabled = !m->disabled;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    auto toggle_begin_time = [&]() {
+        if (app.selected_marker < 0) return;
+        auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
+        const bool new_state = !mv_mut.is_begin_time;
+        if (new_state) {
+            // Clear any other begin-time flag so the invariant "at most one"
+            // holds. Silent per spec.
+            const auto& mv = app.markers.markers();
+            for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+                if (i == app.selected_marker) continue;
+                if (mv[i].is_begin_time) {
+                    app.markers.marker_mut(i)->is_begin_time = false;
+                }
+            }
+        }
+        mv_mut.is_begin_time = new_state;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    auto toggle_end_time = [&]() {
+        if (app.selected_marker < 0) return;
+        auto& mv_mut = *app.markers.marker_mut(app.selected_marker);
+        const bool new_state = !mv_mut.is_end_time;
+        if (new_state) {
+            const auto& mv = app.markers.markers();
+            for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+                if (i == app.selected_marker) continue;
+                if (mv[i].is_end_time) {
+                    app.markers.marker_mut(i)->is_end_time = false;
+                }
+            }
+        }
+        mv_mut.is_end_time = new_state;
+        app.dirty = true;
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
+    };
+
+    auto save_markers = [&]() {
+        if (app.warpmarkers_path.empty()) return;
+        if (app.first_save_pending && app.markers.had_nonstandard_content()) {
+            std::fprintf(stderr,
+                "warptempo_gui: first save in this session will discard "
+                "comments and freeform text from %s. Canonical format will "
+                "be written.\n",
+                app.warpmarkers_path.c_str());
+        }
+        const bool ok = app.markers.save(app.warpmarkers_path);
+        if (!ok) {
+            std::fprintf(stderr,
+                "warptempo_gui: save failed: %s\n",
+                app.warpmarkers_path.c_str());
+            return;
+        }
+        app.first_save_pending = false;
+        if (app.dirty) {
+            app.dirty = false;
+            invalidate_dirty_and_timestamp();
+        }
+    };
+
+    gui.set_on_key([&](KeySym keysym, unsigned int mods) {
         if (app.loading || audio.total_frames() <= 0) {
             if (keysym == XK_Escape) gui.request_exit();
             return;
         }
+        const bool ctrl  = (mods & ControlMask) != 0;
+        const bool shift = (mods & ShiftMask)   != 0;
+
+        // XLookupKeysym with index 0 returns the unshifted keysym, so a
+        // Shift+letter press arrives as the lowercase XK_* with ShiftMask in
+        // mods — disambiguate via the `shift` bool, not uppercase keysyms.
+        if (keysym == XK_s) {
+            if (ctrl)       save_markers();
+            else if (shift) drop_inherit_marker_at_playhead();
+            else            drop_marker_at_playhead();
+            return;
+        }
+        if (keysym == XK_i && !ctrl) {
+            if (shift) toggle_disabled();
+            else       toggle_inherits();
+            return;
+        }
+
+        if (keysym == XK_Tab && !shift) { select_next_marker(); return; }
+        if (keysym == XK_Tab && shift)  { select_prev_marker(); return; }
+        if (keysym == XK_ISO_Left_Tab)  { select_prev_marker(); return; }
+
         switch (keysym) {
         case XK_Escape: gui.request_exit();               break;
         case XK_Left:   move_playhead_pixels(-1);         break;
@@ -524,6 +988,10 @@ int main(int argc, char** argv) {
         case XK_c:      center_viewport_on_playhead();    break;
         case XK_Home:   move_playhead_to(0);              break;
         case XK_End:    move_playhead_to(audio.total_frames() - 1); break;
+        case XK_b:      toggle_begin_time();              break;
+        case XK_e:      toggle_end_time();                break;
+        case XK_Delete: delete_selected_marker();         break;
+        // TODO: growing binding set will want an in-GUI help overlay.
         default: break;
         }
     });
@@ -534,18 +1002,140 @@ int main(int argc, char** argv) {
                                 unsigned int mods) {
         if (app.loading || audio.total_frames() <= 0) return;
         const GuiRect area = waveform_area(app);
+        const GuiRect top  = top_strip_area(app);
         const bool inside_waveform =
             x >= area.x && x < area.x + area.w &&
             y >= area.y && y < area.y + area.h;
-        const bool ctrl = (mods & ControlMask) != 0;
-        const bool alt  = (mods & Mod1Mask) != 0;
+        const bool inside_top =
+            x >= top.x && x < top.x + top.w &&
+            y >= top.y && y < top.y + top.h;
+        const bool ctrl  = (mods & ControlMask) != 0;
+        const bool shift = (mods & ShiftMask)   != 0;
+        const bool alt   = (mods & Mod1Mask) != 0;
 
         if (button == 1) {
+            // Detect double-click from timing + position deltas.
+            const auto now = std::chrono::steady_clock::now();
+            const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - app.last_click_time).count();
+            const bool is_double =
+                !app.last_click_consumed &&
+                dt_ms <= kDoubleClickMs &&
+                std::abs(x - app.last_click_x) <= kDoubleClickPixels &&
+                std::abs(y - app.last_click_y) <= kDoubleClickPixels;
+
+            // A double-click in the waveform area creates a new marker at
+            // the click position (not the playhead). Shift forces inherit.
+            // Rejection on duplicate positions is handled inside drop_marker.
+            if (is_double && inside_waveform) {
+                const double spp = current_samples_per_pixel(app, audio);
+                const int click_rel_x = x - area.x;
+                const int sr = audio.sample_rate();
+                const int64_t sample = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(click_rel_x * spp));
+                const double t = (sr > 0)
+                    ? static_cast<double>(sample) / static_cast<double>(sr)
+                    : 0.0;
+                drop_marker(t, /*inherit=*/shift);
+                // Consume this click so a triple-click doesn't double-fire.
+                app.last_click_consumed = true;
+                return;
+            }
+
+            // Store this click for the next one to compare against.
+            app.last_click_time     = now;
+            app.last_click_x        = x;
+            app.last_click_y        = y;
+            app.last_click_consumed = false;
+
             if (inside_waveform) {
                 const double spp = current_samples_per_pixel(app, audio);
-                const int64_t sample = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround((x - area.x) * spp));
-                move_playhead_to(sample);
+                const int click_rel_x = x - area.x;
+                const int sr = audio.sample_rate();
+
+                // Hit-test markers in pixel space within ±kMarkerHitHalfPx.
+                int best_hit = -1;
+                int best_dist = kMarkerHitHalfPx + 1;
+                const auto& mv = app.markers.markers();
+                const double vp = static_cast<double>(app.viewport_start_sample);
+                const int64_t visible = samples_visible(app, audio);
+                for (size_t i = 0; i < mv.size(); ++i) {
+                    const double ms = mv[i].time_seconds *
+                                      static_cast<double>(sr);
+                    if (ms < vp) continue;
+                    if (ms >= vp + static_cast<double>(visible)) continue;
+                    const int m_px = static_cast<int>(std::llround(
+                        (ms - vp) / spp));
+                    const int d = std::abs(m_px - click_rel_x);
+                    if (d <= kMarkerHitHalfPx && d < best_dist) {
+                        best_dist = d;
+                        best_hit  = static_cast<int>(i);
+                    }
+                }
+
+                if (best_hit >= 0) {
+                    set_selection(best_hit);
+                    if (!ctrl) {
+                        const int64_t sample =
+                            static_cast<int64_t>(std::llround(
+                                mv[best_hit].time_seconds *
+                                static_cast<double>(sr)));
+                        move_playhead_to(sample);
+                    }
+                } else if (!ctrl) {
+                    // Ctrl+click on empty space is a no-op (doesn't deselect).
+                    set_selection(-1);
+                    const int64_t sample = app.viewport_start_sample +
+                        static_cast<int64_t>(std::llround(click_rel_x * spp));
+                    move_playhead_to(sample);
+                }
+            } else if (inside_top) {
+                // Flag strip. Hit-test actual rendered flag rects. A flag
+                // click behaves like clicking the marker line (select +
+                // move playhead), modulated by Ctrl. A click that misses a
+                // flag deselects and moves the playhead to the click's
+                // horizontal position (matching empty-waveform behavior).
+                cairo_surface_t* scratch_s = cairo_image_surface_create(
+                    CAIRO_FORMAT_ARGB32, 1, 1);
+                cairo_t* scratch_cr = cairo_create(scratch_s);
+                const double spp = current_samples_per_pixel(app, audio);
+                const int64_t vp_start = app.viewport_start_sample;
+                const int64_t vp_end = vp_start +
+                    static_cast<int64_t>(std::llround(spp * area.w));
+                auto rects = compute_flag_hit_rects(
+                    scratch_cr, top, app.markers.markers(),
+                    vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
+                cairo_destroy(scratch_cr);
+                cairo_surface_destroy(scratch_s);
+
+                int hit = -1;
+                for (const auto& r : rects) {
+                    if (x >= r.x && x < r.x + r.w &&
+                        y >= r.y && y < r.y + r.h) {
+                        hit = r.marker_index;
+                        break;
+                    }
+                }
+
+                if (hit >= 0) {
+                    set_selection(hit);
+                    if (!ctrl) {
+                        const int sr = audio.sample_rate();
+                        const int64_t sample =
+                            static_cast<int64_t>(std::llround(
+                                app.markers.markers()[hit].time_seconds *
+                                static_cast<double>(sr)));
+                        move_playhead_to(sample);
+                    }
+                } else if (!ctrl) {
+                    set_selection(-1);
+                    const int click_rel_x = x - area.x;
+                    if (click_rel_x >= 0 && click_rel_x < area.w) {
+                        const int64_t sample = app.viewport_start_sample +
+                            static_cast<int64_t>(std::llround(click_rel_x * spp));
+                        move_playhead_to(sample);
+                    }
+                }
             }
         } else if (button == 4 || button == 5) {
             // Wheel in flag strip or window margins is ignored per spec.
@@ -635,6 +1225,35 @@ int main(int argc, char** argv) {
             "scale=1\n"
             "N=4096\n";
         create_if_missing(set_path, settings_default);
+
+        // Load the markers file. Parse failures are non-fatal: we log each
+        // error to stderr and leave app.markers empty. The GUI still works
+        // as a waveform viewer.
+        app.markers.clear();
+        app.selected_marker    = -1;
+        app.dirty              = false;
+        app.first_save_pending = true;
+        const bool markers_ok = app.markers.load(wm_path.string());
+        if (!markers_ok) {
+            for (const auto& err : app.markers.errors()) {
+                if (err.line_number > 0) {
+                    std::fprintf(stderr,
+                                 "warptempo_gui: %s:%d: %s\n",
+                                 wm_path.string().c_str(),
+                                 err.line_number, err.message.c_str());
+                } else {
+                    std::fprintf(stderr,
+                                 "warptempo_gui: %s: %s\n",
+                                 wm_path.string().c_str(),
+                                 err.message.c_str());
+                }
+            }
+        } else {
+            std::fprintf(stderr,
+                         "[warptempo_gui] parsed %zu markers from %s\n",
+                         app.markers.markers().size(),
+                         wm_path.string().c_str());
+        }
 
         const double load_ms =
             std::chrono::duration<double, std::milli>(t1 - t0).count();

@@ -46,6 +46,7 @@ add_executable(warptempo_gui
     src/gui_x11.cpp
     src/gui_audio.cpp
     src/gui_render.cpp
+    src/gui_markers.cpp
 )
 target_include_directories(warptempo_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/src
