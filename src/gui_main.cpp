@@ -10,17 +10,23 @@
 #include <sndfile.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <set>
 #include <string>
+#include <sys/stat.h>
 #include <system_error>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -63,10 +69,12 @@ constexpr int kFitFileLevel = kNumZoomLevels;
 // Timestamp text layout (bottom-left of the status strip).
 constexpr int kTimestampPadX              = 8;
 constexpr int kTimestampBaselineFromBottom = 12;
-// Region width includes room for the dirty indicator 8 px past the text edge.
+// Region width includes room for the A/B tab letter and the dirty indicator
+// past the timestamp text edge.
 constexpr int kTimestampRegionW           = 200;
 constexpr int kTimestampRegionH           = 30;
 constexpr double kDirtyGapPx              = 8.0;
+constexpr double kTabLetterGapPx          = 10.0;
 
 // Half-width of the column invalidated around a playhead position. Three
 // pixels total — generous enough to cover 1px line plus subpixel rounding.
@@ -182,6 +190,33 @@ struct ViewportPanState {
     int  last_mouse_x  = 0;
 };
 
+// Navigational bookmark. Holds a snapshot of the three fields that define
+// what the user sees and where playback would start. Not in the undo domain.
+struct Tab {
+    int64_t viewport_start_sample = 0;
+    int     zoom_level            = 0;
+    int64_t playhead_sample       = 0;
+};
+
+// Parsed contents of .settings, separated into tab-handled keys (typed with
+// presence flags so defaults can be applied per key) and the pass-through
+// vector that preserves any other lines verbatim in their original order.
+struct ParsedSettings {
+    bool    has_tab_a_vp   = false;
+    int64_t tab_a_vp       = 0;
+    bool    has_tab_a_zoom = false;
+    int     tab_a_zoom     = 0;
+    bool    has_tab_a_ph   = false;
+    int64_t tab_a_ph       = 0;
+    bool    has_tab_b_vp   = false;
+    int64_t tab_b_vp       = 0;
+    bool    has_tab_b_zoom = false;
+    int     tab_b_zoom     = 0;
+    bool    has_tab_b_ph   = false;
+    int64_t tab_b_ph       = 0;
+    std::vector<std::pair<std::string, std::string>> passthrough;
+};
+
 struct AppState {
     int     width                 = 1400;
     int     height                = 800;
@@ -264,6 +299,17 @@ struct AppState {
     // successful file load. Used by the waveform cache as part of its
     // invalidation fingerprint so a file swap forces a re-render.
     long long audio_generation = 0;
+
+    // A/B navigational tabs. Ctrl+Tab toggles between them; each holds a
+    // snapshot of viewport/zoom/playhead. Persisted in .settings.
+    Tab  tab_a;
+    Tab  tab_b;
+    char active_tab = 'A';
+
+    // Pass-through entries read from .settings on load and re-emitted
+    // verbatim on save. Preserves original order. Never interpreted by
+    // the GUI; exists so the wrapper script's keys survive a round-trip.
+    std::vector<std::pair<std::string, std::string>> settings_passthrough;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -467,6 +513,154 @@ bool create_if_missing(const std::filesystem::path& p,
     }
     f << contents;
     return static_cast<bool>(f);
+}
+
+std::string trim_ws(const std::string& s) {
+    size_t a = 0;
+    while (a < s.size() &&
+           std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    size_t b = s.size();
+    while (b > a &&
+           std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return s.substr(a, b - a);
+}
+
+bool parse_int64_full(const std::string& s, int64_t& out) {
+    if (s.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const long long v = std::strtoll(s.c_str(), &end, 10);
+    if (errno != 0 || end == s.c_str() || *end != '\0') return false;
+    out = static_cast<int64_t>(v);
+    return true;
+}
+
+bool parse_int_full(const std::string& s, int& out) {
+    if (s.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const long v = std::strtol(s.c_str(), &end, 10);
+    if (errno != 0 || end == s.c_str() || *end != '\0') return false;
+    if (v < std::numeric_limits<int>::min() ||
+        v > std::numeric_limits<int>::max()) return false;
+    out = static_cast<int>(v);
+    return true;
+}
+
+// Parse `.settings`. Missing file → empty result (all has_* false, empty
+// passthrough). Returns false only on a file-open failure of an existing
+// file; per-line errors are silent-skip. Tab values are stored raw, without
+// range validation — the caller clamps against the current audio file.
+bool parse_settings_file(const std::string& path, ParsedSettings& out) {
+    out = ParsedSettings{};
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) return true;  // nothing to load
+    std::ifstream f(path);
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) {
+        const std::string trimmed = trim_ws(line);
+        if (trimmed.empty()) continue;
+        if (trimmed[0] == '#') continue;
+        const size_t eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key   = trim_ws(trimmed.substr(0, eq));
+        const std::string value = trim_ws(trimmed.substr(eq + 1));
+        if (key.empty()) continue;
+
+        if (key == "tab_a_viewport_start") {
+            int64_t v;
+            if (parse_int64_full(value, v)) { out.has_tab_a_vp = true; out.tab_a_vp = v; }
+        } else if (key == "tab_a_zoom") {
+            int v;
+            if (parse_int_full(value, v)) { out.has_tab_a_zoom = true; out.tab_a_zoom = v; }
+        } else if (key == "tab_a_playhead") {
+            int64_t v;
+            if (parse_int64_full(value, v)) { out.has_tab_a_ph = true; out.tab_a_ph = v; }
+        } else if (key == "tab_b_viewport_start") {
+            int64_t v;
+            if (parse_int64_full(value, v)) { out.has_tab_b_vp = true; out.tab_b_vp = v; }
+        } else if (key == "tab_b_zoom") {
+            int v;
+            if (parse_int_full(value, v)) { out.has_tab_b_zoom = true; out.tab_b_zoom = v; }
+        } else if (key == "tab_b_playhead") {
+            int64_t v;
+            if (parse_int64_full(value, v)) { out.has_tab_b_ph = true; out.tab_b_ph = v; }
+        } else {
+            out.passthrough.emplace_back(key, value);
+        }
+    }
+    return true;
+}
+
+// Atomic write: pass-through lines first in their original order, then the
+// six canonical tab lines. Matches the `.warpmarkers` write pattern
+// (tmp → fsync → rename). Best-effort: failure is logged by the caller.
+bool write_settings_file(
+    const std::string& path,
+    const Tab& tab_a,
+    const Tab& tab_b,
+    const std::vector<std::pair<std::string, std::string>>& passthrough) {
+    std::string data;
+    for (const auto& kv : passthrough) {
+        data += kv.first;
+        data += '=';
+        data += kv.second;
+        data += '\n';
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%lld",
+                  static_cast<long long>(tab_a.viewport_start_sample));
+    data += "tab_a_viewport_start="; data += buf; data += '\n';
+    std::snprintf(buf, sizeof(buf), "%d", tab_a.zoom_level);
+    data += "tab_a_zoom=";            data += buf; data += '\n';
+    std::snprintf(buf, sizeof(buf), "%lld",
+                  static_cast<long long>(tab_a.playhead_sample));
+    data += "tab_a_playhead=";        data += buf; data += '\n';
+    std::snprintf(buf, sizeof(buf), "%lld",
+                  static_cast<long long>(tab_b.viewport_start_sample));
+    data += "tab_b_viewport_start="; data += buf; data += '\n';
+    std::snprintf(buf, sizeof(buf), "%d", tab_b.zoom_level);
+    data += "tab_b_zoom=";            data += buf; data += '\n';
+    std::snprintf(buf, sizeof(buf), "%lld",
+                  static_cast<long long>(tab_b.playhead_sample));
+    data += "tab_b_playhead=";        data += buf; data += '\n';
+
+    mode_t mode = 0644;
+    struct stat st;
+    if (::stat(path.c_str(), &st) == 0) mode = st.st_mode & 07777;
+
+    const std::string tmp_path = path + ".tmp";
+    int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (fd < 0) return false;
+
+    size_t written = 0;
+    while (written < data.size()) {
+        const ssize_t n = ::write(fd, data.data() + written,
+                                  data.size() - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ::close(fd);
+            ::unlink(tmp_path.c_str());
+            return false;
+        }
+        written += static_cast<size_t>(n);
+    }
+    if (::fsync(fd) != 0) {
+        ::close(fd);
+        ::unlink(tmp_path.c_str());
+        return false;
+    }
+    if (::close(fd) != 0) {
+        ::unlink(tmp_path.c_str());
+        return false;
+    }
+    ::chmod(tmp_path.c_str(), mode);
+    if (::rename(tmp_path.c_str(), path.c_str()) != 0) {
+        ::unlink(tmp_path.c_str());
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -858,11 +1052,35 @@ int main(int argc, char** argv) {
                         std::chrono::duration<double, std::milli>(s1 - s0).count();
                 }
 
+                // A/B tab letter between timestamp and dirty indicator.
+                // Same font/size/color as the timestamp; no background.
+                const double tw = measure_timestamp_width(cr, seconds);
+                double right_after_letter =
+                    static_cast<double>(kTimestampPadX) + tw;
+                {
+                    const double letter_x =
+                        static_cast<double>(kTimestampPadX) + tw +
+                        kTabLetterGapPx;
+                    const char letter_buf[2] = { app.active_tab, '\0' };
+                    cairo_save(cr);
+                    cairo_set_source_rgb(cr, kTimestampColor.r,
+                                         kTimestampColor.g, kTimestampColor.b);
+                    cairo_select_font_face(cr, "monospace",
+                                           CAIRO_FONT_SLANT_NORMAL,
+                                           CAIRO_FONT_WEIGHT_NORMAL);
+                    cairo_set_font_size(cr, 14.0);
+                    cairo_text_extents_t ext;
+                    cairo_text_extents(cr, letter_buf, &ext);
+                    cairo_move_to(cr, letter_x, baseline_y);
+                    cairo_show_text(cr, letter_buf);
+                    right_after_letter = letter_x + ext.x_advance;
+                    cairo_restore(cr);
+                }
+
                 if (app.dirty) {
                     const auto d0 = clock::now();
-                    const double tw = measure_timestamp_width(cr, seconds);
-                    const double cx = static_cast<double>(kTimestampPadX) +
-                                      tw + kDirtyGapPx + 3.0;
+                    const double cx = right_after_letter +
+                                      kTabLetterGapPx + 3.0;
                     const double cy =
                         static_cast<double>(baseline_y) - 5.0;
                     render_dirty_indicator(cr, cx, cy, kDirtyColor);
@@ -1642,6 +1860,16 @@ int main(int argc, char** argv) {
         invalidate_dirty_and_timestamp();
     };
 
+    // Overwrite the active tab's snapshot with the live AppState viewport /
+    // zoom / playhead. Shared by Ctrl+Tab (pre-flip) and Ctrl+S (pre-write)
+    // so "remembered spot" semantics stay consistent between the two paths.
+    auto refresh_active_tab_from_app = [&]() {
+        Tab& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+        t.viewport_start_sample = app.viewport_start_sample;
+        t.zoom_level            = app.zoom_level;
+        t.playhead_sample       = app.playhead_sample;
+    };
+
     auto save_markers = [&]() {
         if (app.warpmarkers_path.empty()) return;
         if (app.first_save_pending && app.markers.had_nonstandard_content()) {
@@ -1651,6 +1879,10 @@ int main(int argc, char** argv) {
                 "be written.\n",
                 app.warpmarkers_path.c_str());
         }
+        // Capture the active tab's current values before any writes — both
+        // the .warpmarkers and .settings paths see a consistent snapshot.
+        refresh_active_tab_from_app();
+
         const bool ok = app.markers.save(app.warpmarkers_path);
         if (!ok) {
             std::fprintf(stderr,
@@ -1666,6 +1898,19 @@ int main(int argc, char** argv) {
         recompute_dirty();
         if (was_dirty != app.dirty) {
             invalidate_dirty_and_timestamp();
+        }
+
+        // Best-effort .settings write. Failure is logged but does not fail
+        // the overall save — the .warpmarkers write is the primary target.
+        if (!app.settings_path.empty()) {
+            if (!write_settings_file(app.settings_path,
+                                     app.tab_a, app.tab_b,
+                                     app.settings_passthrough)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: settings save failed: %s: %s\n",
+                    app.settings_path.c_str(),
+                    std::strerror(errno));
+            }
         }
     };
 
@@ -2148,6 +2393,33 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Ctrl+Tab toggles A/B navigational tabs. Stops playback, saves
+        // current viewport/zoom/playhead to the leaving tab, restores the
+        // target tab. Does not mark the document dirty.
+        if (ctrl && !shift && keysym == XK_Tab) {
+            if (playback.is_playing() || app.is_playing) {
+                playback.stop();
+                // Synchronous stop: consume the "playing → not playing"
+                // transition here so the next tick doesn't snap the
+                // playhead back to the audio cursor, overwriting the
+                // target tab's stored playhead.
+                app.is_playing = false;
+            }
+            refresh_active_tab_from_app();
+            app.active_tab = (app.active_tab == 'A') ? 'B' : 'A';
+            const Tab& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
+            app.viewport_start_sample = target.viewport_start_sample;
+            app.zoom_level            = target.zoom_level;
+            app.playhead_sample       = target.playhead_sample;
+            clamp_viewport_start(app, audio);
+            // invalidate_waveform_area covers the top strip + waveform
+            // (including the playhead column inside it); the timestamp
+            // area holds the letter and the ts text.
+            invalidate_waveform_area();
+            invalidate_timestamp_area();
+            return;
+        }
+
         if (keysym == XK_Tab && !shift) { select_next_marker(); return; }
         if (keysym == XK_Tab && shift)  { select_prev_marker(); return; }
         if (keysym == XK_ISO_Left_Tab)  { select_prev_marker(); return; }
@@ -2488,7 +2760,9 @@ int main(int argc, char** argv) {
         // are parsed so the initial playhead has the final trim-begin.
         app.playback_speed = 1.0f;
 
-        // Companion files: discover paths, create defaults if missing.
+        // Companion files: discover paths, create .warpmarkers if missing.
+        // .settings is GUI-owned now — not pre-created on load; first save
+        // materializes it.
         std::filesystem::path apath(path);
         std::filesystem::path parent = apath.parent_path();
         if (parent.empty()) parent = std::filesystem::path(".");
@@ -2498,12 +2772,6 @@ int main(int argc, char** argv) {
         app.settings_path    = set_path.string();
 
         create_if_missing(wm_path, "00:00.000|1.00\n");
-        std::string settings_default =
-            "title=\n"
-            "audio_input=" + apath.filename().string() + "\n"
-            "scale=1\n"
-            "N=4096\n";
-        create_if_missing(set_path, settings_default);
 
         // Load the markers file. Parse failures are non-fatal: we log each
         // error to stderr and leave app.markers empty. The GUI still works
@@ -2548,6 +2816,54 @@ int main(int argc, char** argv) {
             app.viewport_start_sample = app.playhead_sample;
             clamp_viewport_start(app, audio);
         }
+
+        // Seed both tabs with the freshly-computed default post-load state.
+        // Parsed .settings values overwrite per-key below.
+        Tab default_tab;
+        default_tab.viewport_start_sample = app.viewport_start_sample;
+        default_tab.zoom_level            = app.zoom_level;
+        default_tab.playhead_sample       = app.playhead_sample;
+        app.tab_a          = default_tab;
+        app.tab_b          = default_tab;
+        app.active_tab     = 'A';
+        app.settings_passthrough.clear();
+
+        // Parse .settings (if present) and apply tab values with silent
+        // coerce on out-of-range. Missing file → all keys default.
+        {
+            ParsedSettings ps;
+            if (!parse_settings_file(app.settings_path, ps)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: could not read '%s'\n",
+                    app.settings_path.c_str());
+            }
+            const int64_t total = audio.total_frames();
+            auto valid_zoom = [](int z) -> bool {
+                if (z == kFitFileLevel) return true;
+                return z >= 0 && z < kNumZoomLevels;
+            };
+            auto apply = [&](bool has_vp, int64_t vp,
+                             bool has_zoom, int zoom,
+                             bool has_ph, int64_t ph,
+                             Tab& dst) {
+                if (has_vp   && vp   >= 0 && vp   <  total)  dst.viewport_start_sample = vp;
+                if (has_zoom && valid_zoom(zoom))            dst.zoom_level            = zoom;
+                if (has_ph   && ph   >= 0 && ph   <= total)  dst.playhead_sample       = ph;
+            };
+            apply(ps.has_tab_a_vp, ps.tab_a_vp,
+                  ps.has_tab_a_zoom, ps.tab_a_zoom,
+                  ps.has_tab_a_ph, ps.tab_a_ph, app.tab_a);
+            apply(ps.has_tab_b_vp, ps.tab_b_vp,
+                  ps.has_tab_b_zoom, ps.tab_b_zoom,
+                  ps.has_tab_b_ph, ps.tab_b_ph, app.tab_b);
+            app.settings_passthrough = std::move(ps.passthrough);
+        }
+
+        // Activate tab A: copy its snapshot into the live AppState fields.
+        app.viewport_start_sample = app.tab_a.viewport_start_sample;
+        app.zoom_level            = app.tab_a.zoom_level;
+        app.playhead_sample       = app.tab_a.playhead_sample;
+        clamp_viewport_start(app, audio);
 
         // Bring up the audio device bound to the new sample buffer. Init
         // failure disables playback but leaves the rest of the GUI usable.
