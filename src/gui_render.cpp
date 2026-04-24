@@ -218,7 +218,8 @@ void render_playhead(cairo_t* cr,
     if (playhead_pixel_x < 0.0) return;
     if (playhead_pixel_x > static_cast<double>(area.w - 1)) return;
 
-    const double x_px = area.x + std::floor(playhead_pixel_x + 0.5) + 0.5;
+    const double col  = std::floor(playhead_pixel_x + 0.5);
+    const double x_px = area.x + col + 0.5;
 
     cairo_save(cr);
     cairo_set_source_rgb(cr, color.r, color.g, color.b);
@@ -226,6 +227,21 @@ void render_playhead(cairo_t* cr,
     cairo_move_to(cr, x_px, area.y);
     cairo_line_to(cr, x_px, area.y + area.h);
     cairo_stroke(cr);
+
+    // Inverted-triangle indicator: tip at the top of the waveform area on
+    // the same integer-snapped column as the line, base 12 px above in the
+    // flag-strip region, 12 px wide. Filled solid. Flags are rendered after
+    // the playhead in the redraw path, so overlapping flags overpaint this
+    // triangle (flags take z-order precedence).
+    const double tip_x  = area.x + col;
+    const double tip_y  = area.y;
+    const double base_y = area.y - 12.0;
+    const double half_w = 6.0;
+    cairo_move_to(cr, tip_x - half_w, base_y);
+    cairo_line_to(cr, tip_x + half_w, base_y);
+    cairo_line_to(cr, tip_x,          tip_y);
+    cairo_close_path(cr);
+    cairo_fill(cr);
     cairo_restore(cr);
 }
 
@@ -342,6 +358,8 @@ namespace {
 // compute_flag_hit_rects. Invokes `emit(i, text_left, baseline_y, ext)` for
 // each flag that survives elision, in left-to-right order. The cairo font
 // face/size are assumed to already be set on `cr` by the caller.
+// `text_left` is snapped to the marker's integer pixel column so the flag's
+// left edge coincides with the marker/playhead column.
 template <typename Emit>
 void iterate_visible_flags(cairo_t* cr,
                            GuiRect top_strip_area,
@@ -358,7 +376,6 @@ void iterate_visible_flags(cairo_t* cr,
     const double sr           = static_cast<double>(sample_rate);
     const double baseline_y =
         static_cast<double>(top_strip_area.y + top_strip_area.h) - 13.0;
-    const double left_offset  = 3.0;
     const double pad          = 4.0;
 
     double rightmost_right_edge = -1e18;
@@ -369,10 +386,11 @@ void iterate_visible_flags(cairo_t* cr,
         if (ms < static_cast<double>(viewport_start_sample)) continue;
         if (ms >= static_cast<double>(viewport_end_sample)) continue;
 
-        const double x_px = top_strip_area.x +
-            (ms - static_cast<double>(viewport_start_sample))
-                / samples_per_pixel + 0.5;
-        const double text_left = x_px + left_offset;
+        const double x_raw =
+            (ms - static_cast<double>(viewport_start_sample)) /
+            samples_per_pixel;
+        const double text_left =
+            static_cast<double>(top_strip_area.x) + std::round(x_raw);
         if (text_left < rightmost_right_edge + pad) {
             if constexpr (kDebugPerf) perf_counters::flag_elided++;
             continue;
@@ -417,6 +435,13 @@ void render_flags(cairo_t* cr,
 
     const double hl_pad = 2.0;
 
+    // Canonical measurement: a string that includes both parens (descender)
+    // and uppercase-letter ascent. Computed once per render call so every
+    // flag's background rectangle uses the same y/height regardless of the
+    // flag's own text extents.
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
                           sample_rate,
@@ -427,14 +452,17 @@ void render_flags(cairo_t* cr,
             const bool dis         = effective_disabled(markers, i);
 
             // Only the last-selected flag gets the background highlight.
+            // Height and vertical position come from `uniform_ext` so the
+            // box is identical across flag types (text stays centered on
+            // `baseline_y` independently).
             if (is_last) {
                 cairo_set_source_rgb(cr, highlight_color.r,
                                      highlight_color.g, highlight_color.b);
                 cairo_rectangle(cr,
                                 text_left + ext.x_bearing - hl_pad,
-                                baseline_y + ext.y_bearing - hl_pad,
+                                baseline_y + uniform_ext.y_bearing - hl_pad,
                                 ext.width  + 2 * hl_pad,
-                                ext.height + 2 * hl_pad);
+                                uniform_ext.height + 2 * hl_pad);
                 cairo_fill(cr);
             }
 
@@ -471,6 +499,11 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, font_size);
 
+    // Mirror render_flags: uniform y/height for the hit rect so clicks
+    // register consistently across flag types.
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
                           sample_rate,
@@ -479,9 +512,9 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
             FlagHitRect r;
             r.marker_index = i;
             r.x = text_left + ext.x_bearing;
-            r.y = baseline_y + ext.y_bearing;
+            r.y = baseline_y + uniform_ext.y_bearing;
             r.w = ext.width;
-            r.h = ext.height;
+            r.h = uniform_ext.height;
             out.push_back(r);
         });
 

@@ -76,9 +76,10 @@ constexpr int kTimestampRegionH           = 30;
 constexpr double kDirtyGapPx              = 8.0;
 constexpr double kTabLetterGapPx          = 10.0;
 
-// Half-width of the column invalidated around a playhead position. Three
-// pixels total — generous enough to cover 1px line plus subpixel rounding.
-constexpr int kPlayheadHalfPx = 1;
+// Half-width of the column invalidated around a playhead position. Wide
+// enough to cover the playhead line, the 12px-wide triangle indicator
+// (±6 px of playhead_x), and subpixel rounding margin.
+constexpr int kPlayheadHalfPx = 8;
 
 // Classification of each undo entry by the net effect of its op on the
 // marker vector. Used by post-restore rules to decide selection and
@@ -185,9 +186,17 @@ struct UndoHistory {
     }
 };
 
-struct ViewportPanState {
-    bool active        = false;
-    int  last_mouse_x  = 0;
+// State for the plain/Shift left-button playhead-drag gesture. Modifier
+// state is captured at press and not re-read during motion; the gesture
+// ends on release (or on Escape, which ends at current position without
+// restoring). `last_added_marker` tracks the most-recently-snapped-to
+// marker *added fresh* by this gesture, so subsequent snap-to-another
+// can un-toggle it without removing pre-existing selections.
+struct PlayheadDragState {
+    bool active             = false;
+    bool shift_at_press     = false;
+    int  last_added_marker  = -1;
+    bool last_added_was_fresh = false;
 };
 
 // Navigational bookmark. Holds a snapshot of the three fields that define
@@ -237,6 +246,12 @@ struct AppState {
     bool    is_playing      = false;
     float   playback_speed  = 1.0f;
 
+    // "Last-Space playhead": the sample where Space-to-play was last
+    // pressed. Space-to-stop (and natural end) restore `playhead_sample`
+    // to this value — return-to-launch. Only differs from `playhead_sample`
+    // while Space-initiated playback is active; otherwise tracks it.
+    int64_t last_space_sample = 0;
+
     // Companion files discovered alongside the loaded audio. Chunk E just
     // records these; later chunks will parse their contents.
     std::string warpmarkers_path;
@@ -256,8 +271,9 @@ struct AppState {
     // there and on button release / Escape.
     DragState     drag;
 
-    // Alt+drag viewport-pan state. Cleared on button release.
-    ViewportPanState viewport_pan;
+    // Playhead drag state (plain / Shift left-button). Cleared on button
+    // release, Escape, and file load.
+    PlayheadDragState playhead_drag;
 
     // Undo/redo history for marker mutations. `dirty` below becomes a
     // derived signal: dirty = history.is_dirty(). Save/load reshape the
@@ -488,8 +504,13 @@ GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x) {
     const int col = static_cast<int>(std::floor(px_x));
     const int x0 = std::max(area.x, col - kPlayheadHalfPx);
     const int x1 = std::min(area.x + area.w, col + kPlayheadHalfPx + 1);
-    if (x1 <= x0) return GuiRect{area.x, area.y, 0, 0};
-    return GuiRect{x0, area.y, x1 - x0, area.h};
+    if (x1 <= x0) return GuiRect{area.x, 0, 0, 0};
+    // Envelope extends up from the top of the window to the bottom of the
+    // waveform area so it covers the playhead line inside the waveform AND
+    // the chunk-P triangle indicator in the flag strip above it.
+    const int y0 = 0;
+    const int y1 = area.y + area.h;
+    return GuiRect{x0, y0, x1 - x0, y1 - y0};
 }
 
 GuiRect timestamp_invalidate_rect(int window_height) {
@@ -1011,8 +1032,12 @@ int main(int argc, char** argv) {
             }
 
             // Playhead on top of the waveform, within the waveform area.
+            // The playhead's triangle indicator lives in the top strip so
+            // we must also render when only the top strip is exposed,
+            // otherwise a flag-strip-only repaint would erase the triangle.
             const double px_x = playhead_pixel_x(app, audio);
-            if (rects_intersect(exposed, area)) {
+            if (rects_intersect(exposed, area) ||
+                rects_intersect(exposed, top_strip)) {
                 const auto p0 = clock::now();
                 render_playhead(cr, area, px_x, kPlayheadColor);
                 const auto p1 = clock::now();
@@ -1393,12 +1418,29 @@ int main(int argc, char** argv) {
         sync_playhead_to_last_selected();
     };
 
+    // Gesture-stop: called at the top of any handler that will move the
+    // visible playhead (keys, button press, Ctrl+wheel, undo/redo, tab
+    // switch). Stops the audio thread and keeps the LSP in sync with the
+    // visible playhead so the next Space-to-play captures the right
+    // launch position. Does NOT return-to-launch — the gesture is about
+    // to commit a new playhead position.
+    auto stop_playback_if_playing = [&]() {
+        if (!playback.is_playing() && !app.is_playing) return;
+        playback.stop();
+        app.is_playing        = false;
+        app.last_space_sample = app.playhead_sample;
+    };
+
     // Ctrl+Z. Silent no-op on empty stack. Restores the top undo entry;
     // current state (with the popped entry's op kind + hint) is pushed
     // onto redo so the op's direction is reversible. Selection and
     // playhead are then set by apply_post_restore_rules.
     auto do_undo = [&]() {
         if (app.history.undo_stack.empty()) return;
+        // Undo may move the playhead via apply_post_restore_rules (Move /
+        // Destroy / Create-redo). Stop playback unconditionally — simpler
+        // and more predictable than conditionally stopping.
+        stop_playback_if_playing();
         UndoEntry entry = std::move(app.history.undo_stack.back());
         app.history.undo_stack.pop_back();
 
@@ -1426,6 +1468,7 @@ int main(int argc, char** argv) {
     // Ctrl+Shift+Z. Mirror of do_undo. Silent no-op on empty redo stack.
     auto do_redo = [&]() {
         if (app.history.redo_stack.empty()) return;
+        stop_playback_if_playing();
         UndoEntry entry = std::move(app.history.redo_stack.back());
         app.history.redo_stack.pop_back();
 
@@ -1914,16 +1957,33 @@ int main(int argc, char** argv) {
         }
     };
 
+    // Snap the visible playhead back to where Space was last pressed and
+    // refresh the affected regions. Used by both Space-to-stop and natural
+    // end-of-playback.
+    auto restore_playhead_to_lsp = [&]() {
+        const double old_px = playhead_pixel_x(app, audio);
+        app.playhead_sample = app.last_space_sample;
+        const double new_px = playhead_pixel_x(app, audio);
+        invalidate_playhead_columns(old_px, new_px);
+        invalidate_timestamp_area();
+        // The triangle shares the top strip with any selected-flag
+        // highlight; restore jumps can uncover/cover both, so invalidate
+        // the flag strip too.
+        const GuiRect ts = top_strip_area(app);
+        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+        app.is_playing      = false;
+        app.playback_cursor = app.playhead_sample;
+    };
+
     // Space-bar: start/stop playback. Playback runs from the playhead to
     // trim_end (or total_frames if no e= marker). Pressing space with the
-    // playhead at or past trim-end is a silent no-op.
+    // playhead at or past trim-end is a silent no-op. Space-to-stop
+    // returns the visible playhead to the position where Space-to-play
+    // was last pressed (return-to-launch).
     auto toggle_playback = [&]() {
         if (playback.is_playing()) {
-            // Stop the audio thread; leave app.is_playing true so the next
-            // tick sees the transition and snaps the playhead to the final
-            // cursor position (acceptance criterion: "Playhead stays at the
-            // position playback reached").
             playback.stop();
+            restore_playhead_to_lsp();
             return;
         }
         const int64_t end = trim_end_sample();
@@ -1931,6 +1991,7 @@ int main(int argc, char** argv) {
         // Clamp the start position into the trim range in case the playhead
         // is sitting at trim_end - 1 (valid) or somehow slipped.
         const int64_t start = std::max(app.playhead_sample, trim_begin_sample());
+        app.last_space_sample = app.playhead_sample;
         app.playback_cursor = start;
         app.is_playing = true;
         playback.set_speed(app.playback_speed);
@@ -1941,17 +2002,6 @@ int main(int argc, char** argv) {
     auto set_playback_speed = [&](float s) {
         app.playback_speed = s;
         playback.set_speed(s);
-    };
-
-    // A waveform click during playback reseats the audio thread's cursor to
-    // the new playhead. Without this, the visual playhead jumps but the audio
-    // keeps playing from its old position. Only click-driven playhead moves
-    // restart; arrow keys, Tab, Home/End deliberately do not.
-    auto click_restart_playback_if_active = [&]() {
-        if (playback.is_playing()) {
-            playback.stop();
-            playback.play(app.playhead_sample, trim_end_sample());
-        }
     };
 
     // Hit-test a marker line in the waveform area. Returns index or -1.
@@ -2269,6 +2319,10 @@ int main(int argc, char** argv) {
     // direction: -1 for earlier (up/left), +1 for later (down/right).
     auto nudge_selected_markers = [&](int direction) {
         if (app.loading || audio.total_frames() <= 0) return;
+        // Nudges move the playhead (via sync_playhead_to_last_selected).
+        // Stop playback first — covers both Ctrl+Left/Right keys and
+        // Ctrl+wheel in one place.
+        stop_playback_if_playing();
         if (app.selected_markers.empty()) return;
         const int sr = audio.sample_rate();
         if (sr <= 0) return;
@@ -2346,6 +2400,14 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Escape during a playhead drag ends the gesture at its current
+        // position (no restore — the drag already committed its visible
+        // progress per motion event, so there's nothing to revert).
+        if (keysym == XK_Escape && app.playhead_drag.active) {
+            app.playhead_drag = PlayheadDragState{};
+            return;
+        }
+
         // Space-bar is modifier-independent.
         if (keysym == XK_space) { toggle_playback(); return; }
 
@@ -2397,14 +2459,10 @@ int main(int argc, char** argv) {
         // current viewport/zoom/playhead to the leaving tab, restores the
         // target tab. Does not mark the document dirty.
         if (ctrl && !shift && keysym == XK_Tab) {
-            if (playback.is_playing() || app.is_playing) {
-                playback.stop();
-                // Synchronous stop: consume the "playing → not playing"
-                // transition here so the next tick doesn't snap the
-                // playhead back to the audio cursor, overwriting the
-                // target tab's stored playhead.
-                app.is_playing = false;
-            }
+            // Synchronous stop so the next tick doesn't snap the playhead
+            // back to the audio cursor, overwriting the target tab's
+            // stored playhead.
+            stop_playback_if_playing();
             refresh_active_tab_from_app();
             app.active_tab = (app.active_tab == 'A') ? 'B' : 'A';
             const Tab& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
@@ -2459,14 +2517,18 @@ int main(int argc, char** argv) {
 
         switch (keysym) {
         case XK_Escape: gui.request_exit();               break;
-        case XK_Left:   move_playhead_pixels(-1);         break;
-        case XK_Right:  move_playhead_pixels(+1);         break;
+        case XK_Left:   stop_playback_if_playing();
+                        move_playhead_pixels(-1);         break;
+        case XK_Right:  stop_playback_if_playing();
+                        move_playhead_pixels(+1);         break;
         case XK_Up:     zoom_in();                        break;
         case XK_Down:   zoom_out();                       break;
         case XK_f:      app.follow_mode = !app.follow_mode; break;
         case XK_c:      center_viewport_on_playhead();    break;
-        case XK_Home:   move_playhead_to(trim_begin_sample()); break;
-        case XK_End:    move_playhead_to(trim_end_sample() - 1); break;
+        case XK_Home:   stop_playback_if_playing();
+                        move_playhead_to(trim_begin_sample()); break;
+        case XK_End:    stop_playback_if_playing();
+                        move_playhead_to(trim_end_sample() - 1); break;
         case XK_b:      toggle_begin_time();              break;
         case XK_e:      toggle_end_time();                break;
         case XK_Delete: delete_selected_marker();         break;
@@ -2498,18 +2560,14 @@ int main(int argc, char** argv) {
         // Defensive: a second press during a drag is ignored (left button
         // should still be held down for a drag to exist).
         if (app.drag.active) return;
-        if (app.viewport_pan.active) return;
-
-        // Alt + left-button anywhere in the waveform area or top flag strip
-        // begins a viewport pan. Alt takes precedence over Ctrl so the
-        // lower-frequency pan gesture wins if both mods are held.
-        if (alt && button == 1 && (inside_waveform || inside_top)) {
-            app.viewport_pan.active       = true;
-            app.viewport_pan.last_mouse_x = x;
-            return;
-        }
 
         if (button == 1) {
+            // Any button-1 press on the waveform / top strip stops
+            // playback. Per Part 4 of chunk P patch 1: the user pressed
+            // a mouse button, they want attention — even a Ctrl+press on
+            // empty space (a no-op for the playhead) stops the audio.
+            if (inside_waveform || inside_top) stop_playback_if_playing();
+
             // Detect double-click from timing + position deltas.
             const auto now = std::chrono::steady_clock::now();
             const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2564,52 +2622,97 @@ int main(int argc, char** argv) {
 
             if (!in_click_region) return;
 
-            if (hit >= 0) {
-                if (ctrl) {
-                    // Ctrl held: prime a drag. begin_drag preserves the
-                    // multi-selection if `hit` is in it, else collapses to
-                    // just `hit`. Motion decides whether it actually becomes
-                    // a drag vs. a plain click.
+            if (ctrl) {
+                // Ctrl branch: marker-reposition drag or no-op on empty.
+                if (hit >= 0) {
+                    // begin_drag preserves the multi-selection if `hit` is in
+                    // it, else collapses to just `hit`. Motion decides whether
+                    // it actually becomes a drag vs. a plain click.
                     begin_drag(hit, x);
-                } else {
-                    if (shift) {
-                        toggle_selection_membership(hit);
-                    } else {
-                        set_single_selection(hit);
-                    }
+                }
+                // else: Ctrl+press on empty space is a silent no-op.
+                return;
+            }
+
+            // Non-Ctrl: plain or Shift press. In the waveform area this
+            // starts a playhead-drag gesture. In the top strip (flag click)
+            // we keep the legacy select-on-click behavior.
+            if (inside_top) {
+                if (hit >= 0) {
+                    if (shift) toggle_selection_membership(hit);
+                    else       set_single_selection(hit);
                     const int sr = audio.sample_rate();
                     const int64_t sample = static_cast<int64_t>(std::llround(
                         app.markers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                     move_playhead_to(sample);
-                    click_restart_playback_if_active();
                 }
-            } else {
-                // Missed any marker/flag.
-                if (ctrl) {
-                    // Ctrl+click on empty space: no-op (doesn't deselect).
-                    return;
+                return;
+            }
+
+            // Waveform-area press: start playhead drag gesture.
+            {
+                const int sr = audio.sample_rate();
+                if (hit >= 0) {
+                    // Press on a marker (within 3px).
+                    if (!shift) {
+                        set_single_selection(hit);
+                        app.playhead_drag.last_added_marker    = -1;
+                        app.playhead_drag.last_added_was_fresh = false;
+                    } else {
+                        // Shift+press on marker: selection otherwise preserved;
+                        // add hit if not already present. Track whether this
+                        // was a fresh add so subsequent snap-during-drag can
+                        // un-toggle only fresh additions.
+                        const bool was_in = app.selected_markers.count(hit) > 0;
+                        if (!was_in) {
+                            app.selected_markers.insert(hit);
+                            invalidate_marker_column(hit);
+                            invalidate_top_strip();
+                        }
+                        app.last_selected_marker = hit;
+                        app.playhead_drag.last_added_marker    = hit;
+                        app.playhead_drag.last_added_was_fresh = !was_in;
+                    }
+                    const int64_t sample = static_cast<int64_t>(std::llround(
+                        app.markers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                    move_playhead_to(sample);
+                    app.playhead_drag.active         = true;
+                    app.playhead_drag.shift_at_press = shift;
+                } else {
+                    // Press on empty waveform.
+                    const double spp = current_samples_per_pixel(app, audio);
+                    const int click_rel_x = x - area.x;
+                    if (click_rel_x < 0 || click_rel_x >= area.w) {
+                        if (!shift) clear_selection();
+                        return;
+                    }
+                    const int64_t sample = app.viewport_start_sample +
+                        static_cast<int64_t>(std::llround(click_rel_x * spp));
+                    if (!sample_in_trim(sample)) {
+                        // Click in dimmed region: silent no-op (matches
+                        // pre-chunk-P click behavior). No drag starts.
+                        return;
+                    }
+                    if (!shift) clear_selection();
+                    move_playhead_to(sample);
+                    app.playhead_drag.active               = true;
+                    app.playhead_drag.shift_at_press       = shift;
+                    app.playhead_drag.last_added_marker    = -1;
+                    app.playhead_drag.last_added_was_fresh = false;
                 }
-                const double spp = current_samples_per_pixel(app, audio);
-                const int click_rel_x = x - area.x;
-                if (click_rel_x < 0 || click_rel_x >= area.w) {
-                    // Far left/right of the waveform region — just deselect.
-                    clear_selection();
-                    return;
-                }
-                const int64_t sample = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(click_rel_x * spp));
-                if (!sample_in_trim(sample)) {
-                    // Click in dimmed region: silent no-op.
-                    return;
-                }
-                clear_selection();
-                move_playhead_to(sample);
-                click_restart_playback_if_active();
             }
         } else if (button == 4 || button == 5) {
             // Wheel in flag strip or window margins is ignored per spec.
             if (!inside_waveform) return;
+            if (ctrl && alt) {
+                // Ctrl+Alt+wheel fine-pan: 2% of visible viewport per tick.
+                const int64_t step = std::max<int64_t>(
+                    1, samples_visible(app, audio) / 50);
+                scroll_viewport(button == 4 ? -step : +step);
+                return;
+            }
             if (ctrl) {
                 // Ctrl+wheel nudges selected markers by 1 source pixel.
                 // Up (button 4) = earlier, Down (button 5) = later, to
@@ -2630,8 +2733,8 @@ int main(int argc, char** argv) {
 
     gui.set_on_button_release([&](unsigned int button, int, int, unsigned int) {
         if (button != 1) return;
-        if (app.viewport_pan.active) {
-            app.viewport_pan.active = false;
+        if (app.playhead_drag.active) {
+            app.playhead_drag = PlayheadDragState{};
             return;
         }
         if (!app.drag.active) return;
@@ -2642,19 +2745,87 @@ int main(int argc, char** argv) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
         }
-        if (app.viewport_pan.active) {
-            // Pan continues as long as we keep seeing motion events, even
-            // if Button1Mask flickers on a busy system — only the release
-            // callback ends the gesture. Dragging right (positive dx)
-            // scrolls the viewport earlier (negative delta_samples).
+        if (app.playhead_drag.active) {
+            // Modifier changes mid-drag are ignored: only shift_at_press
+            // governs gesture behavior. Left button must still be held; if
+            // it's not, the release was lost — terminate the drag.
+            if ((mods & Button1Mask) == 0) {
+                app.playhead_drag = PlayheadDragState{};
+                return;
+            }
+            const int sr = audio.sample_rate();
+            if (sr <= 0) return;
+            const GuiRect area = waveform_area(app);
             const double spp = current_samples_per_pixel(app, audio);
-            const int dx = mouse_x - app.viewport_pan.last_mouse_x;
-            const int64_t delta_samples = static_cast<int64_t>(
-                std::llround(-dx * spp));
-            app.viewport_start_sample += delta_samples;
-            clamp_viewport_start(app, audio);
-            app.viewport_pan.last_mouse_x = mouse_x;
-            invalidate_waveform_area();
+            if (spp <= 0.0) return;
+
+            // Marker snap test — uses the same 3px epsilon as marker hit-test.
+            const int hit = hit_test_marker_line(mouse_x);
+
+            bool selection_changed = false;
+            int64_t new_playhead;
+
+            if (hit >= 0) {
+                const double ms = app.markers.markers()[hit].time_seconds *
+                                  static_cast<double>(sr);
+                new_playhead = static_cast<int64_t>(std::llround(ms));
+                if (!app.playhead_drag.shift_at_press) {
+                    // Plain drag: replace selection with {hit} unless it's
+                    // already the sole selection.
+                    const bool already_sole =
+                        app.selected_markers.size() == 1 &&
+                        app.selected_markers.count(hit) > 0;
+                    if (!already_sole) {
+                        set_single_selection(hit);
+                        selection_changed = true;
+                    }
+                } else {
+                    // Shift drag: if snapping to a different marker than the
+                    // gesture's last-added, un-toggle the previous (only if
+                    // fresh) and add the new.
+                    if (app.playhead_drag.last_added_marker != hit) {
+                        const int prev = app.playhead_drag.last_added_marker;
+                        if (prev != -1 &&
+                            app.playhead_drag.last_added_was_fresh) {
+                            if (app.selected_markers.erase(prev) > 0) {
+                                invalidate_marker_column(prev);
+                                if (app.last_selected_marker == prev) {
+                                    // repair_last_selected isn't in scope
+                                    // here; match its behavior inline.
+                                    if (app.selected_markers.empty()) {
+                                        app.last_selected_marker = -1;
+                                    } else {
+                                        app.last_selected_marker =
+                                            *app.selected_markers.rbegin();
+                                    }
+                                }
+                                selection_changed = true;
+                            }
+                        }
+                        const bool was_in = app.selected_markers.count(hit) > 0;
+                        if (!was_in) {
+                            app.selected_markers.insert(hit);
+                            invalidate_marker_column(hit);
+                            selection_changed = true;
+                        }
+                        app.last_selected_marker = hit;
+                        app.playhead_drag.last_added_marker    = hit;
+                        app.playhead_drag.last_added_was_fresh = !was_in;
+                    }
+                }
+            } else {
+                // No marker within epsilon: playhead follows cursor freely.
+                int rel = mouse_x - area.x;
+                if (rel < 0) rel = 0;
+                if (rel >= area.w) rel = area.w - 1;
+                new_playhead = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(rel * spp));
+            }
+
+            if (new_playhead != app.playhead_sample) {
+                move_playhead_to(new_playhead);
+            }
+            if (selection_changed) invalidate_top_strip();
             return;
         }
         if (!app.drag.active) return;
@@ -2780,6 +2951,7 @@ int main(int argc, char** argv) {
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.drag = DragState{};
+        app.playhead_drag = PlayheadDragState{};
         // Fresh file = fresh history. Both stacks cleared; the loaded state
         // is the saved baseline (signed_distance = 0, valid).
         app.history.reset();
@@ -2956,19 +3128,11 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Playing was true last tick, now false — natural end. Snap the
-        // playhead to the final cursor position and refresh the column /
-        // timestamp one last time.
+        // Playing was true last tick, now false — natural end. Return the
+        // visible playhead to the launch position (same as Space-to-stop).
         if (app.is_playing) {
-            const int64_t cur = playback.cursor();
-            const double old_px = playhead_pixel_x(app, audio);
-            app.playback_cursor = cur;
-            app.playhead_sample = cur;
-            const double new_px = playhead_pixel_x(app, audio);
-            invalidate_playhead_columns(old_px, new_px);
-            invalidate_timestamp_area();
+            restore_playhead_to_lsp();
             if (app.follow_mode) follow_scroll_if_needed();
-            app.is_playing = false;
         }
     });
 
