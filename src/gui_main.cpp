@@ -223,6 +223,8 @@ struct ParsedSettings {
     int     tab_b_zoom     = 0;
     bool    has_tab_b_ph   = false;
     int64_t tab_b_ph       = 0;
+    bool    has_follow     = false;
+    bool    follow         = true;
     std::vector<std::pair<std::string, std::string>> passthrough;
 };
 
@@ -235,7 +237,7 @@ struct AppState {
     int64_t playhead_sample       = 0;
     int     zoom_level            = 0;
     int64_t viewport_start_sample = 0;
-    bool    follow_mode           = false;
+    bool    follow_mode           = true;
 
     // Playback state. `playback_cursor` is the last sample read from the
     // audio thread; `is_playing` mirrors the audio thread's flag so the
@@ -607,6 +609,13 @@ bool parse_settings_file(const std::string& path, ParsedSettings& out) {
         } else if (key == "tab_b_playhead") {
             int64_t v;
             if (parse_int64_full(value, v)) { out.has_tab_b_ph = true; out.tab_b_ph = v; }
+        } else if (key == "follow") {
+            std::string lower = value;
+            for (char& c : lower) c = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c)));
+            if (lower == "true")       { out.has_follow = true; out.follow = true;  }
+            else if (lower == "false") { out.has_follow = true; out.follow = false; }
+            // Any other value: silent-skip; default (true) applies at the call site.
         } else {
             out.passthrough.emplace_back(key, value);
         }
@@ -621,6 +630,7 @@ bool write_settings_file(
     const std::string& path,
     const Tab& tab_a,
     const Tab& tab_b,
+    bool follow,
     const std::vector<std::pair<std::string, std::string>>& passthrough) {
     std::string data;
     for (const auto& kv : passthrough) {
@@ -629,6 +639,9 @@ bool write_settings_file(
         data += kv.second;
         data += '\n';
     }
+    data += "follow=";
+    data += follow ? "true" : "false";
+    data += '\n';
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%lld",
                   static_cast<long long>(tab_a.viewport_start_sample));
@@ -1948,6 +1961,7 @@ int main(int argc, char** argv) {
         if (!app.settings_path.empty()) {
             if (!write_settings_file(app.settings_path,
                                      app.tab_a, app.tab_b,
+                                     app.follow_mode,
                                      app.settings_passthrough)) {
                 std::fprintf(stderr,
                     "warptempo_gui: settings save failed: %s: %s\n",
@@ -2869,7 +2883,8 @@ int main(int argc, char** argv) {
     // Loads `path` into a fresh GuiAudio, preflights via libsndfile, and
     // swaps the new audio in on success. On failure, the prior audio (if
     // any) remains loaded unchanged. Resets per-file navigation state;
-    // follow_mode is intentionally preserved across reloads.
+    // follow_mode is reapplied from the loaded file's .settings (default
+    // true when absent).
     auto load_file = [&](const std::string& path) -> bool {
         // Preflight.
         {
@@ -3028,6 +3043,7 @@ int main(int argc, char** argv) {
             apply(ps.has_tab_b_vp, ps.tab_b_vp,
                   ps.has_tab_b_zoom, ps.tab_b_zoom,
                   ps.has_tab_b_ph, ps.tab_b_ph, app.tab_b);
+            app.follow_mode = ps.has_follow ? ps.follow : true;
             app.settings_passthrough = std::move(ps.passthrough);
         }
 
