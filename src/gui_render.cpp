@@ -281,9 +281,10 @@ void render_markers(cairo_t* cr,
             const double ms = m.time_seconds * sr;
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
-            const double x_px = waveform_area.x +
+            const double x_raw =
                 (ms - static_cast<double>(viewport_start_sample))
-                    / samples_per_pixel + 0.5;
+                    / samples_per_pixel;
+            const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
             cairo_move_to(cr, x_px, y0);
             cairo_line_to(cr, x_px, y1);
         }
@@ -301,9 +302,10 @@ void render_markers(cairo_t* cr,
             c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
         }
         cairo_set_source_rgb(cr, c.r, c.g, c.b);
-        const double x_px = waveform_area.x +
+        const double x_raw =
             (ms - static_cast<double>(viewport_start_sample))
-                / samples_per_pixel + 0.5;
+                / samples_per_pixel;
+        const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
         cairo_move_to(cr, x_px, y0);
         cairo_line_to(cr, x_px, y1);
         cairo_stroke(cr);
