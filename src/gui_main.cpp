@@ -254,6 +254,56 @@ struct AppState {
         std::chrono::steady_clock::now();
     double  stats_max_redraw_ms = 0.0;
     int     stats_over_1ms_count = 0;
+
+    // Timestamp of the most recent user input event (key/button/motion).
+    // Read by the perf-instrumentation path to compute event-to-paint
+    // latency (e2e). Default-constructed (epoch zero) means "no input yet."
+    std::chrono::steady_clock::time_point last_input_event_time{};
+
+    // Identity counter for the currently loaded audio. Bumped on every
+    // successful file load. Used by the waveform cache as part of its
+    // invalidation fingerprint so a file swap forces a re-render.
+    long long audio_generation = 0;
+};
+
+// Off-screen pixel cache for the waveform subsystem. Lives for the life
+// of the redraw lambda; recreated when the waveform area is resized;
+// re-rendered when any input to render_waveform has changed. The main
+// redraw just blits this surface onto the pixmap and paints markers /
+// flags / playhead / timestamp on top. No implicit Cairo state from the
+// main pixmap context leaks in — render_waveform does its own
+// save/restore and does not depend on the caller's transform. (If a
+// future chunk introduces a non-identity transform on the pixmap, this
+// assumption must be revisited.)
+struct WaveformCache {
+    cairo_surface_t* surface = nullptr;
+    int              width   = 0;     // surface width (== area.w when valid)
+    int              height  = 0;     // surface height (== area.h when valid)
+
+    // Fingerprint of the last successful render. Compared against the
+    // current redraw's inputs to decide whether to re-render.
+    int64_t   fp_vp_start   = 0;
+    int64_t   fp_vp_end     = 0;
+    int64_t   fp_trim_begin = 0;
+    int64_t   fp_trim_end   = 0;
+    int       fp_area_w     = 0;
+    int       fp_area_h     = 0;
+    long long fp_audio_gen  = -1;     // -1 = never rendered
+
+    bool dirty = true;
+
+    void destroy_surface() {
+        if (surface) {
+            cairo_surface_destroy(surface);
+            surface = nullptr;
+        }
+        width  = 0;
+        height = 0;
+        dirty  = true;
+        fp_audio_gen = -1;
+    }
+
+    ~WaveformCache() { destroy_surface(); }
 };
 
 int top_strip_height(int window_height) {
@@ -382,39 +432,6 @@ GuiRect union_rect(GuiRect a, GuiRect b) {
     return GuiRect{x0, y0, x1 - x0, y1 - y0};
 }
 
-// Renders the waveform sub-region covered by `exposed`, clipped to each
-// channel's rect. Re-derives sub-viewport samples so render_waveform only
-// iterates the columns that actually changed.
-void render_waveform_exposed(cairo_t* cr,
-                             GuiRect channel_area,
-                             GuiRect exposed,
-                             const GuiAudio& audio,
-                             int channel,
-                             int64_t viewport_start,
-                             double samples_per_pixel,
-                             int64_t trim_begin,
-                             int64_t trim_end,
-                             GuiColor bright_color,
-                             GuiColor dim_color) {
-    const int xa = std::max(channel_area.x, exposed.x);
-    const int xb = std::min(channel_area.x + channel_area.w,
-                            exposed.x + exposed.w);
-    if (xa >= xb) return;
-    const int ya = std::max(channel_area.y, exposed.y);
-    const int yb = std::min(channel_area.y + channel_area.h,
-                            exposed.y + exposed.h);
-    if (ya >= yb) return;
-
-    GuiRect sub{xa, channel_area.y, xb - xa, channel_area.h};
-    const int ox = xa - channel_area.x;
-    const int64_t sub_start = viewport_start +
-        static_cast<int64_t>(std::llround(ox * samples_per_pixel));
-    const int64_t sub_end = sub_start +
-        static_cast<int64_t>(std::llround(sub.w * samples_per_pixel));
-    render_waveform(cr, sub, audio, channel, sub_start, sub_end,
-                    trim_begin, trim_end, bright_color, dim_color);
-}
-
 bool rects_intersect(GuiRect a, GuiRect b) {
     if (a.x + a.w <= b.x || b.x + b.w <= a.x) return false;
     if (a.y + a.h <= b.y || b.y + b.h <= a.y) return false;
@@ -465,10 +482,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    AppState    app;
-    GuiAudio    audio;
-    GuiPlayback playback;
-    GuiX11      gui;
+    AppState     app;
+    GuiAudio     audio;
+    GuiPlayback  playback;
+    GuiX11       gui;
+    WaveformCache wf_cache;
     if (!gui.init(app.width, app.height, "Warptempo")) {
         return 1;
     }
@@ -654,7 +672,18 @@ int main(int argc, char** argv) {
     // -- Redraw -------------------------------------------------------------
 
     gui.set_on_redraw([&](cairo_t* cr, int x, int y, int w, int h) {
-        const auto t_start = std::chrono::steady_clock::now();
+        using clock = std::chrono::steady_clock;
+        const auto t_start = clock::now();
+
+        if constexpr (kDebugPerf) perf_counters::reset();
+
+        double t_waveform_ms = 0.0;
+        double t_markers_ms  = 0.0;
+        double t_flags_ms    = 0.0;
+        double t_playhead_ms = 0.0;
+        double t_ts_ms       = 0.0;
+        double t_dirty_ms    = 0.0;
+        double t_flush_ms    = 0.0;
 
         cairo_save(cr);
         cairo_rectangle(cr, x, y, w, h);
@@ -682,45 +711,124 @@ int main(int argc, char** argv) {
             const int64_t trim_end   = trim.second;
 
             const int rc = audio.render_channels();
-            if (rc == 1) {
-                render_waveform_exposed(cr, area, exposed, audio, 0,
-                                        vp_start, spp,
+            {
+                const auto wf0 = clock::now();
+
+                // Cache surface lifecycle: (re)create when dimensions don't
+                // match the current waveform area. Size mismatch implies a
+                // window resize; content is stale regardless.
+                if (!wf_cache.surface ||
+                    wf_cache.width  != area.w ||
+                    wf_cache.height != area.h) {
+                    wf_cache.destroy_surface();
+                    if (area.w > 0 && area.h > 0) {
+                        wf_cache.surface = cairo_image_surface_create(
+                            CAIRO_FORMAT_ARGB32, area.w, area.h);
+                        wf_cache.width  = area.w;
+                        wf_cache.height = area.h;
+                        wf_cache.dirty  = true;
+                    }
+                }
+
+                // Cache invalidation: any change to the inputs of
+                // render_waveform forces a re-render. Checked here (not at
+                // mutation sites) so new mutation paths can never forget.
+                if (wf_cache.surface &&
+                    (wf_cache.fp_audio_gen  != app.audio_generation ||
+                     wf_cache.fp_vp_start   != vp_start             ||
+                     wf_cache.fp_vp_end     != vp_end               ||
+                     wf_cache.fp_trim_begin != trim_begin           ||
+                     wf_cache.fp_trim_end   != trim_end             ||
+                     wf_cache.fp_area_w     != area.w               ||
+                     wf_cache.fp_area_h     != area.h)) {
+                    wf_cache.dirty = true;
+                }
+
+                if (wf_cache.surface && wf_cache.dirty) {
+                    cairo_t* ccr = cairo_create(wf_cache.surface);
+                    // Clear to transparent — the pixmap's background fill
+                    // shows through wherever the waveform strokes don't paint.
+                    cairo_save(ccr);
+                    cairo_set_operator(ccr, CAIRO_OPERATOR_CLEAR);
+                    cairo_paint(ccr);
+                    cairo_restore(ccr);
+                    const GuiRect cache_area{0, 0, area.w, area.h};
+                    if (rc == 1) {
+                        render_waveform(ccr, cache_area, audio, 0,
+                                        vp_start, vp_end,
                                         trim_begin, trim_end,
                                         kWaveformColor, kWaveformDimColor);
-            } else if (rc >= 2) {
-                const int ch_h = (area.h - kChannelGapPx) / 2;
-                const GuiRect ch0{area.x, area.y, area.w, ch_h};
-                const GuiRect ch1{area.x, area.y + ch_h + kChannelGapPx,
-                                  area.w, ch_h};
-                render_waveform_exposed(cr, ch0, exposed, audio, 0,
-                                        vp_start, spp,
+                    } else if (rc >= 2) {
+                        const int ch_h = (cache_area.h - kChannelGapPx) / 2;
+                        const GuiRect ch0{0, 0, cache_area.w, ch_h};
+                        const GuiRect ch1{0, ch_h + kChannelGapPx,
+                                          cache_area.w, ch_h};
+                        render_waveform(ccr, ch0, audio, 0,
+                                        vp_start, vp_end,
                                         trim_begin, trim_end,
                                         kWaveformColor, kWaveformDimColor);
-                render_waveform_exposed(cr, ch1, exposed, audio, 1,
-                                        vp_start, spp,
+                        render_waveform(ccr, ch1, audio, 1,
+                                        vp_start, vp_end,
                                         trim_begin, trim_end,
                                         kWaveformColor, kWaveformDimColor);
+                    }
+                    cairo_destroy(ccr);
+                    wf_cache.fp_audio_gen  = app.audio_generation;
+                    wf_cache.fp_vp_start   = vp_start;
+                    wf_cache.fp_vp_end     = vp_end;
+                    wf_cache.fp_trim_begin = trim_begin;
+                    wf_cache.fp_trim_end   = trim_end;
+                    wf_cache.fp_area_w     = area.w;
+                    wf_cache.fp_area_h     = area.h;
+                    wf_cache.dirty = false;
+                }
+
+                // Blit the cache into the pixmap, clipped to the exposed
+                // rect's intersection with the waveform area. Cairo handles
+                // the intersection via the outer clip plus this inner clip.
+                if (wf_cache.surface && rects_intersect(exposed, area)) {
+                    cairo_save(cr);
+                    cairo_rectangle(cr, area.x, area.y, area.w, area.h);
+                    cairo_clip(cr);
+                    cairo_set_source_surface(cr, wf_cache.surface,
+                                             area.x, area.y);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                }
+
+                const auto wf1 = clock::now();
+                t_waveform_ms =
+                    std::chrono::duration<double, std::milli>(wf1 - wf0).count();
             }
 
             // Markers: vertical lines in the waveform area, beneath the
             // playhead. Cairo's outer clip confines painting to `exposed`.
             if (rects_intersect(exposed, area)) {
+                const auto m0 = clock::now();
                 render_markers(cr, area, app.markers.markers(),
                                vp_start, vp_end, sr,
                                kMarkerColor, kMarkerDimColor,
                                kSelectedColor,
                                app.selected_markers,
                                app.last_selected_marker);
+                const auto m1 = clock::now();
+                t_markers_ms =
+                    std::chrono::duration<double, std::milli>(m1 - m0).count();
             }
 
             // Playhead on top of the waveform, within the waveform area.
             const double px_x = playhead_pixel_x(app, audio);
             if (rects_intersect(exposed, area)) {
+                const auto p0 = clock::now();
                 render_playhead(cr, area, px_x, kPlayheadColor);
+                const auto p1 = clock::now();
+                t_playhead_ms =
+                    std::chrono::duration<double, std::milli>(p1 - p0).count();
             }
 
             // Flag annotations in the top strip.
             if (rects_intersect(exposed, top_strip)) {
+                const auto f0 = clock::now();
                 render_flags(cr, top_strip, app.markers.markers(),
                              vp_start, vp_end, sr,
                              kMarkerColor, kMarkerDimColor,
@@ -728,6 +836,9 @@ int main(int argc, char** argv) {
                              kFlagFontSize,
                              app.selected_markers,
                              app.last_selected_marker);
+                const auto f1 = clock::now();
+                t_flags_ms =
+                    std::chrono::duration<double, std::milli>(f1 - f0).count();
             }
 
             // Timestamp in the bottom status strip.
@@ -738,25 +849,70 @@ int main(int argc, char** argv) {
                       static_cast<double>(sr)
                     : 0.0;
                 const int baseline_y = app.height - kTimestampBaselineFromBottom;
-                render_timestamp(cr, kTimestampPadX, baseline_y,
-                                 seconds, kTimestampColor);
+                {
+                    const auto s0 = clock::now();
+                    render_timestamp(cr, kTimestampPadX, baseline_y,
+                                     seconds, kTimestampColor);
+                    const auto s1 = clock::now();
+                    t_ts_ms =
+                        std::chrono::duration<double, std::milli>(s1 - s0).count();
+                }
 
                 if (app.dirty) {
-                    const double w = measure_timestamp_width(cr, seconds);
+                    const auto d0 = clock::now();
+                    const double tw = measure_timestamp_width(cr, seconds);
                     const double cx = static_cast<double>(kTimestampPadX) +
-                                      w + kDirtyGapPx + 3.0;
+                                      tw + kDirtyGapPx + 3.0;
                     const double cy =
                         static_cast<double>(baseline_y) - 5.0;
                     render_dirty_indicator(cr, cx, cy, kDirtyColor);
+                    const auto d1 = clock::now();
+                    t_dirty_ms =
+                        std::chrono::duration<double, std::milli>(d1 - d0).count();
                 }
             }
         }
 
         cairo_restore(cr);
 
-        const auto t_end = std::chrono::steady_clock::now();
+        // Force any pending Cairo ops out to the X server so the flush cost
+        // is captured here rather than attributed elsewhere. The subsequent
+        // flush in GuiX11::dispatch_event is a cheap no-op.
+        {
+            const auto fl0 = clock::now();
+            cairo_surface_flush(cairo_get_target(cr));
+            const auto fl1 = clock::now();
+            t_flush_ms =
+                std::chrono::duration<double, std::milli>(fl1 - fl0).count();
+        }
+
+        const auto t_end = clock::now();
         const double elapsed_ms =
             std::chrono::duration<double, std::milli>(t_end - t_start).count();
+
+        if constexpr (kDebugPerf) {
+            if (elapsed_ms > 3.0) {
+                double e2e_ms = -1.0;
+                if (app.last_input_event_time.time_since_epoch().count() != 0) {
+                    e2e_ms = std::chrono::duration<double, std::milli>(
+                        t_end - app.last_input_event_time).count();
+                }
+                std::fprintf(stderr,
+                    "[dbg perf] total=%.2f ms waveform=%.2f markers=%.2f "
+                    "flags=%.2f playhead=%.2f ts=%.2f dirty=%.2f flush=%.2f "
+                    "pixel_area=%dx%d wf_cols=%d wf_pyramid_samples=%d "
+                    "flag_measure=%d flag_drawn=%d flag_elided=%d "
+                    "e2e=%.2f\n",
+                    elapsed_ms, t_waveform_ms, t_markers_ms, t_flags_ms,
+                    t_playhead_ms, t_ts_ms, t_dirty_ms, t_flush_ms,
+                    w, h,
+                    perf_counters::wf_cols, perf_counters::wf_pyramid_samples,
+                    perf_counters::flag_measure, perf_counters::flag_drawn,
+                    perf_counters::flag_elided,
+                    e2e_ms);
+            }
+        }
+
         if (elapsed_ms > app.stats_max_redraw_ms)
             app.stats_max_redraw_ms = elapsed_ms;
         if (elapsed_ms > 1.0) app.stats_over_1ms_count++;
@@ -1713,12 +1869,29 @@ int main(int argc, char** argv) {
     };
 
     // Apply a raw delta (mouse-derived) to the dragging markers, clamped.
-    // Updates marker times in place; invalidates touched areas.
+    // Updates marker times in place and invalidates only the old-and-new
+    // pixel columns of each moved marker plus the flag strip. The waveform
+    // cache stays valid throughout the drag — viewport / trim / dimensions
+    // don't change — so these narrow invalidations blit the cache over
+    // tiny rects and repaint just markers + flags + playhead on top.
     auto apply_drag_motion = [&](double raw_delta) {
         if (!app.drag.active) return;
         double delta = raw_delta;
         if (delta < app.drag.delta_min) delta = app.drag.delta_min;
         if (delta > app.drag.delta_max) delta = app.drag.delta_max;
+
+        const GuiRect area = waveform_area(app);
+        const int sr       = audio.sample_rate();
+        const double spp   = current_samples_per_pixel(app, audio);
+        const double sr_d  = static_cast<double>(sr);
+        const bool geom_ok = (sr > 0 && spp > 0.0 && area.w > 0);
+        const double vp    = static_cast<double>(app.viewport_start_sample);
+
+        auto col_rect_for_time = [&](double t_seconds) -> GuiRect {
+            const double ms = t_seconds * sr_d;
+            const double px = area.x + (ms - vp) / spp;
+            return playhead_invalidate_rect(area, px);
+        };
 
         bool any_changed = false;
         for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
@@ -1726,14 +1899,23 @@ int main(int argc, char** argv) {
             const double new_t = app.drag.original_times[k] + delta;
             GuiMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
-            if (m->time_seconds != new_t) {
-                m->time_seconds = new_t;
-                any_changed = true;
+            const double old_t = m->time_seconds;
+            if (old_t == new_t) continue;
+            m->time_seconds = new_t;
+            any_changed = true;
+            if (!geom_ok) continue;
+            const GuiRect r_old = col_rect_for_time(old_t);
+            const GuiRect r_new = col_rect_for_time(new_t);
+            const GuiRect u = union_rect(r_old, r_new);
+            if (u.w > 0 && u.h > 0) {
+                gui.invalidate_region(u.x, u.y, u.w, u.h);
             }
         }
         if (any_changed) {
             app.drag.moved = true;
-            invalidate_waveform_area();
+            // Flag strip is at most ~top_strip_height px tall; repainting
+            // the whole strip takes ~0.05 ms, so don't bother per-flag.
+            invalidate_top_strip();
         }
     };
 
@@ -1903,6 +2085,9 @@ int main(int argc, char** argv) {
     };
 
     gui.set_on_key([&](KeySym keysym, unsigned int mods) {
+        if constexpr (kDebugPerf) {
+            app.last_input_event_time = std::chrono::steady_clock::now();
+        }
         if (app.loading || audio.total_frames() <= 0) {
             if (keysym == XK_Escape) gui.request_exit();
             return;
@@ -2022,6 +2207,9 @@ int main(int argc, char** argv) {
 
     gui.set_on_button_press([&](unsigned int button, int x, int y,
                                 unsigned int mods) {
+        if constexpr (kDebugPerf) {
+            app.last_input_event_time = std::chrono::steady_clock::now();
+        }
         if (app.loading || audio.total_frames() <= 0) return;
         const GuiRect area = waveform_area(app);
         const GuiRect top  = top_strip_area(app);
@@ -2179,6 +2367,9 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_motion([&](int mouse_x, int /*mouse_y*/, unsigned int mods) {
+        if constexpr (kDebugPerf) {
+            app.last_input_event_time = std::chrono::steady_clock::now();
+        }
         if (app.viewport_pan.active) {
             // Pan continues as long as we keep seeing motion events, even
             // if Button1Mask flickers on a busy system — only the release
@@ -2282,6 +2473,7 @@ int main(int argc, char** argv) {
         }
 
         audio = std::move(next);
+        app.audio_generation++;
         app.loading       = false;
         app.load_progress = 0.0f;
 

@@ -7,6 +7,14 @@
 #include <string>
 #include <vector>
 
+namespace perf_counters {
+    int wf_cols              = 0;
+    int wf_pyramid_samples   = 0;
+    int flag_measure         = 0;
+    int flag_drawn           = 0;
+    int flag_elided          = 0;
+}
+
 namespace {
 
 // True if the label defined by marker at `def_index` is disabled. The
@@ -153,6 +161,20 @@ void render_waveform(cairo_t* cr,
         const auto mm = audio.get_peak_range(channel, level, s0, s1);
         const double min_val = mm.first;
         const double max_val = mm.second;
+
+        if constexpr (kDebugPerf) {
+            perf_counters::wf_cols++;
+            if (level <= 0) {
+                perf_counters::wf_pyramid_samples +=
+                    static_cast<int>(s1 - s0);
+            } else {
+                const long long stride = 1LL << level;
+                const long long i0 = s0 / stride;
+                const long long i1 = (s1 + stride - 1) / stride;
+                perf_counters::wf_pyramid_samples +=
+                    static_cast<int>(i1 - i0);
+            }
+        }
 
         const double y_top    = y_center - max_val * half_h;
         const double y_bottom = y_center - min_val * half_h;
@@ -351,13 +373,17 @@ void iterate_visible_flags(cairo_t* cr,
             (ms - static_cast<double>(viewport_start_sample))
                 / samples_per_pixel + 0.5;
         const double text_left = x_px + left_offset;
-        if (text_left < rightmost_right_edge + pad) continue;
+        if (text_left < rightmost_right_edge + pad) {
+            if constexpr (kDebugPerf) perf_counters::flag_elided++;
+            continue;
+        }
 
         const std::string text = flag_text(markers, static_cast<int>(i));
         if (text.empty()) continue;
 
         cairo_text_extents_t ext;
         cairo_text_extents(cr, text.c_str(), &ext);
+        if constexpr (kDebugPerf) perf_counters::flag_measure++;
 
         emit(static_cast<int>(i), text_left, baseline_y, text, ext);
         rightmost_right_edge = text_left + ext.width;
@@ -420,6 +446,7 @@ void render_flags(cairo_t* cr,
             cairo_set_source_rgb(cr, c.r, c.g, c.b);
             cairo_move_to(cr, text_left, baseline_y);
             cairo_show_text(cr, text.c_str());
+            if constexpr (kDebugPerf) perf_counters::flag_drawn++;
         });
 
     cairo_restore(cr);

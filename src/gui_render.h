@@ -144,3 +144,27 @@ void render_dirty_indicator(cairo_t* cr, double cx, double cy,
 // Returns the pixel width of the baseline-style monospace timestamp at the
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);
+
+// One-line toggle for the render-path perf instrumentation (chunk M). When
+// false, all perf_counters increments and [dbg perf] stderr emissions in
+// the redraw path are compiled out.
+constexpr bool kDebugPerf = true;
+
+// Hot-loop counters for perf instrumentation. Incremented by the render
+// helpers on every relevant inner-loop step; the caller zeroes them with
+// perf_counters::reset() before a measured pass and reads the totals
+// afterwards. Single-threaded, no synchronization.
+namespace perf_counters {
+    extern int wf_cols;              // pixel columns drawn by render_waveform
+    extern int wf_pyramid_samples;   // peak-pyramid samples read
+    extern int flag_measure;         // cairo_text_extents calls in flag render
+    extern int flag_drawn;           // flags emitted (not elided)
+    extern int flag_elided;          // viewport-hit flags skipped by greedy pack
+    inline void reset() {
+        wf_cols = 0;
+        wf_pyramid_samples = 0;
+        flag_measure = 0;
+        flag_drawn = 0;
+        flag_elided = 0;
+    }
+}
