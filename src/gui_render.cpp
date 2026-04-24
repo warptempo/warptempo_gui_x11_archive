@@ -454,14 +454,17 @@ void render_flags(cairo_t* cr,
             // Only the last-selected flag gets the background highlight.
             // Height and vertical position come from `uniform_ext` so the
             // box is identical across flag types (text stays centered on
-            // `baseline_y` independently).
+            // `baseline_y` independently). The box's left edge sits on
+            // `text_left` — the marker's integer-snapped pixel column —
+            // with no x_bearing adjustment and no left-side padding, so it
+            // visually aligns with the marker line and the playhead column.
             if (is_last) {
                 cairo_set_source_rgb(cr, highlight_color.r,
                                      highlight_color.g, highlight_color.b);
                 cairo_rectangle(cr,
-                                text_left + ext.x_bearing - hl_pad,
+                                text_left,
                                 baseline_y + uniform_ext.y_bearing - hl_pad,
-                                ext.width  + 2 * hl_pad,
+                                ext.x_bearing + ext.width + hl_pad,
                                 uniform_ext.height + 2 * hl_pad);
                 cairo_fill(cr);
             }
@@ -500,9 +503,12 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     cairo_set_font_size(cr, font_size);
 
     // Mirror render_flags: uniform y/height for the hit rect so clicks
-    // register consistently across flag types.
+    // register consistently across flag types. Left edge + width match the
+    // corrected visual highlight box so clicks anywhere inside the painted
+    // background register on the marker.
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    const double hl_pad = 2.0;
 
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
@@ -511,10 +517,10 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
             const std::string& /*text*/, const cairo_text_extents_t& ext) {
             FlagHitRect r;
             r.marker_index = i;
-            r.x = text_left + ext.x_bearing;
-            r.y = baseline_y + uniform_ext.y_bearing;
-            r.w = ext.width;
-            r.h = uniform_ext.height;
+            r.x = text_left;
+            r.y = baseline_y + uniform_ext.y_bearing - hl_pad;
+            r.w = ext.x_bearing + ext.width + hl_pad;
+            r.h = uniform_ext.height + 2 * hl_pad;
             out.push_back(r);
         });
 
@@ -528,6 +534,185 @@ void render_dirty_indicator(cairo_t* cr, double cx, double cy,
     cairo_set_source_rgb(cr, color.r, color.g, color.b);
     cairo_arc(cr, cx, cy, 3.0, 0.0, 6.283185307179586);
     cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+namespace {
+
+constexpr double kDialogFontSize    = 16.0;
+constexpr double kDialogTextPadX    = 24.0;
+constexpr double kDialogTextPadY    = 18.0;
+constexpr double kDialogButtonPadX  = 14.0;
+constexpr double kDialogButtonPadY  = 8.0;
+constexpr double kDialogButtonGap   = 12.0;
+constexpr double kDialogButtonRowGap = 20.0;
+constexpr double kDialogOverlayAlpha = 0.55;
+
+// Sum up button text widths (Cairo x_advance) at the dialog font size.
+struct ButtonMetrics {
+    double save_w;
+    double discard_w;
+    double cancel_w;
+    double ascent;
+    double descent;
+    double font_height;
+};
+
+ButtonMetrics measure_button_metrics(cairo_t* cr) {
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, kDialogFontSize);
+    cairo_text_extents_t ext;
+    cairo_font_extents_t fext;
+    cairo_font_extents(cr, &fext);
+    ButtonMetrics m;
+    cairo_text_extents(cr, "Save",    &ext); m.save_w    = ext.x_advance;
+    cairo_text_extents(cr, "Discard", &ext); m.discard_w = ext.x_advance;
+    cairo_text_extents(cr, "Cancel",  &ext); m.cancel_w  = ext.x_advance;
+    m.ascent      = fext.ascent;
+    m.descent     = fext.descent;
+    m.font_height = fext.height;
+    cairo_restore(cr);
+    return m;
+}
+
+double measure_dialog_text_width(cairo_t* cr, const char* text) {
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, kDialogFontSize);
+    cairo_text_extents_t ext;
+    cairo_text_extents(cr, text, &ext);
+    cairo_restore(cr);
+    return ext.x_advance;
+}
+
+} // namespace
+
+DialogLayout compute_dialog_layout(cairo_t* cr,
+                                   int window_w,
+                                   int window_h,
+                                   const char* prompt_text) {
+    const ButtonMetrics bm = measure_button_metrics(cr);
+    const double prompt_w = measure_dialog_text_width(cr, prompt_text);
+
+    const double btn_h = bm.font_height + 2 * kDialogButtonPadY;
+    const double save_btn_w    = bm.save_w    + 2 * kDialogButtonPadX;
+    const double discard_btn_w = bm.discard_w + 2 * kDialogButtonPadX;
+    const double cancel_btn_w  = bm.cancel_w  + 2 * kDialogButtonPadX;
+    const double btn_row_w = save_btn_w + discard_btn_w + cancel_btn_w +
+                             2 * kDialogButtonGap;
+
+    double panel_w = std::max(prompt_w, btn_row_w) + 2 * kDialogTextPadX;
+    double panel_h = kDialogTextPadY + bm.font_height +
+                     kDialogButtonRowGap + btn_h + kDialogTextPadY;
+
+    const double max_w = std::max(0, window_w - 40);
+    const double max_h = std::max(0, window_h - 40);
+    if (panel_w > max_w) panel_w = max_w;
+    if (panel_h > max_h) panel_h = max_h;
+
+    const double panel_x = std::floor((window_w - panel_w) * 0.5);
+    const double panel_y = std::floor((window_h - panel_h) * 0.5);
+
+    const double btn_y = panel_y + kDialogTextPadY + bm.font_height +
+                         kDialogButtonRowGap;
+    const double btn_row_x =
+        std::floor(panel_x + (panel_w - btn_row_w) * 0.5);
+
+    DialogLayout L;
+    L.panel   = {static_cast<int>(std::floor(panel_x)),
+                 static_cast<int>(std::floor(panel_y)),
+                 static_cast<int>(std::ceil(panel_w)),
+                 static_cast<int>(std::ceil(panel_h))};
+    L.save    = {static_cast<int>(btn_row_x),
+                 static_cast<int>(std::floor(btn_y)),
+                 static_cast<int>(std::ceil(save_btn_w)),
+                 static_cast<int>(std::ceil(btn_h))};
+    L.discard = {static_cast<int>(btn_row_x + save_btn_w + kDialogButtonGap),
+                 static_cast<int>(std::floor(btn_y)),
+                 static_cast<int>(std::ceil(discard_btn_w)),
+                 static_cast<int>(std::ceil(btn_h))};
+    L.cancel  = {static_cast<int>(btn_row_x + save_btn_w + kDialogButtonGap +
+                                  discard_btn_w + kDialogButtonGap),
+                 static_cast<int>(std::floor(btn_y)),
+                 static_cast<int>(std::ceil(cancel_btn_w)),
+                 static_cast<int>(std::ceil(btn_h))};
+    return L;
+}
+
+void render_dialog(cairo_t* cr,
+                   const DialogLayout& layout,
+                   const char* prompt_text,
+                   int focused_button_index,
+                   int window_w,
+                   int window_h,
+                   GuiColor text_color,
+                   GuiColor panel_color,
+                   GuiColor button_color,
+                   GuiColor focus_color) {
+    cairo_save(cr);
+
+    // Dim overlay over the entire window.
+    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, kDialogOverlayAlpha);
+    cairo_rectangle(cr, 0, 0, window_w, window_h);
+    cairo_fill(cr);
+
+    // Panel.
+    cairo_set_source_rgb(cr, panel_color.r, panel_color.g, panel_color.b);
+    cairo_rectangle(cr, layout.panel.x, layout.panel.y,
+                    layout.panel.w, layout.panel.h);
+    cairo_fill(cr);
+
+    // Prompt text: centered horizontally, near panel top.
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, kDialogFontSize);
+
+    cairo_text_extents_t ext;
+    cairo_font_extents_t fext;
+    cairo_font_extents(cr, &fext);
+    cairo_text_extents(cr, prompt_text, &ext);
+    const double text_x = layout.panel.x +
+        std::floor((layout.panel.w - ext.x_advance) * 0.5);
+    const double text_y = layout.panel.y + kDialogTextPadY + fext.ascent;
+    cairo_set_source_rgb(cr, text_color.r, text_color.g, text_color.b);
+    cairo_move_to(cr, text_x, text_y);
+    cairo_show_text(cr, prompt_text);
+
+    // Buttons.
+    const DialogButtonRect* btns[3] = {
+        &layout.save, &layout.discard, &layout.cancel };
+    const char* labels[3] = { "Save", "Discard", "Cancel" };
+    for (int i = 0; i < 3; ++i) {
+        const DialogButtonRect& r = *btns[i];
+        const bool focused = (i == focused_button_index);
+        if (focused) {
+            cairo_set_source_rgb(cr, focus_color.r, focus_color.g, focus_color.b);
+        } else {
+            cairo_set_source_rgb(cr, button_color.r, button_color.g, button_color.b);
+        }
+        cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+        cairo_fill(cr);
+        if (focused) {
+            // Outline so the focus is legible even if the tint is subtle.
+            cairo_set_source_rgb(cr, text_color.r, text_color.g, text_color.b);
+            cairo_set_line_width(cr, 2.0);
+            cairo_rectangle(cr, r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+            cairo_stroke(cr);
+        }
+        cairo_text_extents(cr, labels[i], &ext);
+        const double lx = r.x + (r.w - ext.x_advance) * 0.5;
+        const double ly = r.y + (r.h + fext.ascent - fext.descent) * 0.5;
+        cairo_set_source_rgb(cr, text_color.r, text_color.g, text_color.b);
+        cairo_move_to(cr, lx, ly);
+        cairo_show_text(cr, labels[i]);
+    }
+
     cairo_restore(cr);
 }
 

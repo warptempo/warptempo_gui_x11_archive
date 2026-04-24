@@ -47,6 +47,15 @@ constexpr GuiColor kFlagHighlightColor= {0.30, 0.28, 0.22};
 constexpr GuiColor kDirtyColor        = {0.90, 0.65, 0.35};
 constexpr double   kFlagFontSize      = 13.0;
 
+// Unsaved-work dialog palette: panel = the waveform-dim tone; button =
+// the flag-highlight tone; focus = the playhead/selected yellow. Text
+// reuses the marker text color so it stays legible on both panel and
+// button backgrounds.
+constexpr GuiColor kDialogTextColor   = kMarkerColor;
+constexpr GuiColor kDialogPanelColor  = kWaveformDimColor;
+constexpr GuiColor kDialogButtonColor = kFlagHighlightColor;
+constexpr GuiColor kDialogFocusColor  = {0.55, 0.45, 0.20};
+
 // Half-width in pixels of the selection-hit window when clicking on a marker.
 constexpr int kMarkerHitHalfPx = 3;
 
@@ -199,6 +208,21 @@ struct PlayheadDragState {
     bool last_added_was_fresh = false;
 };
 
+// What action triggered the unsaved-work dialog; dictates what
+// Save / Discard actually proceed with after the dialog dismisses.
+enum class DialogTrigger { CLOSE_WINDOW, REVERT_TO_BLANK };
+
+// In-window modal dialog state. When `active` is true, the redraw paints
+// a dim overlay + panel + three buttons on top of the normal pipeline,
+// input handling routes through dialog-only filters, and the rest of the
+// UI is visually blocked. `focused_button` is 0=Save, 1=Discard, 2=Cancel.
+struct DialogState {
+    bool           active         = false;
+    int            focused_button = 0;
+    DialogTrigger  trigger        = DialogTrigger::CLOSE_WINDOW;
+    std::string    prompt_text    = "Unsaved changes. Save before continuing?";
+};
+
 // Navigational bookmark. Holds a snapshot of the three fields that define
 // what the user sees and where playback would start. Not in the undo domain.
 struct Tab {
@@ -258,6 +282,11 @@ struct AppState {
     // records these; later chunks will parse their contents.
     std::string warpmarkers_path;
     std::string settings_path;
+
+    // Absolute or relative path of the currently loaded audio file. Used by
+    // the chunk-Q render hotkey stub to compute the output path. Empty when
+    // no file is loaded (blank state).
+    std::string source_audio_path;
 
     // Parsed warp markers for the currently loaded audio. Empty on load
     // failure or before the first audio load.
@@ -328,6 +357,10 @@ struct AppState {
     // verbatim on save. Preserves original order. Never interpreted by
     // the GUI; exists so the wrapper script's keys survive a round-trip.
     std::vector<std::pair<std::string, std::string>> settings_passthrough;
+
+    // Unsaved-work dialog. Active only when a close / revert gesture
+    // fires while history is dirty. See Part 2 of chunk Q.
+    DialogState dialog;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -1129,6 +1162,20 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Unsaved-work dialog sits on top of everything else. The modal
+        // paint happens after all normal rendering so the dim overlay and
+        // dialog panel visually cover the waveform / flags / timestamp.
+        if (app.dialog.active) {
+            const DialogLayout L = compute_dialog_layout(
+                cr, app.width, app.height,
+                app.dialog.prompt_text.c_str());
+            render_dialog(cr, L, app.dialog.prompt_text.c_str(),
+                          app.dialog.focused_button,
+                          app.width, app.height,
+                          kDialogTextColor, kDialogPanelColor,
+                          kDialogButtonColor, kDialogFocusColor);
+        }
+
         cairo_restore(cr);
 
         // Force any pending Cairo ops out to the X server so the flush cost
@@ -1926,8 +1973,8 @@ int main(int argc, char** argv) {
         t.playhead_sample       = app.playhead_sample;
     };
 
-    auto save_markers = [&]() {
-        if (app.warpmarkers_path.empty()) return;
+    auto save_markers = [&]() -> bool {
+        if (app.warpmarkers_path.empty()) return false;
         if (app.first_save_pending && app.markers.had_nonstandard_content()) {
             std::fprintf(stderr,
                 "warptempo_gui: first save in this session will discard "
@@ -1944,7 +1991,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                 "warptempo_gui: save failed: %s\n",
                 app.warpmarkers_path.c_str());
-            return;
+            return false;
         }
         app.first_save_pending = false;
         // Save rebinds the saved reference to the current timeline position
@@ -1969,6 +2016,7 @@ int main(int argc, char** argv) {
                     std::strerror(errno));
             }
         }
+        return true;
     };
 
     // Snap the visible playhead back to where Space was last pressed and
@@ -1987,6 +2035,121 @@ int main(int argc, char** argv) {
         gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
         app.is_playing      = false;
         app.playback_cursor = app.playhead_sample;
+    };
+
+    // -- Unsaved-work dialog + blank-state revert (chunk Q) -----------------
+
+    auto invalidate_all = [&]() {
+        gui.invalidate_region(0, 0, app.width, app.height);
+    };
+
+    // Drop the currently loaded audio and reset all per-file UI state to
+    // what the GUI looks like when launched with no argument. Leaves the
+    // window open so the user can drop another file or quit. Bound to
+    // Ctrl+W (proceed path from either the clean branch or the dialog).
+    auto revert_to_blank = [&]() {
+        // Stop the audio thread before the sample buffer it borrows goes
+        // away. Same invariant as load_file.
+        playback.stop();
+        playback.shutdown();
+        app.is_playing      = false;
+        app.playback_cursor = 0;
+
+        audio = GuiAudio{};
+        app.audio_generation++;
+        wf_cache.destroy_surface();
+
+        app.playhead_sample       = 0;
+        app.viewport_start_sample = 0;
+        app.zoom_level            = 0;
+        app.follow_mode           = true;
+        app.last_space_sample     = 0;
+        app.playback_speed        = 1.0f;
+
+        app.markers.clear();
+        app.selected_markers.clear();
+        app.last_selected_marker = -1;
+        app.drag          = DragState{};
+        app.playhead_drag = PlayheadDragState{};
+        app.history.reset();
+        app.dirty              = false;
+        app.first_save_pending = true;
+
+        app.warpmarkers_path.clear();
+        app.settings_path.clear();
+        app.source_audio_path.clear();
+        app.pending_drop_path.clear();
+        app.settings_passthrough.clear();
+
+        app.tab_a = Tab{};
+        app.tab_b = Tab{};
+        app.active_tab = 'A';
+
+        invalidate_all();
+    };
+
+    auto proceed_with_trigger = [&](DialogTrigger t) {
+        switch (t) {
+        case DialogTrigger::CLOSE_WINDOW:
+            gui.request_exit();
+            break;
+        case DialogTrigger::REVERT_TO_BLANK:
+            revert_to_blank();
+            break;
+        }
+    };
+
+    auto open_unsaved_dialog = [&](DialogTrigger t) {
+        app.dialog.active         = true;
+        app.dialog.focused_button = 0;
+        app.dialog.trigger        = t;
+        app.dialog.prompt_text    =
+            "Unsaved changes. Save before continuing?";
+        invalidate_all();
+    };
+
+    auto close_dialog = [&]() {
+        app.dialog = DialogState{};
+        invalidate_all();
+    };
+
+    // Dispatch a dialog button activation. `button` is 0=Save, 1=Discard,
+    // 2=Cancel. Save runs the normal save path; on failure it leaves the
+    // dialog open with "Save failed." as the prompt text. The triggering
+    // action proceeds only after a successful Save or Discard.
+    auto dialog_activate_button = [&](int button) {
+        if (!app.dialog.active) return;
+        const DialogTrigger t = app.dialog.trigger;
+        switch (button) {
+        case 0: { // Save
+            const bool ok = save_markers();
+            if (!ok) {
+                app.dialog.prompt_text = "Save failed.";
+                invalidate_all();
+                return;
+            }
+            close_dialog();
+            proceed_with_trigger(t);
+            break;
+        }
+        case 1: // Discard
+            close_dialog();
+            proceed_with_trigger(t);
+            break;
+        case 2: // Cancel
+        default:
+            close_dialog();
+            break;
+        }
+    };
+
+    // Route a close / revert gesture through the dialog when history is
+    // dirty; otherwise proceed immediately. Centralizes the decision so
+    // Ctrl+Q, Ctrl+W, and the WM-close callback share identical behavior.
+    auto request_close_or_revert = [&](DialogTrigger t) {
+        if (app.dialog.active) return; // already gated; ignore re-entry
+        if (app.dirty) open_unsaved_dialog(t);
+        else           proceed_with_trigger(t);
     };
 
     // Space-bar: start/stop playback. Playback runs from the playhead to
@@ -2401,14 +2564,55 @@ int main(int argc, char** argv) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
         }
-        if (app.loading || audio.total_frames() <= 0) {
-            if (keysym == XK_Escape) gui.request_exit();
-            return;
-        }
         const bool ctrl  = (mods & ControlMask) != 0;
         const bool shift = (mods & ShiftMask)   != 0;
+        const bool alt   = (mods & Mod1Mask)    != 0;
 
-        // Escape during a Ctrl+drag cancels the drag instead of exiting.
+        // Unsaved-work dialog owns input while active. Only the dialog's
+        // own keys (Tab / Shift+Tab / arrows / Enter / Esc) route through
+        // dialog handling; everything else is swallowed so marker edits /
+        // playback / viewport keys cannot sneak in while the modal is up.
+        if (app.dialog.active) {
+            if (keysym == XK_Escape) {
+                dialog_activate_button(2); // Cancel
+                return;
+            }
+            if (keysym == XK_Return || keysym == XK_KP_Enter) {
+                dialog_activate_button(app.dialog.focused_button);
+                return;
+            }
+            const bool move_left =
+                keysym == XK_Left ||
+                keysym == XK_ISO_Left_Tab ||
+                (keysym == XK_Tab && shift);
+            const bool move_right =
+                keysym == XK_Right ||
+                (keysym == XK_Tab && !shift);
+            if (move_left) {
+                app.dialog.focused_button = (app.dialog.focused_button + 2) % 3;
+                invalidate_all();
+                return;
+            }
+            if (move_right) {
+                app.dialog.focused_button = (app.dialog.focused_button + 1) % 3;
+                invalidate_all();
+                return;
+            }
+            // Other keys: swallow.
+            return;
+        }
+
+        // Blank / loading state: only the quit / close-gesture bindings run;
+        // everything else no-ops. Dialog can't fire here because dirty is
+        // always false in blank state (history is reset on revert).
+        if (app.loading || audio.total_frames() <= 0) {
+            if (ctrl && !shift && !alt && keysym == XK_q) {
+                request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
+            }
+            return;
+        }
+
+        // Escape during a Ctrl+drag cancels the drag.
         if (keysym == XK_Escape && app.drag.active) {
             cancel_drag();
             return;
@@ -2419,6 +2623,46 @@ int main(int argc, char** argv) {
         // progress per motion event, so there's nothing to revert).
         if (keysym == XK_Escape && app.playhead_drag.active) {
             app.playhead_drag = PlayheadDragState{};
+            return;
+        }
+
+        // Ctrl+Q: quit (via unsaved-work dialog when dirty).
+        if (ctrl && !shift && !alt && keysym == XK_q) {
+            request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
+            return;
+        }
+
+        // Ctrl+W: revert to blank state (via unsaved-work dialog when dirty).
+        if (ctrl && !shift && !alt && keysym == XK_w) {
+            request_close_or_revert(DialogTrigger::REVERT_TO_BLANK);
+            return;
+        }
+
+        // Ctrl+Alt+R: render-stub hotkey. Prints one stderr line announcing
+        // the output path that a future rendering pipeline would write to;
+        // does nothing else. Silent no-op is already covered by the blank-
+        // state early return above, but guard on source path anyway.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_r || keysym == XK_R)) {
+            if (!app.source_audio_path.empty()) {
+                std::filesystem::path src(app.source_audio_path);
+                std::filesystem::path dir = src.parent_path();
+                if (dir.empty()) dir = std::filesystem::path(".");
+                std::string title;
+                for (const auto& kv : app.settings_passthrough) {
+                    if (kv.first == "title") { title = kv.second; break; }
+                }
+                std::filesystem::path out;
+                if (!title.empty()) {
+                    out = dir / (title + ".wav");
+                } else {
+                    std::string stem = src.stem().string();
+                    out = dir / (stem + ".rendered.wav");
+                }
+                std::fprintf(stderr,
+                    "warptempo_gui: render stub: would write %s\n",
+                    out.string().c_str());
+            }
             return;
         }
 
@@ -2530,7 +2774,7 @@ int main(int argc, char** argv) {
         }
 
         switch (keysym) {
-        case XK_Escape: gui.request_exit();               break;
+        case XK_Escape: /* top-level Escape is a no-op (chunk Q) */ break;
         case XK_Left:   stop_playback_if_playing();
                         move_playhead_pixels(-1);         break;
         case XK_Right:  stop_playback_if_playing();
@@ -2551,12 +2795,38 @@ int main(int argc, char** argv) {
         }
     });
 
-    gui.set_on_close([&]() { gui.request_exit(); });
+    gui.set_on_close([&]() {
+        // Window-manager close (title-bar X) routes through the unsaved-
+        // work dialog when dirty, same as Ctrl+Q.
+        request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
+    });
 
     gui.set_on_button_press([&](unsigned int button, int x, int y,
                                 unsigned int mods) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
+        }
+        // Dialog-modal input handling: only left-button clicks on a dialog
+        // button do anything; everything else (including wheel) is swallowed.
+        if (app.dialog.active) {
+            if (button != 1) return;
+            cairo_surface_t* s = cairo_image_surface_create(
+                CAIRO_FORMAT_ARGB32, 1, 1);
+            cairo_t* c = cairo_create(s);
+            const DialogLayout L = compute_dialog_layout(
+                c, app.width, app.height,
+                app.dialog.prompt_text.c_str());
+            cairo_destroy(c);
+            cairo_surface_destroy(s);
+            auto in = [&](const DialogButtonRect& r) {
+                return x >= r.x && x < r.x + r.w &&
+                       y >= r.y && y < r.y + r.h;
+            };
+            if      (in(L.save))    dialog_activate_button(0);
+            else if (in(L.discard)) dialog_activate_button(1);
+            else if (in(L.cancel))  dialog_activate_button(2);
+            // Click outside any button: no-op per spec.
+            return;
         }
         if (app.loading || audio.total_frames() <= 0) return;
         const GuiRect area = waveform_area(app);
@@ -2746,6 +3016,7 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_button_release([&](unsigned int button, int, int, unsigned int) {
+        if (app.dialog.active) return;
         if (button != 1) return;
         if (app.playhead_drag.active) {
             app.playhead_drag = PlayheadDragState{};
@@ -2759,6 +3030,7 @@ int main(int argc, char** argv) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
         }
+        if (app.dialog.active) return;
         if (app.playhead_drag.active) {
             // Modifier changes mid-drag are ignored: only shift_at_press
             // governs gesture behavior. Left button must still be held; if
@@ -2956,6 +3228,7 @@ int main(int argc, char** argv) {
         const std::filesystem::path set_path = parent / ".settings";
         app.warpmarkers_path = wm_path.string();
         app.settings_path    = set_path.string();
+        app.source_audio_path = path;
 
         create_if_missing(wm_path, "00:00.000|1.00\n");
 

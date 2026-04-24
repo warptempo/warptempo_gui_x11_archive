@@ -145,6 +145,48 @@ void render_dirty_indicator(cairo_t* cr, double cx, double cy,
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);
 
+// Unsaved-work dialog: rectangle of one of the three buttons, in screen
+// coords. Returned by the layout helper so the click handler can hit-test.
+struct DialogButtonRect {
+    int x;
+    int y;
+    int w;
+    int h;
+};
+
+// Layout of the entire dialog: the three buttons' rects (Save / Discard /
+// Cancel in left-to-right order) and the panel's outer bounds. Panel width
+// scales to fit the prompt text; height is fixed for the three-button row.
+struct DialogLayout {
+    DialogButtonRect panel;
+    DialogButtonRect save;
+    DialogButtonRect discard;
+    DialogButtonRect cancel;
+};
+
+// Compute the dialog's on-screen layout against the current window
+// dimensions and the prompt text. Cairo is needed for font measurement;
+// the caller's `cr` can be the same pixmap context.
+DialogLayout compute_dialog_layout(cairo_t* cr,
+                                   int window_w,
+                                   int window_h,
+                                   const char* prompt_text);
+
+// Paint the unsaved-work dialog: a semi-transparent overlay across the
+// window, a centered panel with the prompt text, and three buttons. The
+// button at `focused_button_index` (0 = Save, 1 = Discard, 2 = Cancel)
+// renders with a highlighted outline; the others paint plain.
+void render_dialog(cairo_t* cr,
+                   const DialogLayout& layout,
+                   const char* prompt_text,
+                   int focused_button_index,
+                   int window_w,
+                   int window_h,
+                   GuiColor text_color,
+                   GuiColor panel_color,
+                   GuiColor button_color,
+                   GuiColor focus_color);
+
 // One-line toggle for the render-path perf instrumentation (chunk M). When
 // false, all perf_counters increments and [dbg perf] stderr emissions in
 // the redraw path are compiled out.
