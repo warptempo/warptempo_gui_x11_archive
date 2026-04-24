@@ -14,13 +14,15 @@ find_library(FFTW3_THREADS_LIB fftw3_threads HINTS ${FFTW3_LIBRARY_DIRS} REQUIRE
 # --- 1. Build the DSP Engine (Modular) ---
 add_executable(warptempo_engine
     src/main.cpp
-    src/phase_vocoder.cpp
-    src/transients.cpp
-    src/limiter.cpp
-    src/synthesis.cpp
+    src/engine/engine.cpp
+    src/engine/phase_vocoder.cpp
+    src/engine/transients.cpp
+    src/engine/limiter.cpp
+    src/engine/synthesis.cpp
 )
 target_include_directories(warptempo_engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/engine
     ${SNDFILE_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
 )
@@ -48,21 +50,33 @@ add_executable(warptempo_gui
     src/gui_render.cpp
     src/gui_markers.cpp
     src/gui_playback.cpp
+    src/gui_render_pipeline.cpp
+    src/timemap.cpp
     src/miniaudio_impl.cpp
+    src/engine/engine.cpp
+    src/engine/phase_vocoder.cpp
+    src/engine/transients.cpp
+    src/engine/limiter.cpp
+    src/engine/synthesis.cpp
 )
 target_include_directories(warptempo_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/engine
     ${X11_INCLUDE_DIRS}
     ${CAIRO_INCLUDE_DIRS}
     ${SNDFILE_INCLUDE_DIRS}
+    ${FFTW3_INCLUDE_DIRS}
 )
 target_link_libraries(warptempo_gui PRIVATE
     ${X11_LIBRARIES}
     ${CAIRO_LIBRARIES}
     ${SNDFILE_LIBRARIES}
+    ${FFTW3_THREADS_LIB}
+    ${FFTW3_LIBRARIES}
     pthread
     dl
     m
+    $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
 # miniaudio is vendored third-party C. Suppress the warnings that its macro

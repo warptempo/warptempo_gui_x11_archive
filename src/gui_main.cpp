@@ -2,6 +2,7 @@
 #include "gui_markers.h"
 #include "gui_playback.h"
 #include "gui_render.h"
+#include "gui_render_pipeline.h"
 #include "gui_x11.h"
 
 #include <cairo/cairo.h>
@@ -2638,30 +2639,17 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Ctrl+Alt+R: render-stub hotkey. Prints one stderr line announcing
-        // the output path that a future rendering pipeline would write to;
-        // does nothing else. Silent no-op is already covered by the blank-
-        // state early return above, but guard on source path anyway.
+        // Ctrl+Alt+R: in-process render. Synchronous — blocks the UI until
+        // the pipeline finishes; all output goes to stderr (the GUI has no
+        // progress UI for it yet). Silent no-op when no audio is loaded.
         if (ctrl && alt && !shift &&
             (keysym == XK_r || keysym == XK_R)) {
             if (!app.source_audio_path.empty()) {
-                std::filesystem::path src(app.source_audio_path);
-                std::filesystem::path dir = src.parent_path();
-                if (dir.empty()) dir = std::filesystem::path(".");
-                std::string title;
-                for (const auto& kv : app.settings_passthrough) {
-                    if (kv.first == "title") { title = kv.second; break; }
-                }
-                std::filesystem::path out;
-                if (!title.empty()) {
-                    out = dir / (title + ".wav");
-                } else {
-                    std::string stem = src.stem().string();
-                    out = dir / (stem + ".rendered.wav");
-                }
-                std::fprintf(stderr,
-                    "warptempo_gui: render stub: would write %s\n",
-                    out.string().c_str());
+                RenderRequest req;
+                req.source_audio_path    = app.source_audio_path;
+                req.markers              = app.markers.markers();
+                req.settings_passthrough = app.settings_passthrough;
+                do_render(req);
             }
             return;
         }
