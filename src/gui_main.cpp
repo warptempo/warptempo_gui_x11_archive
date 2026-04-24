@@ -72,6 +72,22 @@ constexpr double kDirtyGapPx              = 8.0;
 // pixels total — generous enough to cover 1px line plus subpixel rounding.
 constexpr int kPlayheadHalfPx = 1;
 
+// Classification of each undo entry by the net effect of its op on the
+// marker vector. Used by post-restore rules to decide selection and
+// playhead behavior; count-preserving ops split Move vs Other so Move can
+// restore the "what just moved" selection.
+enum class OpKind { Create, Destroy, Move, Other };
+
+// One entry on either stack. Carries the pre-mutation marker snapshot plus
+// a pre-op selection hint (so Undo-of-Destroy / Undo-of-Move can restore
+// a sensible selection anchor) and the op kind.
+struct UndoEntry {
+    std::vector<GuiMarker> snapshot;
+    OpKind                 op_kind              = OpKind::Other;
+    std::set<int>          hint_selected;
+    int                    hint_last_selected   = -1;
+};
+
 // Ctrl+drag state. `active` gates motion handling; the rest captures the
 // pre-drag snapshot so Escape can restore positions and clamps can be
 // evaluated without re-scanning the marker list on every motion event.
@@ -95,12 +111,21 @@ struct DragState {
     // can push it onto the undo stack. Escape-cancel discards it implicitly
     // (DragState is reset wholesale there).
     std::vector<GuiMarker> pre_drag_snapshot;
+    // Pre-drag selection for the undo hint; carried onto the entry at commit.
+    std::set<int>          pre_drag_selected;
+    int                    pre_drag_last_selected = -1;
+    // Index of the marker that was clicked to start the drag. Used to track
+    // the playhead during motion so the audio cursor follows the grabbed
+    // marker as it moves.
+    int                    hit_marker           = -1;
+    // Playhead sample at drag start, restored on Escape-cancel.
+    int64_t                pre_drag_playhead_sample = 0;
 };
 
 // Two-stack undo/redo history for marker mutations. Entries are full
-// snapshots of the marker vector — small enough to store directly rather
-// than diff. Both stacks are capped at kCap; the oldest undo entry is
-// evicted when the cap is exceeded.
+// snapshots of the marker vector plus an op-kind tag and pre-op selection
+// hint — small enough to store directly rather than diff. Both stacks are
+// capped at kCap; the oldest undo entry is evicted when the cap is exceeded.
 //
 // The saved reference is a signed distance from the current position to the
 // snapshot corresponding to what's on disk. Positive = ahead on the redo
@@ -110,8 +135,8 @@ struct DragState {
 // becomes false), and dirty stays true until the next save rebinds it.
 struct UndoHistory {
     static constexpr size_t kCap = 500;
-    std::vector<std::vector<GuiMarker>> undo_stack;
-    std::vector<std::vector<GuiMarker>> redo_stack;
+    std::vector<UndoEntry> undo_stack;
+    std::vector<UndoEntry> redo_stack;
     int  saved_distance = 0;
     bool saved_valid    = true;
 
@@ -119,17 +144,17 @@ struct UndoHistory {
         return !(saved_valid && saved_distance == 0);
     }
 
-    // Push the pre-mutation snapshot. Clears the redo stack. If the saved
+    // Push the pre-mutation entry. Clears the redo stack. If the saved
     // reference was on the redo stack, it's orphaned (saved_valid = false).
     // If pushing would evict the bottom of the undo stack and the saved
     // reference pointed at or below the evicted entry, it's pinned to the
     // new bottom — per Part 5 of the chunk brief, that's the least-
     // surprising user-facing behavior even though it's not strictly correct.
-    void push(std::vector<GuiMarker> pre_state) {
+    void push(UndoEntry entry) {
         if (saved_valid && saved_distance > 0) saved_valid = false;
         redo_stack.clear();
         if (saved_valid) saved_distance -= 1;
-        undo_stack.push_back(std::move(pre_state));
+        undo_stack.push_back(std::move(entry));
         if (undo_stack.size() > kCap) {
             undo_stack.erase(undo_stack.begin());
             if (saved_valid &&
