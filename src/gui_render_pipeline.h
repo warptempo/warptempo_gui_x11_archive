@@ -21,7 +21,27 @@ struct RenderRequest {
     // active-detected entries from the GUI's transient list, with disabled
     // entries filtered out and effective_frame() applied per entry.
     std::vector<int64_t>   transient_frames;
+
+    // When non-empty, do_render writes its final WAV (or .mid) into this
+    // directory under the literal name "output.wav" (or "output.mid"),
+    // bypassing the title/engine/limiter-prefix naming used for source-
+    // directory renders. Used by the render-all queue walker; empty for
+    // the immediate Ctrl+Alt+R path. The directory must already exist;
+    // do_render does not create it.
+    std::string output_dir_override;
 };
+
+// Build a RenderRequest from a queue-entry directory: loads warpmarkers
+// (required) and transientmarkers (optional) from `entry_dir`. The source
+// path and live in-memory settings come from the caller — entries do not
+// snapshot settings. Returns false if warpmarkers is missing or fails to
+// parse; logs to stderr.
+bool load_render_request_from_dir(
+    const std::string& source_audio_path,
+    const std::string& entry_dir,
+    const std::vector<std::pair<std::string, std::string>>&
+        live_settings_passthrough,
+    RenderRequest& out);
 
 // Synchronous render. Blocks the caller until the pipeline finishes (or
 // errors out). All progress / error reporting goes to stderr; this function

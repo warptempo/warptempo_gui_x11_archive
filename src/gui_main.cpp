@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -441,6 +442,13 @@ struct AppState {
     // Unsaved-work dialog. Active only when a close / revert gesture
     // fires while history is dirty. See Part 2 of chunk Q.
     DialogState dialog;
+
+    // Render-queue state (chunk U). `queue_running` is true only inside the
+    // Ctrl+Alt+Shift+E walker. The Esc handler checks it to scope the
+    // cancel binding away from normal interaction. `queue_cancel_requested`
+    // is set by Esc during a queue run and read between entries.
+    bool queue_running           = false;
+    bool queue_cancel_requested  = false;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -3831,6 +3839,17 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Esc during a render-all run requests cancellation between
+        // entries. Only fires while the queue walker is active; outside
+        // that window Esc retains its other meanings (drag-cancel, etc).
+        // Mid-engine Esc presses are queued by X and surface here on the
+        // next gui.drain_events() — they take effect after the in-flight
+        // entry completes (chunk U does not implement mid-engine cancel).
+        if (keysym == XK_Escape && app.queue_running) {
+            app.queue_cancel_requested = true;
+            return;
+        }
+
         // Escape during a Ctrl+drag cancels the drag.
         if (keysym == XK_Escape && app.drag.active) {
             cancel_drag();
@@ -3877,6 +3896,191 @@ int main(int argc, char** argv) {
                     req.transient_frames.push_back(m.effective_frame());
                 }
                 do_render(req);
+            }
+            return;
+        }
+
+        // Ctrl+Alt+E: snapshot current authoring state into a per-source
+        // render-queue entry. Pure snapshot — no render runs here.
+        // Source-side authoring files (.warpmarkers / .transientmarkers /
+        // .settings) are untouched; the entry captures live in-memory state.
+        // Settings are not snapshotted in chunk U: render-all reads the
+        // GUI's live settings_passthrough at render time.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_e || keysym == XK_E)) {
+            if (app.source_audio_path.empty()) return;
+
+            std::filesystem::path src(app.source_audio_path);
+            std::filesystem::path src_parent = src.parent_path();
+            if (src_parent.empty()) src_parent = std::filesystem::path(".");
+            const std::filesystem::path queue_root = src_parent / "renders";
+
+            auto now = std::chrono::system_clock::now();
+            std::time_t tt = std::chrono::system_clock::to_time_t(now);
+            std::tm lt{};
+            // localtime is single-threaded-safe enough for the GUI thread;
+            // copy into our own tm so a later std::localtime call cannot
+            // stomp the buffer mid-format.
+            if (std::tm* p = std::localtime(&tt)) lt = *p;
+            char ts_buf[32];
+            std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%d_%H%M%S", &lt);
+            const std::string ts = ts_buf;
+
+            // Same-second collision: append _2, _3, ... up to _100. The
+            // 100 cap is paranoia; in practice two presses in the same
+            // second is the typical worst case.
+            std::filesystem::path entry_dir = queue_root / ts;
+            int suffix = 2;
+            while (std::filesystem::exists(entry_dir)) {
+                if (suffix > 100) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: queue error: too many same-second "
+                        "entries under %s\n", queue_root.string().c_str());
+                    return;
+                }
+                entry_dir = queue_root / (ts + "_" + std::to_string(suffix));
+                ++suffix;
+            }
+
+            std::error_code ec;
+            std::filesystem::create_directories(entry_dir, ec);
+            if (ec) {
+                std::fprintf(stderr,
+                    "warptempo_gui: queue error: could not create '%s': %s\n",
+                    entry_dir.string().c_str(), ec.message().c_str());
+                return;
+            }
+
+            const std::string warp_path =
+                (entry_dir / "warpmarkers").string();
+            if (!app.markers.save(warp_path)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: queue error: failed to write '%s'\n",
+                    warp_path.c_str());
+                return;
+            }
+            // Transients file is omitted entirely when the in-memory list
+            // is empty — load_render_request_from_dir treats absence as
+            // "no transients" without warning.
+            if (!app.transients.markers().empty()) {
+                const std::string tr_path =
+                    (entry_dir / "transientmarkers").string();
+                if (!app.transients.save(tr_path)) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: queue error: failed to write '%s'\n",
+                        tr_path.c_str());
+                    return;
+                }
+            }
+
+            std::fprintf(stderr,
+                "warptempo_gui: queued render entry %s\n",
+                entry_dir.string().c_str());
+            return;
+        }
+
+        // Ctrl+Alt+Shift+E: walk this source's renders/ directory and
+        // render every pending entry serially in oldest-first directory-
+        // name order. Esc between entries cancels the remainder; mid-
+        // engine Esc presses are queued and take effect after the
+        // current entry finishes (no mid-engine cancellation in chunk U).
+        if (ctrl && alt && shift &&
+            (keysym == XK_e || keysym == XK_E)) {
+            if (app.source_audio_path.empty()) return;
+
+            std::filesystem::path src(app.source_audio_path);
+            std::filesystem::path src_parent = src.parent_path();
+            if (src_parent.empty()) src_parent = std::filesystem::path(".");
+            const std::filesystem::path queue_root = src_parent / "renders";
+
+            std::error_code ec;
+            if (!std::filesystem::is_directory(queue_root, ec)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-all: no pending entries\n");
+                return;
+            }
+
+            // Pending = subdir contains warpmarkers but not output.wav.
+            // Bad entries (no warpmarkers) are warned and skipped — they
+            // remain on disk for manual cleanup.
+            std::vector<std::filesystem::path> pending;
+            for (const auto& de :
+                 std::filesystem::directory_iterator(queue_root, ec)) {
+                if (!de.is_directory()) continue;
+                const auto p = de.path();
+                const bool has_wm = std::filesystem::exists(p / "warpmarkers");
+                const bool has_out =
+                    std::filesystem::exists(p / "output.wav") ||
+                    std::filesystem::exists(p / "output.mid");
+                if (!has_wm) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-all: skipping malformed "
+                        "entry (no warpmarkers): %s\n",
+                        p.string().c_str());
+                    continue;
+                }
+                if (has_out) continue;
+                pending.push_back(p);
+            }
+            // Directory-name lex sort == chronological order because the
+            // YYYY-MM-DD_HHMMSS prefix is fixed-width.
+            std::sort(pending.begin(), pending.end());
+
+            if (pending.empty()) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-all: no pending entries\n");
+                return;
+            }
+
+            app.queue_cancel_requested = false;
+            app.queue_running          = true;
+            const int total = static_cast<int>(pending.size());
+            int rendered = 0;
+            bool cancelled = false;
+            for (int i = 0; i < total; ++i) {
+                const auto& entry = pending[i];
+                std::fprintf(stderr,
+                    "warptempo_gui: rendering entry %d of %d: %s\n",
+                    i + 1, total, entry.filename().string().c_str());
+
+                RenderRequest req;
+                if (!load_render_request_from_dir(
+                        app.source_audio_path,
+                        entry.string(),
+                        app.settings_passthrough,
+                        req)) {
+                    // load_render_request_from_dir already logged. The
+                    // entry stays pending so a later run can retry it
+                    // after manual fixup.
+                    continue;
+                }
+                do_render(req);
+                ++rendered;
+
+                // Surface any X events queued during the render (Esc
+                // presses, expose, etc.) so the cancel flag becomes
+                // visible to the next iteration.
+                gui.drain_events();
+                if (app.queue_cancel_requested) {
+                    const int remaining = total - (i + 1);
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-all cancelled, %d entries "
+                        "remaining\n", remaining);
+                    cancelled = true;
+                    break;
+                }
+            }
+            app.queue_running          = false;
+            app.queue_cancel_requested = false;
+
+            if (cancelled) {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries (cancelled)\n",
+                    rendered, total);
+            } else {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries\n",
+                    rendered, total);
             }
             return;
         }

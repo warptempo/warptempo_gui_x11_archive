@@ -3,6 +3,7 @@
 #include "engine/engine.h"
 #include "gui_audio.h"
 #include "gui_render.h"
+#include "gui_transients.h"
 #include "timemap.h"
 
 #include <cerrno>
@@ -154,6 +155,7 @@ bool run_ffmpeg_alimiter(const std::string& in_path,
         "-y", "-i", in_path,
         "-c:a", "pcm_s24le",
         "-af",  af,
+        "-f", "wav",
         out_path
     });
 }
@@ -161,6 +163,10 @@ bool run_ffmpeg_alimiter(const std::string& in_path,
 // Resolve each GuiMarker to a MarkerForRender. Filters out markers that are:
 //   - references to disabled-defined labels
 //   - disabled label-definition markers (and thereby all refs to them)
+// EXCEPT: a disabled-cascade marker that carries an `is_begin_time` /
+// `is_end_time` trim flag is kept (the trim flag is positionally real
+// regardless of whether the marker's tempo participates), with its tempo
+// pulled from the inheritance walk-back.
 // The inherit walk-back is applied here so MarkerForRender carries a
 // concrete tempo_base / tempo_scale — same rule as resolve_inherited_tempo.
 std::vector<MarkerForRender> resolve_markers_for_render(
@@ -176,12 +182,35 @@ std::vector<MarkerForRender> resolve_markers_for_render(
         return false;
     };
 
+    // Walk backward through SOURCE markers from at_index, returning the
+    // nearest earlier marker's tempo if it owns its tempo and is not
+    // itself disabled. Skips: tempo_inherits markers, label_ref markers,
+    // and disabled label_def markers. Default if none found: {1.0, ""}.
+    auto walk_back_owning_tempo = [&](size_t at_index)
+        -> std::pair<double, std::string> {
+        for (int j = static_cast<int>(at_index) - 1; j >= 0; --j) {
+            const auto& p = src[j];
+            if (p.tempo_inherits) continue;
+            if (!p.label_ref.empty()) continue;
+            if (!p.label_def.empty() && p.disabled) continue;
+            return { p.tempo_base, p.tempo_scale };
+        }
+        return { 1.0, std::string{} };
+    };
+
     std::vector<MarkerForRender> out;
     out.reserve(src.size());
     for (size_t i = 0; i < src.size(); ++i) {
         const auto& g = src[i];
-        if (!g.label_def.empty() && g.disabled) continue;
-        if (!g.label_ref.empty() && is_disabled_ref(g.label_ref)) continue;
+        const bool is_disabled_label_def =
+            !g.label_def.empty() && g.disabled;
+        const bool is_disabled_label_ref =
+            !g.label_ref.empty() && is_disabled_ref(g.label_ref);
+        const bool is_disabled_cascade =
+            is_disabled_label_def || is_disabled_label_ref;
+        const bool has_trim_flag = g.is_begin_time || g.is_end_time;
+
+        if (is_disabled_cascade && !has_trim_flag) continue;
 
         MarkerForRender m;
         m.time_seconds  = g.time_seconds;
@@ -190,25 +219,21 @@ std::vector<MarkerForRender> resolve_markers_for_render(
         m.is_begin_time = g.is_begin_time;
         m.is_end_time   = g.is_end_time;
 
-        if (!g.label_ref.empty()) {
+        if (is_disabled_cascade) {
+            // Kept solely for the trim flag — the marker doesn't own a
+            // tempo (its label is silenced by cascade), so resolve via
+            // walk-back through earlier non-disabled, non-inheriting,
+            // non-label_ref markers.
+            auto [base, scale] = walk_back_owning_tempo(i);
+            m.tempo_base  = base;
+            m.tempo_scale = scale;
+        } else if (!g.label_ref.empty()) {
             m.tempo_base = 0.0;
             m.tempo_scale.clear();
         } else if (g.tempo_inherits) {
-            // Walk backward through SOURCE markers (not `out`) to match the
-            // existing resolve_inherited_tempo contract. Stop at the nearest
-            // earlier marker that owns its tempo and isn't a label_ref.
-            double base  = 1.0;
-            std::string scale_str;
-            for (int j = static_cast<int>(i) - 1; j >= 0; --j) {
-                const auto& p = src[j];
-                if (!p.tempo_inherits && p.label_ref.empty()) {
-                    base      = p.tempo_base;
-                    scale_str = p.tempo_scale;
-                    break;
-                }
-            }
+            auto [base, scale] = walk_back_owning_tempo(i);
             m.tempo_base  = base;
-            m.tempo_scale = scale_str;
+            m.tempo_scale = scale;
         } else {
             m.tempo_base  = g.tempo_base;
             m.tempo_scale = g.tempo_scale;
@@ -286,25 +311,40 @@ void do_render(const RenderRequest& req) {
     }
 
     // --- Compute output path. ---
-    std::filesystem::path src(req.source_audio_path);
-    std::filesystem::path dir = src.parent_path();
-    if (dir.empty()) dir = std::filesystem::path(".");
-
     const bool midi_engine = (engine == "midi");
-    // Prefix is applied iff the output WAV will be genuinely unlimited.
-    // warptempo+trimmed always runs through ffmpeg alimiter downstream, so
-    // limiter_enabled=false on the engine side is still limited on disk.
-    const bool output_unlimited =
-        !midi_engine && !user_limiter_en &&
-        !(engine == "warptempo" && tmres.trimmed);
-    std::string out_filename;
-    if (output_unlimited) {
-        out_filename = "engine=" + engine + ";limiter=false;" + title
-                     + (midi_engine ? ".mid" : ".wav");
+    std::string final_output_path;
+    if (!req.output_dir_override.empty()) {
+        // Queue-entry render: literal output.wav / output.mid in the entry
+        // directory. The engine/limiter-prefix naming does not apply — entry
+        // metadata lives in the directory's snapshotted markers files.
+        final_output_path =
+            (std::filesystem::path(req.output_dir_override) /
+             (midi_engine ? "output.mid" : "output.wav")).string();
     } else {
-        out_filename = title + (midi_engine ? ".mid" : ".wav");
+        std::filesystem::path src(req.source_audio_path);
+        std::filesystem::path dir = src.parent_path();
+        if (dir.empty()) dir = std::filesystem::path(".");
+        // Prefix is applied iff the output WAV will be genuinely unlimited.
+        // warptempo+trimmed always runs through ffmpeg alimiter downstream,
+        // so limiter_enabled=false on the engine side is still limited on
+        // disk.
+        const bool output_unlimited =
+            !midi_engine && !user_limiter_en &&
+            !(engine == "warptempo" && tmres.trimmed);
+        std::string out_filename;
+        if (output_unlimited) {
+            out_filename = "engine=" + engine + ";limiter=false;" + title
+                         + (midi_engine ? ".mid" : ".wav");
+        } else {
+            out_filename = title + (midi_engine ? ".mid" : ".wav");
+        }
+        final_output_path = (dir / out_filename).string();
     }
-    std::string output_audio_path = (dir / out_filename).string();
+    // Staging path: every engine path writes its final output here, and on
+    // success we atomically rename to final_output_path. A killed render
+    // leaves <final>.tmp behind; the next render's O_TRUNC semantics handle
+    // that (libsndfile / ffmpeg / adapters all open with truncate).
+    const std::string staging_output_path = final_output_path + ".tmp";
 
     // --- Temp file paths (pid-scoped). ---
     const pid_t pid = ::getpid();
@@ -319,6 +359,7 @@ void do_render(const RenderRequest& req) {
         unlink_silent(tmp_tm_midi);
         unlink_silent(tmp_trimmed_wav);
         unlink_silent(tmp_engine_wav);
+        unlink_silent(staging_output_path);
     };
 
     // --- Trim, if requested. ---
@@ -333,7 +374,7 @@ void do_render(const RenderRequest& req) {
     }
 
     std::fprintf(stderr, "warptempo_gui: rendering %s -> %s\n",
-                 engine.c_str(), output_audio_path.c_str());
+                 engine.c_str(), final_output_path.c_str());
 
     const double ceiling_dbfs = -0.3;  // shared limit for engine + ffmpeg
     const std::string gui_dir = gui_binary_dir();
@@ -343,7 +384,8 @@ void do_render(const RenderRequest& req) {
     if (engine == "warptempo") {
         EngineParams ep;
         ep.source_audio_path = engine_input_path;
-        ep.output_audio_path = tmres.trimmed ? tmp_engine_wav : output_audio_path;
+        ep.output_audio_path = tmres.trimmed ? tmp_engine_wav
+                                             : staging_output_path;
         ep.timemap.reserve(tmres.standard.size());
         for (const auto& s : tmres.standard) {
             ep.timemap.emplace_back(s.src_frame, s.tgt_frame);
@@ -367,7 +409,7 @@ void do_render(const RenderRequest& req) {
             return;
         }
         if (tmres.trimmed) {
-            if (!run_ffmpeg_alimiter(tmp_engine_wav, output_audio_path, ceiling_dbfs)) {
+            if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
                 cleanup_all();
                 return;
             }
@@ -388,7 +430,7 @@ void do_render(const RenderRequest& req) {
             cleanup_all();
             return;
         }
-        if (!run_ffmpeg_alimiter(tmp_engine_wav, output_audio_path, ceiling_dbfs)) {
+        if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
             return;
         }
@@ -409,7 +451,7 @@ void do_render(const RenderRequest& req) {
             cleanup_all();
             return;
         }
-        if (!run_ffmpeg_alimiter(tmp_engine_wav, output_audio_path, ceiling_dbfs)) {
+        if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
             return;
         }
@@ -430,7 +472,7 @@ void do_render(const RenderRequest& req) {
             cleanup_all();
             return;
         }
-        if (!run_ffmpeg_alimiter(tmp_engine_wav, output_audio_path, ceiling_dbfs)) {
+        if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
             return;
         }
@@ -451,7 +493,7 @@ void do_render(const RenderRequest& req) {
             cleanup_all();
             return;
         }
-        if (!run_ffmpeg_alimiter(tmp_engine_wav, output_audio_path, ceiling_dbfs)) {
+        if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
             return;
         }
@@ -472,7 +514,7 @@ void do_render(const RenderRequest& req) {
         bbs << static_cast<double>(sample_rate) * 0.002;
         if (!run_subprocess(adapter, {
                 tmp_tm_midi,
-                output_audio_path,
+                staging_output_path,
                 bbs.str(),
                 "30000"
             })) {
@@ -481,15 +523,29 @@ void do_render(const RenderRequest& req) {
         }
     }
 
+    // Atomic publish: every engine path above wrote to staging_output_path.
+    // Promote it to final_output_path with a single rename so observers
+    // (the queue walker, downstream tools) never see a half-written file.
+    std::error_code ec;
+    std::filesystem::rename(staging_output_path, final_output_path, ec);
+    if (ec) {
+        std::fprintf(stderr,
+            "warptempo_gui: render error: rename '%s' -> '%s' failed: %s\n",
+            staging_output_path.c_str(), final_output_path.c_str(),
+            ec.message().c_str());
+        cleanup_all();
+        return;
+    }
+
     // Deposit a peak-pyramid sidecar next to the rendered WAV. Fire-and-forget;
     // the function logs its own errors and never affects render success.
     if (!midi_engine) {
-        write_peaks_cache_for_wav(output_audio_path);
+        write_peaks_cache_for_wav(final_output_path);
     }
 
     cleanup_all();
     std::fprintf(stderr, "warptempo_gui: render complete: %s\n",
-                 output_audio_path.c_str());
+                 final_output_path.c_str());
 }
 
 bool do_detection(const DetectionRequest& req,
@@ -554,4 +610,53 @@ bool do_detection(const DetectionRequest& req,
         settings_get(req.settings_passthrough, "transients_anticipation_ms"), 100.0);
 
     return run_warptempo_detection(dp, out_src_frames);
+}
+
+bool load_render_request_from_dir(
+    const std::string& source_audio_path,
+    const std::string& entry_dir,
+    const std::vector<std::pair<std::string, std::string>>&
+        live_settings_passthrough,
+    RenderRequest& out) {
+
+    const std::string warp_path =
+        (std::filesystem::path(entry_dir) / "warpmarkers").string();
+    const std::string transient_path =
+        (std::filesystem::path(entry_dir) / "transientmarkers").string();
+
+    GuiMarkers wm;
+    if (!wm.load(warp_path)) {
+        std::fprintf(stderr,
+            "warptempo_gui: queue entry %s: warpmarkers parse failed\n",
+            entry_dir.c_str());
+        return false;
+    }
+
+    out.source_audio_path = source_audio_path;
+    out.markers           = wm.markers();
+    // NOTE: settings are not snapshotted per-entry in chunk U. All entries
+    // render against the GUI's live in-memory passthrough. If a settings
+    // editor is added later, this convention will need to be revisited.
+    out.settings_passthrough = live_settings_passthrough;
+    out.transient_frames.clear();
+    out.output_dir_override = entry_dir;
+
+    if (std::filesystem::exists(transient_path)) {
+        GuiTransients gt;
+        if (!gt.load(transient_path)) {
+            std::fprintf(stderr,
+                "warptempo_gui: queue entry %s: transientmarkers parse "
+                "failed; rendering with empty transient list\n",
+                entry_dir.c_str());
+        } else {
+            // Mirrors the Ctrl+Alt+R handler's resolution logic exactly:
+            // filter disabled, then push effective_frame() per entry.
+            for (const auto& m : gt.markers()) {
+                if (m.disabled) continue;
+                out.transient_frames.push_back(m.effective_frame());
+            }
+        }
+    }
+
+    return true;
 }

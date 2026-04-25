@@ -147,9 +147,9 @@ bool run_warptempo_engine(const EngineParams& p) {
                 audio_stft.transient_markers.push_back(
                     {static_cast<int>(s), F});
             }
-            std::cout << "[Pass 2/4] Transient detection.............. "
+            std::cout << "[Pass 2/4] Transient detection.............. bypassed ("
                       << audio_stft.transient_markers.size()
-                      << " curated transients\n";
+                      << " curated)\n";
         }
     } else {
         detector.process(audio_stft);
