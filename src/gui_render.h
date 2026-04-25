@@ -1,5 +1,6 @@
 #pragma once
 #include "gui_markers.h"
+#include "gui_transients.h"
 
 #include <cairo/cairo.h>
 #include <set>
@@ -121,6 +122,48 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
     const std::vector<GuiMarker>& markers,
+    long long viewport_start_sample,
+    long long viewport_end_sample,
+    int sample_rate,
+    double font_size);
+
+// Transient-marker analogues (chunk S.2.2). Same pixel layout as the warp
+// versions; the visual differences are which list is drawn (transients
+// instead of warp markers) and the supplied color set. `disabled` is taken
+// directly from each transient (no label-cascade like warp markers).
+void render_transient_markers(cairo_t* cr,
+                              GuiRect waveform_area,
+                              const std::vector<GuiTransient>& transients,
+                              long long viewport_start_sample,
+                              long long viewport_end_sample,
+                              int sample_rate,
+                              GuiColor enabled_color,
+                              GuiColor disabled_color,
+                              GuiColor selected_color,
+                              const std::set<int>& selected_set,
+                              int last_selected);
+
+// Flag text for transients is `b=I`, `e=I`, or `I` based on the trim flag.
+// S.2.2 only authors `inserted` transients, so the second character is
+// always `I`. S.3 will extend with `D` / `D*` for detected / nudged.
+void render_transient_flags(cairo_t* cr,
+                            GuiRect top_strip_area,
+                            const std::vector<GuiTransient>& transients,
+                            long long viewport_start_sample,
+                            long long viewport_end_sample,
+                            int sample_rate,
+                            GuiColor enabled_color,
+                            GuiColor disabled_color,
+                            GuiColor selected_color,
+                            GuiColor highlight_color,
+                            double font_size,
+                            const std::set<int>& selected_set,
+                            int last_selected);
+
+std::vector<FlagHitRect> compute_transient_flag_hit_rects(
+    cairo_t* cr,
+    GuiRect top_strip_area,
+    const std::vector<GuiTransient>& transients,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,

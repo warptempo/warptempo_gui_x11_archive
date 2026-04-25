@@ -544,6 +544,245 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     return out;
 }
 
+// ---------- Transient-marker rendering (chunk S.2.2) ----------
+
+namespace {
+
+std::string transient_flag_text(const GuiTransient& m) {
+    std::string text;
+    if (m.is_begin_time)    text = "b=";
+    else if (m.is_end_time) text = "e=";
+    // S.2.2 only authors `inserted` transients — status is always `I`.
+    text += 'I';
+    return text;
+}
+
+template <typename Emit>
+void iterate_visible_transient_flags(
+    cairo_t* cr,
+    GuiRect top_strip_area,
+    const std::vector<GuiTransient>& transients,
+    long long viewport_start_sample,
+    long long viewport_end_sample,
+    int sample_rate,
+    Emit&& emit) {
+    (void)cr;
+    const double span = static_cast<double>(viewport_end_sample -
+                                            viewport_start_sample);
+    const double samples_per_pixel = span / static_cast<double>(top_strip_area.w);
+    if (samples_per_pixel <= 0.0) return;
+
+    const double sr           = static_cast<double>(sample_rate);
+    (void)sr;
+    const double baseline_y =
+        static_cast<double>(top_strip_area.y + top_strip_area.h) - 13.0;
+    const double pad          = 4.0;
+
+    double rightmost_right_edge = -1e18;
+
+    for (size_t i = 0; i < transients.size(); ++i) {
+        const auto& m = transients[i];
+        const double ms = static_cast<double>(m.src_frame);
+        if (ms < static_cast<double>(viewport_start_sample)) continue;
+        if (ms >= static_cast<double>(viewport_end_sample)) continue;
+
+        const double x_raw =
+            (ms - static_cast<double>(viewport_start_sample)) /
+            samples_per_pixel;
+        const double text_left =
+            static_cast<double>(top_strip_area.x) + std::round(x_raw);
+        if (text_left < rightmost_right_edge + pad) {
+            if constexpr (kDebugPerf) perf_counters::flag_elided++;
+            continue;
+        }
+
+        const std::string text = transient_flag_text(m);
+        if (text.empty()) continue;
+
+        cairo_text_extents_t ext;
+        cairo_text_extents(cr, text.c_str(), &ext);
+        if constexpr (kDebugPerf) perf_counters::flag_measure++;
+
+        emit(static_cast<int>(i), text_left, baseline_y, text, ext);
+        rightmost_right_edge = text_left + ext.width;
+    }
+}
+
+} // namespace
+
+void render_transient_markers(cairo_t* cr,
+                              GuiRect waveform_area,
+                              const std::vector<GuiTransient>& transients,
+                              long long viewport_start_sample,
+                              long long viewport_end_sample,
+                              int sample_rate,
+                              GuiColor enabled_color,
+                              GuiColor disabled_color,
+                              GuiColor selected_color,
+                              const std::set<int>& selected_set,
+                              int /*last_selected*/) {
+    if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
+    if (viewport_end_sample <= viewport_start_sample) return;
+    if (sample_rate <= 0) return;
+
+    const double span = static_cast<double>(viewport_end_sample -
+                                            viewport_start_sample);
+    const double samples_per_pixel = span / static_cast<double>(waveform_area.w);
+    if (samples_per_pixel <= 0.0) return;
+
+    const double y0 = static_cast<double>(waveform_area.y);
+    const double y1 = static_cast<double>(waveform_area.y + waveform_area.h);
+
+    cairo_save(cr);
+    cairo_set_line_width(cr, 1.0);
+
+    for (int pass = 0; pass < 2; pass++) {
+        const bool this_disabled = (pass == 1);
+        const GuiColor& c = this_disabled ? disabled_color : enabled_color;
+        cairo_set_source_rgb(cr, c.r, c.g, c.b);
+        for (size_t i = 0; i < transients.size(); ++i) {
+            if (selected_set.count(static_cast<int>(i))) continue;
+            const auto& m = transients[i];
+            if (m.disabled != this_disabled) continue;
+            const double ms = static_cast<double>(m.src_frame);
+            if (ms < static_cast<double>(viewport_start_sample)) continue;
+            if (ms >= static_cast<double>(viewport_end_sample)) continue;
+            const double x_raw =
+                (ms - static_cast<double>(viewport_start_sample))
+                    / samples_per_pixel;
+            const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
+            cairo_move_to(cr, x_px, y0);
+            cairo_line_to(cr, x_px, y1);
+        }
+        cairo_stroke(cr);
+    }
+
+    for (int idx : selected_set) {
+        if (idx < 0 || idx >= static_cast<int>(transients.size())) continue;
+        const auto& m = transients[idx];
+        const double ms = static_cast<double>(m.src_frame);
+        if (ms < static_cast<double>(viewport_start_sample)) continue;
+        if (ms >= static_cast<double>(viewport_end_sample)) continue;
+        GuiColor c = selected_color;
+        if (m.disabled) {
+            c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
+        }
+        cairo_set_source_rgb(cr, c.r, c.g, c.b);
+        const double x_raw =
+            (ms - static_cast<double>(viewport_start_sample))
+                / samples_per_pixel;
+        const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
+        cairo_move_to(cr, x_px, y0);
+        cairo_line_to(cr, x_px, y1);
+        cairo_stroke(cr);
+    }
+
+    cairo_restore(cr);
+}
+
+void render_transient_flags(cairo_t* cr,
+                            GuiRect top_strip_area,
+                            const std::vector<GuiTransient>& transients,
+                            long long viewport_start_sample,
+                            long long viewport_end_sample,
+                            int sample_rate,
+                            GuiColor enabled_color,
+                            GuiColor disabled_color,
+                            GuiColor selected_color,
+                            GuiColor highlight_color,
+                            double font_size,
+                            const std::set<int>& selected_set,
+                            int last_selected) {
+    if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
+    if (viewport_end_sample <= viewport_start_sample) return;
+    if (sample_rate <= 0) return;
+
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, font_size);
+
+    const double hl_pad = 2.0;
+
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+
+    iterate_visible_transient_flags(cr, top_strip_area, transients,
+                                    viewport_start_sample, viewport_end_sample,
+                                    sample_rate,
+        [&](int i, double text_left, double baseline_y,
+            const std::string& text, const cairo_text_extents_t& ext) {
+            const bool is_selected = selected_set.count(i) > 0;
+            const bool is_last     = (i == last_selected) && is_selected;
+            const bool dis         = transients[i].disabled;
+
+            if (is_last) {
+                cairo_set_source_rgb(cr, highlight_color.r,
+                                     highlight_color.g, highlight_color.b);
+                cairo_rectangle(cr,
+                                text_left,
+                                baseline_y + uniform_ext.y_bearing - hl_pad,
+                                hl_pad + ext.x_bearing + ext.width + hl_pad,
+                                uniform_ext.height + 2 * hl_pad);
+                cairo_fill(cr);
+            }
+
+            GuiColor c = is_selected ? selected_color
+                                     : (dis ? disabled_color : enabled_color);
+            if (is_selected && dis) {
+                c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
+            }
+            cairo_set_source_rgb(cr, c.r, c.g, c.b);
+            cairo_move_to(cr, text_left + hl_pad, baseline_y);
+            cairo_show_text(cr, text.c_str());
+            if constexpr (kDebugPerf) perf_counters::flag_drawn++;
+        });
+
+    cairo_restore(cr);
+}
+
+std::vector<FlagHitRect> compute_transient_flag_hit_rects(
+    cairo_t* cr,
+    GuiRect top_strip_area,
+    const std::vector<GuiTransient>& transients,
+    long long viewport_start_sample,
+    long long viewport_end_sample,
+    int sample_rate,
+    double font_size) {
+    std::vector<FlagHitRect> out;
+    if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return out;
+    if (viewport_end_sample <= viewport_start_sample) return out;
+    if (sample_rate <= 0) return out;
+
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, font_size);
+
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    const double hl_pad = 2.0;
+
+    iterate_visible_transient_flags(cr, top_strip_area, transients,
+                                    viewport_start_sample, viewport_end_sample,
+                                    sample_rate,
+        [&](int i, double text_left, double baseline_y,
+            const std::string& /*text*/, const cairo_text_extents_t& ext) {
+            FlagHitRect r;
+            r.marker_index = i;
+            r.x = text_left;
+            r.y = baseline_y + uniform_ext.y_bearing - hl_pad;
+            r.w = hl_pad + ext.x_bearing + ext.width + hl_pad;
+            r.h = uniform_ext.height + 2 * hl_pad;
+            out.push_back(r);
+        });
+
+    cairo_restore(cr);
+    return out;
+}
+
 void render_dirty_indicator(cairo_t* cr, double cx, double cy,
                             GuiColor color) {
     cairo_save(cr);
