@@ -1,16 +1,29 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <utility>
 #include <vector>
 
-// Owns an audio file's sample buffer and a multi-resolution min/max peak
-// pyramid. No knowledge of X11, Cairo, or progress UI. Synchronous loader with
-// a progress callback that the caller wires up to its UI.
+// Owns an audio file's sample buffer and a fixed-stride min/max peak pyramid
+// (three int16 cache levels at strides 32, 1024, 32768). No knowledge of X11,
+// Cairo, or progress UI. Synchronous loader with a progress callback that the
+// caller wires up to its UI.
 class GuiAudio {
 public:
     using ProgressCallback = std::function<void(float)>;
+
+    // Implementation detail of the peak cache. Public only so the cache
+    // reader/writer free functions in gui_audio.cpp can name the type.
+    // Each PyramidLevel holds a fixed stride, the number of (min,max) pairs
+    // covering the source, and per-channel flat int16 storage interleaved as
+    // (min0, max0, min1, max1, ...). Quantization: clamp(v,-1,1) * 32767.
+    struct PyramidLevel {
+        int32_t stride     = 0;
+        int64_t pair_count = 0;
+        std::vector<std::vector<int16_t>> pairs;  // pairs[ch][2*p..2*p+1]
+    };
 
     // Opens `path` via libsndfile, reads all frames, and builds the pyramid.
     // Returns true on success. On failure, writes a diagnostic to stderr and
@@ -37,10 +50,10 @@ public:
     int64_t level_size(int level) const;
 
     // Returns (min, max) over source-sample indices [start_sample, end_sample)
-    // on `channel`, read at pyramid `level`. Level 0 is raw samples; level L>0
-    // uses stored min/max pairs each covering 2^L source samples. If `level`
-    // exceeds the top built level, reads from the top level. Inputs are
-    // clamped; an empty range returns (0, 0).
+    // on `channel`, read at pyramid `level`. Level 0 is raw samples; levels
+    // 1..3 select cached min/max pairs at strides 32, 1024, 32768
+    // respectively. Levels above the deepest cached level clamp to it.
+    // Inputs are clamped; an empty range returns (0, 0).
     std::pair<float,float> get_peak_range(int channel,
                                           int level,
                                           int64_t start_sample,
@@ -53,7 +66,15 @@ private:
     int                channels_        = 0;
     int                render_channels_ = 0;
 
-    // pyramid_[ch][L-1] holds level L's (min,max) pairs. Level 0 lives in
-    // samples_ directly; there is no corresponding vector here.
-    std::vector<std::vector<std::vector<std::pair<float,float>>>> pyramid_;
+    // Three fixed-stride cache levels (strides 32, 1024, 32768). Populated
+    // either from the on-disk .wtpeaks v2 sidecar or by streaming over
+    // samples_ on cache miss.
+    std::array<PyramidLevel, 3> levels_;
 };
+
+// Build a peak pyramid by streaming `wav_path` through libsndfile and write
+// the resulting `<wav_path>.wtpeaks` v2 sidecar atomically. Allocates only a
+// single 65536-frame chunk plus the int16 pyramid itself — no full samples
+// buffer. Returns true on success. On any error, logs a single stderr line
+// and returns false; the caller should ignore the return value.
+bool write_peaks_cache_for_wav(const std::string& wav_path);

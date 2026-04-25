@@ -1,6 +1,7 @@
 #include "gui_render_pipeline.h"
 
 #include "engine/engine.h"
+#include "gui_audio.h"
 #include "gui_render.h"
 #include "timemap.h"
 
@@ -478,6 +479,12 @@ void do_render(const RenderRequest& req) {
             cleanup_all();
             return;
         }
+    }
+
+    // Deposit a peak-pyramid sidecar next to the rendered WAV. Fire-and-forget;
+    // the function logs its own errors and never affects render success.
+    if (!midi_engine) {
+        write_peaks_cache_for_wav(output_audio_path);
     }
 
     cleanup_all();

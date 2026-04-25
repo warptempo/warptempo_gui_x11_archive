@@ -147,13 +147,14 @@ void render_waveform(cairo_t* cr,
                                             viewport_start_sample);
     const double samples_per_pixel = span / static_cast<double>(area.w);
 
+    // Cache layout (must match gui_audio.cpp): level 0 = raw samples;
+    // levels 1, 2, 3 = stride 32, 1024, 32768. Pick the coarsest cache
+    // level whose stride is <= spp; below stride 32, fall through to raw.
     int level;
-    if (samples_per_pixel < 1.0) {
-        level = 0;
-    } else {
-        level = static_cast<int>(std::floor(std::log2(samples_per_pixel)));
-    }
-    if (level < 0) level = 0;
+    if      (samples_per_pixel >= 32768.0) level = 3;
+    else if (samples_per_pixel >= 1024.0)  level = 2;
+    else if (samples_per_pixel >= 32.0)    level = 1;
+    else                                   level = 0;
     if (level > num_levels - 1) level = num_levels - 1;
 
     const double y_center = area.y + area.h * 0.5;
@@ -182,7 +183,9 @@ void render_waveform(cairo_t* cr,
                 perf_counters::wf_pyramid_samples +=
                     static_cast<int>(s1 - s0);
             } else {
-                const long long stride = 1LL << level;
+                // Strides match gui_audio.cpp's kStrides[].
+                constexpr long long kCacheStrides[] = { 0, 32, 1024, 32768 };
+                const long long stride = kCacheStrides[level];
                 const long long i0 = s0 / stride;
                 const long long i1 = (s1 + stride - 1) / stride;
                 perf_counters::wf_pyramid_samples +=
