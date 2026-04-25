@@ -36,30 +36,44 @@ bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
     return false;
 }
 
-// The flag text rules from chunk I Part 2:
-//   owned            → "1.28"
-//   owned + def      → "1.28 (a.01)"
-//   inherit          → "(1.28)"  (value resolved by walk-backward)
-//   inherit + def    → "(1.28) (a.01)"
-//   label reference  → "a.01"
+// Screen mirrors disk (chunk S.2.1). Flag text construction:
+//   1. Optional `b=` / `e=` prefix from is_begin_time / is_end_time.
+//   2. Tempo column:
+//        label ref       → "a.01"
+//        owned           → "1.28", with optional "*<scale>" appended
+//        inherit         → "(1.28)"  (value resolved by walk-backward)
+//   3. Optional " (label_def)" suffix.
+// The `#` disabled marker prefix is on-disk only — visual disabled state
+// is conveyed by the dim color, not by the flag text.
 std::string flag_text(const std::vector<GuiMarker>& markers, int idx) {
     const auto& m = markers[idx];
-    if (!m.label_ref.empty()) return m.label_ref;
+
+    std::string text;
+    if (m.is_begin_time)    text = "b=";
+    else if (m.is_end_time) text = "e=";
+
+    if (!m.label_ref.empty()) {
+        text += m.label_ref;
+        return text;
+    }
 
     double tempo = m.tempo_base;
     if (m.tempo_inherits) {
         tempo = resolve_inherited_tempo(markers, idx);
     }
-
     char tbuf[32];
     std::snprintf(tbuf, sizeof(tbuf), "%.2f", tempo);
-    std::string text;
+
     if (m.tempo_inherits) {
-        text = "(";
+        text += "(";
         text += tbuf;
         text += ")";
     } else {
-        text = tbuf;
+        text += tbuf;
+        if (!m.tempo_scale.empty()) {
+            text += "*";
+            text += m.tempo_scale;
+        }
     }
     if (!m.label_def.empty()) {
         text += " (";
@@ -456,15 +470,17 @@ void render_flags(cairo_t* cr,
             // box is identical across flag types (text stays centered on
             // `baseline_y` independently). The box's left edge sits on
             // `text_left` — the marker's integer-snapped pixel column —
-            // with no x_bearing adjustment and no left-side padding, so it
-            // visually aligns with the marker line and the playhead column.
+            // with no x_bearing adjustment. There IS now left-side text
+            // padding: the box's left edge stays anchored to the marker
+            // column, but the text is inset `hl_pad` so the highlight has
+            // symmetric padding around the glyphs.
             if (is_last) {
                 cairo_set_source_rgb(cr, highlight_color.r,
                                      highlight_color.g, highlight_color.b);
                 cairo_rectangle(cr,
                                 text_left,
                                 baseline_y + uniform_ext.y_bearing - hl_pad,
-                                ext.x_bearing + ext.width + hl_pad,
+                                hl_pad + ext.x_bearing + ext.width + hl_pad,
                                 uniform_ext.height + 2 * hl_pad);
                 cairo_fill(cr);
             }
@@ -475,7 +491,7 @@ void render_flags(cairo_t* cr,
                 c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
             }
             cairo_set_source_rgb(cr, c.r, c.g, c.b);
-            cairo_move_to(cr, text_left, baseline_y);
+            cairo_move_to(cr, text_left + hl_pad, baseline_y);
             cairo_show_text(cr, text.c_str());
             if constexpr (kDebugPerf) perf_counters::flag_drawn++;
         });
@@ -519,7 +535,7 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
             r.marker_index = i;
             r.x = text_left;
             r.y = baseline_y + uniform_ext.y_bearing - hl_pad;
-            r.w = ext.x_bearing + ext.width + hl_pad;
+            r.w = hl_pad + ext.x_bearing + ext.width + hl_pad;
             r.h = uniform_ext.height + 2 * hl_pad;
             out.push_back(r);
         });
