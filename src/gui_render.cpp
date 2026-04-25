@@ -552,8 +552,13 @@ std::string transient_flag_text(const GuiTransient& m) {
     std::string text;
     if (m.is_begin_time)    text = "b=";
     else if (m.is_end_time) text = "e=";
-    // S.2.2 only authors `inserted` transients — status is always `I`.
-    text += 'I';
+    if (m.is_inserted) {
+        text += 'I';
+    } else if (m.has_displacement) {
+        text += "D*";
+    } else {
+        text += 'D';
+    }
     return text;
 }
 
@@ -582,7 +587,7 @@ void iterate_visible_transient_flags(
 
     for (size_t i = 0; i < transients.size(); ++i) {
         const auto& m = transients[i];
-        const double ms = static_cast<double>(m.src_frame);
+        const double ms = static_cast<double>(m.effective_frame());
         if (ms < static_cast<double>(viewport_start_sample)) continue;
         if (ms >= static_cast<double>(viewport_end_sample)) continue;
 
@@ -644,7 +649,7 @@ void render_transient_markers(cairo_t* cr,
             if (selected_set.count(static_cast<int>(i))) continue;
             const auto& m = transients[i];
             if (m.disabled != this_disabled) continue;
-            const double ms = static_cast<double>(m.src_frame);
+            const double ms = static_cast<double>(m.effective_frame());
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
             const double x_raw =
@@ -660,7 +665,7 @@ void render_transient_markers(cairo_t* cr,
     for (int idx : selected_set) {
         if (idx < 0 || idx >= static_cast<int>(transients.size())) continue;
         const auto& m = transients[idx];
-        const double ms = static_cast<double>(m.src_frame);
+        const double ms = static_cast<double>(m.effective_frame());
         if (ms < static_cast<double>(viewport_start_sample)) continue;
         if (ms >= static_cast<double>(viewport_end_sample)) continue;
         GuiColor c = selected_color;
@@ -803,17 +808,16 @@ constexpr double kDialogButtonGap   = 12.0;
 constexpr double kDialogButtonRowGap = 20.0;
 constexpr double kDialogOverlayAlpha = 0.55;
 
-// Sum up button text widths (Cairo x_advance) at the dialog font size.
+// Per-label x_advance + shared font metrics at the dialog font size.
 struct ButtonMetrics {
-    double save_w;
-    double discard_w;
-    double cancel_w;
+    std::vector<double> label_w;   // parallel to input label vector
     double ascent;
     double descent;
     double font_height;
 };
 
-ButtonMetrics measure_button_metrics(cairo_t* cr) {
+ButtonMetrics measure_button_metrics(cairo_t* cr,
+                                     const std::vector<std::string>& labels) {
     cairo_save(cr);
     cairo_select_font_face(cr, "monospace",
                            CAIRO_FONT_SLANT_NORMAL,
@@ -823,9 +827,11 @@ ButtonMetrics measure_button_metrics(cairo_t* cr) {
     cairo_font_extents_t fext;
     cairo_font_extents(cr, &fext);
     ButtonMetrics m;
-    cairo_text_extents(cr, "Save",    &ext); m.save_w    = ext.x_advance;
-    cairo_text_extents(cr, "Discard", &ext); m.discard_w = ext.x_advance;
-    cairo_text_extents(cr, "Cancel",  &ext); m.cancel_w  = ext.x_advance;
+    m.label_w.reserve(labels.size());
+    for (const auto& l : labels) {
+        cairo_text_extents(cr, l.c_str(), &ext);
+        m.label_w.push_back(ext.x_advance);
+    }
     m.ascent      = fext.ascent;
     m.descent     = fext.descent;
     m.font_height = fext.height;
@@ -850,16 +856,21 @@ double measure_dialog_text_width(cairo_t* cr, const char* text) {
 DialogLayout compute_dialog_layout(cairo_t* cr,
                                    int window_w,
                                    int window_h,
-                                   const char* prompt_text) {
-    const ButtonMetrics bm = measure_button_metrics(cr);
+                                   const char* prompt_text,
+                                   const std::vector<std::string>& button_labels) {
+    const ButtonMetrics bm = measure_button_metrics(cr, button_labels);
     const double prompt_w = measure_dialog_text_width(cr, prompt_text);
 
     const double btn_h = bm.font_height + 2 * kDialogButtonPadY;
-    const double save_btn_w    = bm.save_w    + 2 * kDialogButtonPadX;
-    const double discard_btn_w = bm.discard_w + 2 * kDialogButtonPadX;
-    const double cancel_btn_w  = bm.cancel_w  + 2 * kDialogButtonPadX;
-    const double btn_row_w = save_btn_w + discard_btn_w + cancel_btn_w +
-                             2 * kDialogButtonGap;
+    std::vector<double> btn_w(button_labels.size());
+    double btn_row_w = 0.0;
+    for (size_t i = 0; i < button_labels.size(); ++i) {
+        btn_w[i] = bm.label_w[i] + 2 * kDialogButtonPadX;
+        btn_row_w += btn_w[i];
+    }
+    if (button_labels.size() > 1) {
+        btn_row_w += (button_labels.size() - 1) * kDialogButtonGap;
+    }
 
     double panel_w = std::max(prompt_w, btn_row_w) + 2 * kDialogTextPadX;
     double panel_h = kDialogTextPadY + bm.font_height +
@@ -879,29 +890,26 @@ DialogLayout compute_dialog_layout(cairo_t* cr,
         std::floor(panel_x + (panel_w - btn_row_w) * 0.5);
 
     DialogLayout L;
-    L.panel   = {static_cast<int>(std::floor(panel_x)),
-                 static_cast<int>(std::floor(panel_y)),
-                 static_cast<int>(std::ceil(panel_w)),
-                 static_cast<int>(std::ceil(panel_h))};
-    L.save    = {static_cast<int>(btn_row_x),
-                 static_cast<int>(std::floor(btn_y)),
-                 static_cast<int>(std::ceil(save_btn_w)),
-                 static_cast<int>(std::ceil(btn_h))};
-    L.discard = {static_cast<int>(btn_row_x + save_btn_w + kDialogButtonGap),
-                 static_cast<int>(std::floor(btn_y)),
-                 static_cast<int>(std::ceil(discard_btn_w)),
-                 static_cast<int>(std::ceil(btn_h))};
-    L.cancel  = {static_cast<int>(btn_row_x + save_btn_w + kDialogButtonGap +
-                                  discard_btn_w + kDialogButtonGap),
-                 static_cast<int>(std::floor(btn_y)),
-                 static_cast<int>(std::ceil(cancel_btn_w)),
-                 static_cast<int>(std::ceil(btn_h))};
+    L.panel = {static_cast<int>(std::floor(panel_x)),
+               static_cast<int>(std::floor(panel_y)),
+               static_cast<int>(std::ceil(panel_w)),
+               static_cast<int>(std::ceil(panel_h))};
+    L.buttons.reserve(button_labels.size());
+    double cursor_x = btn_row_x;
+    for (size_t i = 0; i < button_labels.size(); ++i) {
+        L.buttons.push_back({static_cast<int>(cursor_x),
+                             static_cast<int>(std::floor(btn_y)),
+                             static_cast<int>(std::ceil(btn_w[i])),
+                             static_cast<int>(std::ceil(btn_h))});
+        cursor_x += btn_w[i] + kDialogButtonGap;
+    }
     return L;
 }
 
 void render_dialog(cairo_t* cr,
                    const DialogLayout& layout,
                    const char* prompt_text,
+                   const std::vector<std::string>& button_labels,
                    int focused_button_index,
                    int window_w,
                    int window_h,
@@ -940,12 +948,10 @@ void render_dialog(cairo_t* cr,
     cairo_show_text(cr, prompt_text);
 
     // Buttons.
-    const DialogButtonRect* btns[3] = {
-        &layout.save, &layout.discard, &layout.cancel };
-    const char* labels[3] = { "Save", "Discard", "Cancel" };
-    for (int i = 0; i < 3; ++i) {
-        const DialogButtonRect& r = *btns[i];
-        const bool focused = (i == focused_button_index);
+    const size_t n = std::min(layout.buttons.size(), button_labels.size());
+    for (size_t i = 0; i < n; ++i) {
+        const DialogButtonRect& r = layout.buttons[i];
+        const bool focused = (static_cast<int>(i) == focused_button_index);
         if (focused) {
             cairo_set_source_rgb(cr, focus_color.r, focus_color.g, focus_color.b);
         } else {
@@ -954,18 +960,17 @@ void render_dialog(cairo_t* cr,
         cairo_rectangle(cr, r.x, r.y, r.w, r.h);
         cairo_fill(cr);
         if (focused) {
-            // Outline so the focus is legible even if the tint is subtle.
             cairo_set_source_rgb(cr, text_color.r, text_color.g, text_color.b);
             cairo_set_line_width(cr, 2.0);
             cairo_rectangle(cr, r.x + 1, r.y + 1, r.w - 2, r.h - 2);
             cairo_stroke(cr);
         }
-        cairo_text_extents(cr, labels[i], &ext);
+        cairo_text_extents(cr, button_labels[i].c_str(), &ext);
         const double lx = r.x + (r.w - ext.x_advance) * 0.5;
         const double ly = r.y + (r.h + fext.ascent - fext.descent) * 0.5;
         cairo_set_source_rgb(cr, text_color.r, text_color.g, text_color.b);
         cairo_move_to(cr, lx, ly);
-        cairo_show_text(cr, labels[i]);
+        cairo_show_text(cr, button_labels[i].c_str());
     }
 
     cairo_restore(cr);

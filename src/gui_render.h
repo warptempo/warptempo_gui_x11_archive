@@ -143,9 +143,8 @@ void render_transient_markers(cairo_t* cr,
                               const std::set<int>& selected_set,
                               int last_selected);
 
-// Flag text for transients is `b=I`, `e=I`, or `I` based on the trim flag.
-// S.2.2 only authors `inserted` transients, so the second character is
-// always `I`. S.3 will extend with `D` / `D*` for detected / nudged.
+// Flag text for transients is `[b=|e=]<status>` where status is `I`
+// (inserted), `D` (detected), or `D*` (detected with user displacement).
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
                             const std::vector<GuiTransient>& transients,
@@ -188,8 +187,8 @@ void render_dirty_indicator(cairo_t* cr, double cx, double cy,
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);
 
-// Unsaved-work dialog: rectangle of one of the three buttons, in screen
-// coords. Returned by the layout helper so the click handler can hit-test.
+// Modal-dialog button rectangle in screen coords. Returned by the layout
+// helper so the click handler can hit-test.
 struct DialogButtonRect {
     int x;
     int y;
@@ -197,31 +196,30 @@ struct DialogButtonRect {
     int h;
 };
 
-// Layout of the entire dialog: the three buttons' rects (Save / Discard /
-// Cancel in left-to-right order) and the panel's outer bounds. Panel width
-// scales to fit the prompt text; height is fixed for the three-button row.
+// Layout of an N-button dialog: the buttons' rects (left-to-right, parallel
+// to the labels passed to compute_dialog_layout) and the panel's outer
+// bounds. Panel width scales to fit the wider of prompt text or button row.
 struct DialogLayout {
-    DialogButtonRect panel;
-    DialogButtonRect save;
-    DialogButtonRect discard;
-    DialogButtonRect cancel;
+    DialogButtonRect              panel;
+    std::vector<DialogButtonRect> buttons;
 };
 
-// Compute the dialog's on-screen layout against the current window
-// dimensions and the prompt text. Cairo is needed for font measurement;
-// the caller's `cr` can be the same pixmap context.
+// Compute the dialog's on-screen layout for the given prompt + ordered
+// button labels. Cairo is needed for font measurement; the caller's `cr`
+// can be the same pixmap context.
 DialogLayout compute_dialog_layout(cairo_t* cr,
                                    int window_w,
                                    int window_h,
-                                   const char* prompt_text);
+                                   const char* prompt_text,
+                                   const std::vector<std::string>& button_labels);
 
-// Paint the unsaved-work dialog: a semi-transparent overlay across the
-// window, a centered panel with the prompt text, and three buttons. The
-// button at `focused_button_index` (0 = Save, 1 = Discard, 2 = Cancel)
-// renders with a highlighted outline; the others paint plain.
+// Paint a modal dialog: a semi-transparent overlay across the window, a
+// centered panel with the prompt text, and one button per label. The
+// button at `focused_button_index` renders with a highlighted outline.
 void render_dialog(cairo_t* cr,
                    const DialogLayout& layout,
                    const char* prompt_text,
+                   const std::vector<std::string>& button_labels,
                    int focused_button_index,
                    int window_w,
                    int window_h,

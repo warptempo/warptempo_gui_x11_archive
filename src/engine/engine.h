@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,8 +30,35 @@ struct EngineParams {
     int    limiter_num_bands          = 0;
     bool   limiter_diag               = false;
     bool   output_24bit_pcm           = false;
+
+    // User-curated transient frame list (source-frame domain). When non-empty,
+    // the engine skips its internal `Transients::process` and uses this list
+    // verbatim for phase-reset positioning. Must be sorted ascending.
+    // Typical source: GUI's transient mode, providing the union of inserted
+    // + active-detected (with displacement applied) entries.
+    std::vector<int64_t> transient_frames;
 };
 
 // Returns true on success, false on failure. Failure reasons are logged to
 // stderr by the engine itself (unchanged text from the standalone binary).
 bool run_warptempo_engine(const EngineParams& p);
+
+// Standalone detection entry point. Runs only the transient detection pass
+// (no phase vocoder, no limiter, no synthesis). On success, populates
+// `out_src_frames` with detected transient positions in the source-frame
+// domain, sorted ascending. On failure, logs to stderr and returns false.
+struct DetectionParams {
+    std::string source_audio_path;
+    std::vector<std::pair<size_t, size_t>> timemap;  // src_frame, tgt_frame
+    int    N                          = 4096;
+    int    fftw_threads               = 0;
+    double transients_xover_low       = 120.0;
+    double transients_xover_high      = 3500.0;
+    double transients_tau_back_ms     = 30.0;
+    double transients_thresh_db       = -20.0;
+    double transients_refractory_ms   = 1500.0;
+    double transients_anticipation_ms = 100.0;
+};
+
+bool run_warptempo_detection(const DetectionParams& p,
+                             std::vector<int64_t>& out_src_frames);

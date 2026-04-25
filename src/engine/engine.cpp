@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -14,12 +15,12 @@
 #include "limiter.h"
 #include "synthesis.h"
 
-bool run_warptempo_engine(const EngineParams& p) {
-    AudioSTFT audio_stft;
+namespace {
 
-    audio_stft.N = p.N;
-
-    int fftw_threads = p.fftw_threads;
+// Shared FFTW thread init for full-render and detection-only paths. Sets
+// audio_stft.fftw_threads_inited if init succeeded.
+void init_fftw_threads(AudioSTFT& audio_stft, int requested_threads) {
+    int fftw_threads = requested_threads;
     if (fftw_threads <= 0) {
         unsigned hc = std::thread::hardware_concurrency();
         fftw_threads = static_cast<int>(std::max(1u, hc / 2));
@@ -30,6 +31,35 @@ bool run_warptempo_engine(const EngineParams& p) {
     } else {
         std::cerr << "  ! fftw_init_threads failed; FFTW will run single-threaded.\n";
     }
+}
+
+// Validate strict monotonicity of a (src,tgt) timemap. Returns true if OK.
+bool validate_timemap_monotonic(const std::vector<TimeMapSegment>& tm) {
+    for (size_t i = 1; i < tm.size(); ++i) {
+        if (tm[i].src_frame <= tm[i - 1].src_frame) {
+            std::cerr << "Error: timemap entry " << i << " has non-monotonic src_frame ("
+                      << tm[i - 1].src_frame << " -> "
+                      << tm[i].src_frame << ").\n";
+            return false;
+        }
+        if (tm[i].tgt_frame <= tm[i - 1].tgt_frame) {
+            std::cerr << "Error: timemap entry " << i << " has non-monotonic tgt_frame ("
+                      << tm[i - 1].tgt_frame << " -> "
+                      << tm[i].tgt_frame << ").\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool run_warptempo_engine(const EngineParams& p) {
+    AudioSTFT audio_stft;
+
+    audio_stft.N = p.N;
+
+    init_fftw_threads(audio_stft, p.fftw_threads);
 
     auto& tp = audio_stft.transients_params;
     tp.enabled              = p.transients_enabled;
@@ -62,20 +92,7 @@ bool run_warptempo_engine(const EngineParams& p) {
     for (const auto& e : p.timemap) {
         audio_stft.timemap.push_back({e.first, e.second});
     }
-    for (size_t i = 1; i < audio_stft.timemap.size(); ++i) {
-        if (audio_stft.timemap[i].src_frame <= audio_stft.timemap[i - 1].src_frame) {
-            std::cerr << "Error: timemap entry " << i << " has non-monotonic src_frame ("
-                      << audio_stft.timemap[i - 1].src_frame << " -> "
-                      << audio_stft.timemap[i].src_frame << ").\n";
-            return false;
-        }
-        if (audio_stft.timemap[i].tgt_frame <= audio_stft.timemap[i - 1].tgt_frame) {
-            std::cerr << "Error: timemap entry " << i << " has non-monotonic tgt_frame ("
-                      << audio_stft.timemap[i - 1].tgt_frame << " -> "
-                      << audio_stft.timemap[i].tgt_frame << ").\n";
-            return false;
-        }
-    }
+    if (!validate_timemap_monotonic(audio_stft.timemap)) return false;
 
     audio_stft.src_info.format = 0;
     audio_stft.src_snd = sf_open(p.source_audio_path.c_str(), SFM_READ, &audio_stft.src_info);
@@ -109,7 +126,34 @@ bool run_warptempo_engine(const EngineParams& p) {
     stft_engine.process(audio_stft);
     std::cout << "done\n";
 
-    detector.process(audio_stft);
+    // Transient pass: either run the detector, or use the user-curated
+    // list verbatim. transients_enabled is the master gate for both paths.
+    if (!p.transient_frames.empty()) {
+        if (!tp.enabled) {
+            std::cout << "[Pass 2/4] Transient detection.............. disabled (curated list ignored)\n";
+            audio_stft.transient_markers.clear();
+        } else {
+            audio_stft.transient_markers.clear();
+            audio_stft.transient_markers.reserve(p.transient_frames.size());
+            const auto& fm = audio_stft.frame_map;
+            for (int64_t F : p.transient_frames) {
+                // Locate the synth frame whose source-domain time is at or
+                // just before F. frame_map is monotonically increasing.
+                auto it = std::upper_bound(fm.begin(), fm.end(), F);
+                if (it == fm.begin()) continue;     // F before first frame
+                --it;
+                size_t s = static_cast<size_t>(it - fm.begin());
+                if (s >= fm.size()) continue;
+                audio_stft.transient_markers.push_back(
+                    {static_cast<int>(s), F});
+            }
+            std::cout << "[Pass 2/4] Transient detection.............. "
+                      << audio_stft.transient_markers.size()
+                      << " curated transients\n";
+        }
+    } else {
+        detector.process(audio_stft);
+    }
     limiter.process(audio_stft);
     synthesis.process(audio_stft);
 
@@ -157,6 +201,67 @@ bool run_warptempo_engine(const EngineParams& p) {
     }
 
     std::cout << "[Success] " << audio_stft.output_audio_file << "\n";
+
+    audio_stft.cleanup();
+    return true;
+}
+
+bool run_warptempo_detection(const DetectionParams& p,
+                             std::vector<int64_t>& out_src_frames) {
+    out_src_frames.clear();
+
+    AudioSTFT audio_stft;
+    audio_stft.N = p.N;
+
+    init_fftw_threads(audio_stft, p.fftw_threads);
+
+    auto& tp = audio_stft.transients_params;
+    tp.enabled         = true;     // caller wouldn't be invoking otherwise
+    tp.xover_low       = p.transients_xover_low;
+    tp.xover_high      = p.transients_xover_high;
+    tp.tau_back_ms     = p.transients_tau_back_ms;
+    tp.thresh_db       = p.transients_thresh_db;
+    tp.refractory_ms   = p.transients_refractory_ms;
+    tp.anticipation_ms = p.transients_anticipation_ms;
+
+    if (audio_stft.N % 4 != 0) {
+        std::cerr << "Error: N must be divisible by 4.\n";
+        return false;
+    }
+
+    audio_stft.timemap.clear();
+    audio_stft.timemap.reserve(p.timemap.size());
+    for (const auto& e : p.timemap) {
+        audio_stft.timemap.push_back({e.first, e.second});
+    }
+    if (audio_stft.timemap.empty()) {
+        std::cerr << "Error: detection requires a non-empty timemap.\n";
+        return false;
+    }
+    if (!validate_timemap_monotonic(audio_stft.timemap)) return false;
+
+    audio_stft.src_info.format = 0;
+    audio_stft.src_snd = sf_open(p.source_audio_path.c_str(), SFM_READ, &audio_stft.src_info);
+    if (!audio_stft.src_snd) {
+        std::cerr << "Error: Could not open source file: '" << p.source_audio_path << "'\n";
+        return false;
+    }
+    audio_stft.channels = audio_stft.src_info.channels;
+    audio_stft.nyquist = audio_stft.src_info.samplerate / 2.0;
+    audio_stft.bin_hz_width = static_cast<double>(audio_stft.src_info.samplerate) / audio_stft.N;
+    audio_stft.target_total_frames = audio_stft.timemap.back().tgt_frame + audio_stft.N;
+
+    audio_stft.init_fftw();
+    audio_stft.frame_map = audio_stft.generate_frame_map();
+
+    Transients detector;
+    detector.process(audio_stft);
+
+    out_src_frames.reserve(audio_stft.transient_markers.size());
+    for (const auto& m : audio_stft.transient_markers) {
+        out_src_frames.push_back(m.src_frame);
+    }
+    std::sort(out_src_frames.begin(), out_src_frames.end());
 
     audio_stft.cleanup();
     return true;

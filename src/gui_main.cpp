@@ -23,7 +23,9 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <sys/stat.h>
@@ -234,19 +236,28 @@ struct PlayheadDragState {
     bool last_added_was_fresh = false;
 };
 
-// What action triggered the unsaved-work dialog; dictates what
-// Save / Discard actually proceed with after the dialog dismisses.
-enum class DialogTrigger { CLOSE_WINDOW, REVERT_TO_BLANK };
+// What action triggered the modal dialog; the activate-button dispatch
+// switches on this together with the focused button index. Save/Discard/
+// Cancel apply to the unsaved-work dialogs (CLOSE_WINDOW, REVERT_TO_BLANK);
+// Detect/Cancel applies to the re-detect confirmation (DETECT_TRANSIENTS).
+enum class DialogTrigger {
+    CLOSE_WINDOW,
+    REVERT_TO_BLANK,
+    DETECT_TRANSIENTS,
+};
 
 // In-window modal dialog state. When `active` is true, the redraw paints
-// a dim overlay + panel + three buttons on top of the normal pipeline,
-// input handling routes through dialog-only filters, and the rest of the
-// UI is visually blocked. `focused_button` is 0=Save, 1=Discard, 2=Cancel.
+// a dim overlay + panel + N buttons on top of the normal pipeline; input
+// handling routes through dialog-only filters and the rest of the UI is
+// visually blocked. `button_labels` holds the ordered button text;
+// `focused_button` is the index into that vector.
 struct DialogState {
-    bool           active         = false;
-    int            focused_button = 0;
-    DialogTrigger  trigger        = DialogTrigger::CLOSE_WINDOW;
-    std::string    prompt_text    = "Unsaved changes. Save before continuing?";
+    bool                      active         = false;
+    int                       focused_button = 0;
+    DialogTrigger             trigger        = DialogTrigger::CLOSE_WINDOW;
+    std::string               prompt_text    =
+        "Unsaved changes. Save before continuing?";
+    std::vector<std::string>  button_labels  = {"Save", "Discard", "Cancel"};
 };
 
 // Navigational bookmark. Holds a snapshot of the three fields that define
@@ -523,7 +534,7 @@ std::pair<long long, long long> compute_trim_samples(
             if (have_begin_warp) {
                 have_begin_trans = true;
             } else {
-                begin = static_cast<long long>(t.src_frame);
+                begin = static_cast<long long>(t.effective_frame());
                 have_begin_trans = true;
             }
         }
@@ -531,7 +542,7 @@ std::pair<long long, long long> compute_trim_samples(
             if (have_end_warp) {
                 have_end_trans = true;
             } else {
-                end = static_cast<long long>(t.src_frame);
+                end = static_cast<long long>(t.effective_frame());
                 have_end_trans = true;
             }
         }
@@ -1291,8 +1302,10 @@ int main(int argc, char** argv) {
         if (app.dialog.active) {
             const DialogLayout L = compute_dialog_layout(
                 cr, app.width, app.height,
-                app.dialog.prompt_text.c_str());
+                app.dialog.prompt_text.c_str(),
+                app.dialog.button_labels);
             render_dialog(cr, L, app.dialog.prompt_text.c_str(),
+                          app.dialog.button_labels,
                           app.dialog.focused_button,
                           app.width, app.height,
                           kDialogTextColor, kDialogPanelColor,
@@ -1389,7 +1402,7 @@ int main(int argc, char** argv) {
         if (app.active_mode == 'T') {
             const auto& tv = app.transients.markers();
             if (marker_idx >= static_cast<int>(tv.size())) return;
-            ms = static_cast<double>(tv[marker_idx].src_frame);
+            ms = static_cast<double>(tv[marker_idx].effective_frame());
         } else {
             const auto& mv = app.markers.markers();
             if (marker_idx >= static_cast<int>(mv.size())) return;
@@ -1631,7 +1644,7 @@ int main(int argc, char** argv) {
             f.valid     = true;
             f.transient = true;
             f.idx       = i;
-            f.frame     = tv[i].src_frame;
+            f.frame     = tv[i].effective_frame();
             return f;
         }
         return f;
@@ -1654,7 +1667,7 @@ int main(int argc, char** argv) {
         if (app.active_mode == 'T') {
             const auto& tv = app.transients.markers();
             if (last >= static_cast<int>(tv.size())) return;
-            target_sample = tv[last].src_frame;
+            target_sample = tv[last].effective_frame();
         } else {
             const auto& mv = app.markers.markers();
             if (last >= static_cast<int>(mv.size())) return;
@@ -1751,9 +1764,9 @@ int main(int argc, char** argv) {
 
         if (after.size() > before.size()) {
             std::set<int64_t> before_frames;
-            for (const auto& m : before) before_frames.insert(m.src_frame);
+            for (const auto& m : before) before_frames.insert(m.effective_frame());
             for (size_t i = 0; i < after.size(); ++i) {
-                if (!before_frames.count(after[i].src_frame)) {
+                if (!before_frames.count(after[i].effective_frame())) {
                     target_set.insert(static_cast<int>(i));
                 }
             }
@@ -1764,7 +1777,7 @@ int main(int argc, char** argv) {
             return;
         } else if (entry.op_kind == OpKind::Move) {
             for (size_t i = 0; i < after.size(); ++i) {
-                if (after[i].src_frame != before[i].src_frame) {
+                if (after[i].effective_frame() != before[i].effective_frame()) {
                     target_set.insert(static_cast<int>(i));
                 }
             }
@@ -1937,7 +1950,7 @@ int main(int argc, char** argv) {
 
         // Helper to read frame-of-index in source samples regardless of mode.
         auto frame_of = [&](int i) -> int64_t {
-            if (transient) return app.transients.markers()[i].src_frame;
+            if (transient) return app.transients.markers()[i].effective_frame();
             return static_cast<int64_t>(std::llround(
                 app.markers.markers()[i].time_seconds *
                 static_cast<double>(sr)));
@@ -2495,7 +2508,7 @@ int main(int argc, char** argv) {
         // Frame-0 companion. If the post-insert list's head isn't at
         // frame 0, insert one. The companion always lands at index 0,
         // so the user's marker shifts up by one.
-        if (app.transients.markers().front().src_frame != 0) {
+        if (app.transients.markers().front().effective_frame() != 0) {
             GuiTransient zero;
             zero.src_frame   = 0;
             zero.is_inserted = true;
@@ -2536,7 +2549,10 @@ int main(int argc, char** argv) {
                     "warptempo_gui: transient delete rejected: stale index\n");
                 return;
             }
-            if (idx == 0 || tv[idx].src_frame == 0) {
+            // Detected entries can't be deleted; only disabled or merged
+            // away by re-running detection.
+            if (!tv[idx].is_inserted) return;
+            if (idx == 0 || tv[idx].effective_frame() == 0) {
                 std::fprintf(stderr,
                     "warptempo_gui: cannot delete first transient (frame 0)\n");
                 return;
@@ -2583,6 +2599,8 @@ int main(int argc, char** argv) {
     // Compute (delta_min, delta_max) sample bounds for shifting the
     // currently-selected transients by a uniform delta. Same shape as the
     // warp version: nearest non-selected neighbor on each side, intersected.
+    // Operates on effective_frame (the visible position) — for a
+    // D-with-displacement entry, that's displaced_frame.
     // No trim clamp — transients aren't bounded by trim flags during edit.
     auto compute_transient_delta_bounds = [&](bool& ok)
         -> std::pair<int64_t, int64_t> {
@@ -2591,28 +2609,53 @@ int main(int argc, char** argv) {
         if (app.selected_markers.empty()) return {0, 0};
         for (int idx : app.selected_markers) {
             if (idx < 0 || idx >= static_cast<int>(tv.size())) return {0, 0};
-            if (idx == 0 || tv[idx].src_frame == 0) return {0, 0};
+            if (idx == 0 || tv[idx].effective_frame() == 0) return {0, 0};
         }
         int64_t d_min = std::numeric_limits<int64_t>::min();
         int64_t d_max = std::numeric_limits<int64_t>::max();
         for (int idx : app.selected_markers) {
-            const int64_t orig = tv[idx].src_frame;
+            const int64_t orig = tv[idx].effective_frame();
             int prev = idx - 1;
             while (prev >= 0 && app.selected_markers.count(prev)) --prev;
             if (prev >= 0) {
-                const int64_t lb = (tv[prev].src_frame + 1) - orig;
+                const int64_t lb = (tv[prev].effective_frame() + 1) - orig;
                 if (lb > d_min) d_min = lb;
             }
             int next = idx + 1;
             while (next < static_cast<int>(tv.size()) &&
                    app.selected_markers.count(next)) ++next;
             if (next < static_cast<int>(tv.size())) {
-                const int64_t ub = (tv[next].src_frame - 1) - orig;
+                const int64_t ub = (tv[next].effective_frame() - 1) - orig;
                 if (ub < d_max) d_max = ub;
             }
         }
         ok = true;
         return {d_min, d_max};
+    };
+
+    // Apply a position delta to one transient's effective frame.
+    //   I:                src_frame += delta.
+    //   D, no displace:   set has_displacement=true unless the new effective
+    //                     equals src_frame (delta==0 → no-op).
+    //   D, with displace: update displaced_frame; if the new effective lands
+    //                     back on the anchor src_frame, revert the
+    //                     displacement.
+    // Caller is responsible for delta != 0; this is a noop on delta == 0.
+    auto apply_transient_position_delta = [](GuiTransient& m, int64_t delta) {
+        if (delta == 0) return;
+        if (m.is_inserted) {
+            m.src_frame += delta;
+            return;
+        }
+        const int64_t old_eff = m.effective_frame();
+        const int64_t new_eff = old_eff + delta;
+        if (new_eff == m.src_frame) {
+            m.has_displacement = false;
+            m.displaced_frame  = 0;
+        } else {
+            m.has_displacement = true;
+            m.displaced_frame  = new_eff;
+        }
     };
 
     // Nudge selected transients by +/- 1 source-pixel. Direction: -1 for
@@ -2641,7 +2684,7 @@ int main(int argc, char** argv) {
         for (int idx : app.selected_markers) {
             GuiTransient* m = app.transients.marker_mut(idx);
             if (!m) continue;
-            m->src_frame += delta;
+            apply_transient_position_delta(*m, delta);
         }
         push_undo_transient(std::move(pre_state), OpKind::Move,
                             std::move(hint_sel), hint_last);
@@ -2658,7 +2701,7 @@ int main(int argc, char** argv) {
         if (app.last_selected_marker < 0) return;
         const auto& tv = app.transients.markers();
         if (app.last_selected_marker >= static_cast<int>(tv.size())) return;
-        const int64_t anchor_f = tv[app.last_selected_marker].src_frame;
+        const int64_t anchor_f = tv[app.last_selected_marker].effective_frame();
         const int64_t delta    = app.playhead_sample - anchor_f;
         if (delta == 0) return;
 
@@ -2676,7 +2719,7 @@ int main(int argc, char** argv) {
         for (int idx : app.selected_markers) {
             GuiTransient* m = app.transients.marker_mut(idx);
             if (!m) continue;
-            m->src_frame += delta;
+            apply_transient_position_delta(*m, delta);
         }
         push_undo_transient(std::move(pre_state), OpKind::Move,
                             std::move(hint_sel), hint_last);
@@ -2712,7 +2755,7 @@ int main(int argc, char** argv) {
             return;
         }
 
-        const int64_t m_frame = tv[idx].src_frame;
+        const int64_t m_frame = tv[idx].effective_frame();
         const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
                                           /*excl_trans=*/false, -1);
         const FlagLoc b_other = find_flag(/*want_begin=*/true,
@@ -2776,7 +2819,7 @@ int main(int argc, char** argv) {
             return;
         }
 
-        const int64_t m_frame = tv[idx].src_frame;
+        const int64_t m_frame = tv[idx].effective_frame();
         const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
                                           /*excl_trans=*/false, -1);
         const FlagLoc e_other = find_flag(/*want_begin=*/false,
@@ -3028,6 +3071,10 @@ int main(int argc, char** argv) {
         invalidate_all();
     };
 
+    // Forward decl: defined below so it can be captured by the dialog
+    // helpers, but invoked only on Detect-confirmation.
+    std::function<void()> run_detect_now;
+
     auto proceed_with_trigger = [&](DialogTrigger t) {
         switch (t) {
         case DialogTrigger::CLOSE_WINDOW:
@@ -3035,6 +3082,9 @@ int main(int argc, char** argv) {
             break;
         case DialogTrigger::REVERT_TO_BLANK:
             revert_to_blank();
+            break;
+        case DialogTrigger::DETECT_TRANSIENTS:
+            if (run_detect_now) run_detect_now();
             break;
         }
     };
@@ -3045,6 +3095,20 @@ int main(int argc, char** argv) {
         app.dialog.trigger        = t;
         app.dialog.prompt_text    =
             "Unsaved changes. Save before continuing?";
+        app.dialog.button_labels  = {"Save", "Discard", "Cancel"};
+        invalidate_all();
+    };
+
+    auto open_detect_confirm_dialog = [&]() {
+        app.dialog.active         = true;
+        // Default focus on Cancel: re-detection discards entries the
+        // current detector would no longer place, so the safe default
+        // is to back out.
+        app.dialog.focused_button = 1;
+        app.dialog.trigger        = DialogTrigger::DETECT_TRANSIENTS;
+        app.dialog.prompt_text    =
+            "Re-detect transients? Existing detection will be replaced.";
+        app.dialog.button_labels  = {"Detect", "Cancel"};
         invalidate_all();
     };
 
@@ -3053,13 +3117,22 @@ int main(int argc, char** argv) {
         invalidate_all();
     };
 
-    // Dispatch a dialog button activation. `button` is 0=Save, 1=Discard,
-    // 2=Cancel. Save runs the normal save path; on failure it leaves the
-    // dialog open with "Save failed." as the prompt text. The triggering
-    // action proceeds only after a successful Save or Discard.
+    // Dispatch a dialog button activation. The button index is interpreted
+    // per trigger: CLOSE_WINDOW / REVERT_TO_BLANK use 0=Save 1=Discard
+    // 2=Cancel; DETECT_TRANSIENTS uses 0=Detect 1=Cancel.
     auto dialog_activate_button = [&](int button) {
         if (!app.dialog.active) return;
         const DialogTrigger t = app.dialog.trigger;
+        if (t == DialogTrigger::DETECT_TRANSIENTS) {
+            if (button == 0) {
+                close_dialog();
+                proceed_with_trigger(t);
+            } else {
+                close_dialog();
+            }
+            return;
+        }
+        // Unsaved-work dialog: 0=Save, 1=Discard, 2=Cancel.
         switch (button) {
         case 0: { // Save
             const bool ok = save_markers();
@@ -3090,6 +3163,151 @@ int main(int argc, char** argv) {
         if (app.dialog.active) return; // already gated; ignore re-entry
         if (app.dirty) open_unsaved_dialog(t);
         else           proceed_with_trigger(t);
+    };
+
+    // -- Transient detection (chunk S.3) ------------------------------------
+
+    // Two-pass merge: existing D entries indexed by their immutable
+    // src_frame anchor are matched against fresh detections so user edits
+    // (disabled, displaced position, b=/e= flags) survive re-detection.
+    // Existing I (manually inserted) entries always carry over; D entries
+    // whose src_frame the new detector no longer places are dropped. The
+    // merged list is sorted by effective_frame() and the frame-0 invariant
+    // is restored. Does NOT push undo — detection is destructive by spec.
+    auto merge_detection = [&](const std::vector<int64_t>& fresh_src_frames) {
+        std::map<int64_t, GuiTransient> old_d_by_src;
+        std::vector<GuiTransient> old_i;
+        for (const auto& m : app.transients.markers()) {
+            if (m.is_inserted) old_i.push_back(m);
+            else               old_d_by_src.emplace(m.src_frame, m);
+        }
+
+        std::vector<GuiTransient> merged;
+        merged.reserve(fresh_src_frames.size() + old_i.size() + 1);
+        for (int64_t f : fresh_src_frames) {
+            auto it = old_d_by_src.find(f);
+            if (it != old_d_by_src.end()) {
+                merged.push_back(it->second);
+            } else {
+                GuiTransient m;
+                m.src_frame   = f;
+                m.is_inserted = false;
+                merged.push_back(m);
+            }
+        }
+        for (auto& m : old_i) merged.push_back(std::move(m));
+
+        std::sort(merged.begin(), merged.end(),
+            [](const GuiTransient& a, const GuiTransient& b) {
+                return a.effective_frame() < b.effective_frame();
+            });
+
+        if (merged.empty() || merged.front().effective_frame() > 0) {
+            GuiTransient zero;
+            zero.src_frame   = 0;
+            zero.is_inserted = true;
+            merged.insert(merged.begin(), zero);
+        }
+
+        app.transients.markers_mut() = std::move(merged);
+    };
+
+    // Run the engine's detection-only pass against the loaded source +
+    // current marker set, then merge the results into app.transients.
+    // After a successful merge, write the .transientmarkers sibling file
+    // immediately — detection is not on the undo stack so the on-disk
+    // file is the authoritative record. The transient_dirty bit is reset
+    // explicitly: the merge mutated app.transients but no UndoEntry was
+    // pushed, so the post-merge state is the one we want to call "saved".
+    run_detect_now = [&]() {
+        if (app.source_audio_path.empty())   return;
+        if (audio.total_frames() <= 0)       return;
+
+        // Clear any in-flight transient selection — indices into the
+        // pre-merge list are not meaningful afterwards.
+        app.transient_selected_markers.clear();
+        if (app.active_mode == 'T') app.last_selected_marker = -1;
+
+        DetectionRequest dr;
+        dr.source_audio_path    = app.source_audio_path;
+        dr.markers              = app.markers.markers();
+        dr.settings_passthrough = app.settings_passthrough;
+
+        std::vector<int64_t> fresh;
+        if (!do_detection(dr, fresh)) {
+            std::fprintf(stderr,
+                "warptempo_gui: detection failed; transients unchanged\n");
+            return;
+        }
+        std::sort(fresh.begin(), fresh.end());
+        fresh.erase(std::unique(fresh.begin(), fresh.end()), fresh.end());
+
+        merge_detection(fresh);
+
+        // Write the sibling file. Empty list (only the auto frame-0 head)
+        // would be unusual after detection, but the save path already
+        // handles the empty case.
+        if (!app.transientmarkers_path.empty()) {
+            if (app.transients.markers().empty()) {
+                app.transients.delete_file(app.transientmarkers_path);
+            } else if (!app.transients.save(app.transientmarkers_path)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: transient save failed: %s\n",
+                    app.transientmarkers_path.c_str());
+            }
+        }
+
+        // Detection is not undoable. Reset the transient-side dirty bit
+        // so the dialog doesn't gate a subsequent close/revert because of
+        // the merge. Warp dirty is unaffected.
+        app.transient_dirty = false;
+        recompute_dirty();
+        invalidate_all();
+        std::fprintf(stderr,
+            "warptempo_gui: detection produced %zu transients\n",
+            app.transients.markers().size());
+    };
+
+    // Ctrl+Alt+T entry point. Confirms before clobbering an existing
+    // detection (any D entry in the list). With no prior detection (only
+    // I entries or the auto frame-0 head), runs immediately.
+    auto detect_transients = [&]() {
+        if (app.dialog.active)             return;
+        if (app.source_audio_path.empty()) return;
+        if (audio.total_frames() <= 0)     return;
+
+        bool has_prior_detection = false;
+        for (const auto& m : app.transients.markers()) {
+            if (!m.is_inserted) { has_prior_detection = true; break; }
+        }
+        if (has_prior_detection) {
+            open_detect_confirm_dialog();
+            return;
+        }
+        run_detect_now();
+    };
+
+    // Ctrl+Shift+Alt+T: drop all transients (both I and D), undoable. The
+    // frame-0 invariant means a non-empty list always carries an entry at
+    // 0; clearing wholesale removes that too — load() will re-materialize
+    // it on the next read of an empty file (which is itself the empty
+    // list, since save() removes the file when empty). The undo restores
+    // the full pre-clear state.
+    auto clear_all_transients = [&]() {
+        if (app.transients.markers().empty()) return;
+
+        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::set<int> pre_sel = app.transient_selected_markers;
+        const int pre_last = app.last_selected_marker;
+
+        app.transients.clear();
+        app.transient_selected_markers.clear();
+        if (app.active_mode == 'T') app.last_selected_marker = -1;
+
+        push_undo_transient(std::move(pre_state), OpKind::Destroy,
+                            std::move(pre_sel), pre_last);
+        recompute_dirty();
+        invalidate_all();
     };
 
     // Space-bar: start/stop playback. Playback runs from the playhead to
@@ -3139,7 +3357,8 @@ int main(int argc, char** argv) {
         for (int i = 0; i < n; ++i) {
             double ms;
             if (app.active_mode == 'T') {
-                ms = static_cast<double>(app.transients.markers()[i].src_frame);
+                ms = static_cast<double>(
+                    app.transients.markers()[i].effective_frame());
             } else {
                 ms = app.markers.markers()[i].time_seconds *
                      static_cast<double>(sr);
@@ -3209,7 +3428,7 @@ int main(int argc, char** argv) {
         auto t_of = [&](int idx) -> double {
             if (transient) {
                 return static_cast<double>(
-                    app.transients.markers()[idx].src_frame) / sr_d;
+                    app.transients.markers()[idx].effective_frame()) / sr_d;
             }
             return app.markers.markers()[idx].time_seconds;
         };
@@ -3231,7 +3450,8 @@ int main(int argc, char** argv) {
             drag_set.insert(hit);
         }
 
-        // First-marker protection: refuse index 0 and any time-0 marker.
+        // First-marker protection: refuse index 0 and any effective-time-0
+        // marker.
         for (int idx : drag_set) {
             if (idx == 0 || t_of(idx) == 0.0) {
                 std::fprintf(stderr,
@@ -3336,11 +3556,12 @@ int main(int argc, char** argv) {
             if (transient) {
                 GuiTransient* m = app.transients.marker_mut(idx);
                 if (!m) continue;
-                old_t = static_cast<double>(m->src_frame) / sr_d;
+                old_t = static_cast<double>(m->effective_frame()) / sr_d;
                 const int64_t new_frame = static_cast<int64_t>(
                     std::llround(new_t * sr_d));
-                if (m->src_frame == new_frame) continue;
-                m->src_frame = new_frame;
+                const int64_t cur_frame = m->effective_frame();
+                if (cur_frame == new_frame) continue;
+                apply_transient_position_delta(*m, new_frame - cur_frame);
             } else {
                 GuiMarker* m = app.markers.marker_mut(idx);
                 if (!m) continue;
@@ -3372,17 +3593,22 @@ int main(int argc, char** argv) {
         if (!app.drag.active) return;
         const bool transient = (app.drag.drag_mode == 'T');
         const double sr_d = static_cast<double>(audio.sample_rate());
-        for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
-            const int idx = app.drag.dragging_markers[k];
-            if (transient) {
-                GuiTransient* m = app.transients.marker_mut(idx);
-                if (m) m->src_frame = static_cast<int64_t>(
-                    std::llround(app.drag.original_times[k] * sr_d));
-            } else {
+        // Restore from the pre-drag snapshot rather than reverse-deriving
+        // from original_times — for D entries, that requires reverting both
+        // src_frame, has_displacement, and displaced_frame at once.
+        if (transient) {
+            const auto& snap = app.drag.pre_drag_transient_snapshot;
+            if (!snap.empty()) {
+                app.transients.markers_mut() = snap;
+            }
+        } else {
+            for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
+                const int idx = app.drag.dragging_markers[k];
                 GuiMarker* m = app.markers.marker_mut(idx);
                 if (m) m->time_seconds = app.drag.original_times[k];
             }
         }
+        (void)sr_d;
         const int64_t restore_ph = app.drag.pre_drag_playhead_sample;
         app.drag = DragState{};
         move_playhead_to(restore_ph);
@@ -3560,7 +3786,11 @@ int main(int argc, char** argv) {
         // playback / viewport keys cannot sneak in while the modal is up.
         if (app.dialog.active) {
             if (keysym == XK_Escape) {
-                dialog_activate_button(2); // Cancel
+                // Cancel = the last button, by convention across all
+                // dialog forms (Save/Discard/Cancel and Detect/Cancel).
+                const int last = std::max(0,
+                    static_cast<int>(app.dialog.button_labels.size()) - 1);
+                dialog_activate_button(last);
                 return;
             }
             if (keysym == XK_Return || keysym == XK_KP_Enter ||
@@ -3575,13 +3805,15 @@ int main(int argc, char** argv) {
             const bool move_right =
                 keysym == XK_Right ||
                 (keysym == XK_Tab && !shift);
-            if (move_left) {
-                app.dialog.focused_button = (app.dialog.focused_button + 2) % 3;
+            const int n = static_cast<int>(app.dialog.button_labels.size());
+            if (n > 0 && move_left) {
+                app.dialog.focused_button =
+                    (app.dialog.focused_button + n - 1) % n;
                 invalidate_all();
                 return;
             }
-            if (move_right) {
-                app.dialog.focused_button = (app.dialog.focused_button + 1) % 3;
+            if (n > 0 && move_right) {
+                app.dialog.focused_button = (app.dialog.focused_button + 1) % n;
                 invalidate_all();
                 return;
             }
@@ -3635,8 +3867,33 @@ int main(int argc, char** argv) {
                 req.source_audio_path    = app.source_audio_path;
                 req.markers              = app.markers.markers();
                 req.settings_passthrough = app.settings_passthrough;
+                // Active transients in source-frame domain. Disabled
+                // entries are filtered; D entries surface their visible
+                // (displaced) position via effective_frame(). The list is
+                // already sorted by effective_frame() per the on-disk
+                // invariant, so no re-sort is needed.
+                for (const auto& m : app.transients.markers()) {
+                    if (m.disabled) continue;
+                    req.transient_frames.push_back(m.effective_frame());
+                }
                 do_render(req);
             }
+            return;
+        }
+
+        // Ctrl+Shift+Alt+T: clear every transient marker (undoable).
+        // Checked before Ctrl+Alt+T so the more-specific binding wins.
+        if (ctrl && shift && alt &&
+            (keysym == XK_t || keysym == XK_T)) {
+            clear_all_transients();
+            return;
+        }
+
+        // Ctrl+Alt+T: run transient detection (with a confirmation dialog
+        // when there's already a prior detection in the list).
+        if (ctrl && alt && !shift &&
+            (keysym == XK_t || keysym == XK_T)) {
+            detect_transients();
             return;
         }
 
@@ -3828,16 +4085,18 @@ int main(int argc, char** argv) {
             cairo_t* c = cairo_create(s);
             const DialogLayout L = compute_dialog_layout(
                 c, app.width, app.height,
-                app.dialog.prompt_text.c_str());
+                app.dialog.prompt_text.c_str(),
+                app.dialog.button_labels);
             cairo_destroy(c);
             cairo_surface_destroy(s);
-            auto in = [&](const DialogButtonRect& r) {
-                return x >= r.x && x < r.x + r.w &&
-                       y >= r.y && y < r.y + r.h;
-            };
-            if      (in(L.save))    dialog_activate_button(0);
-            else if (in(L.discard)) dialog_activate_button(1);
-            else if (in(L.cancel))  dialog_activate_button(2);
+            for (size_t i = 0; i < L.buttons.size(); ++i) {
+                const DialogButtonRect& r = L.buttons[i];
+                if (x >= r.x && x < r.x + r.w &&
+                    y >= r.y && y < r.y + r.h) {
+                    dialog_activate_button(static_cast<int>(i));
+                    return;
+                }
+            }
             // Click outside any button: no-op per spec.
             return;
         }
@@ -3943,7 +4202,7 @@ int main(int argc, char** argv) {
                     const int sr = audio.sample_rate();
                     int64_t sample;
                     if (app.active_mode == 'T') {
-                        sample = app.transients.markers()[hit].src_frame;
+                        sample = app.transients.markers()[hit].effective_frame();
                     } else {
                         sample = static_cast<int64_t>(std::llround(
                             app.markers.markers()[hit].time_seconds *
@@ -3980,7 +4239,7 @@ int main(int argc, char** argv) {
                     }
                     int64_t sample;
                     if (app.active_mode == 'T') {
-                        sample = app.transients.markers()[hit].src_frame;
+                        sample = app.transients.markers()[hit].effective_frame();
                     } else {
                         sample = static_cast<int64_t>(std::llround(
                             app.markers.markers()[hit].time_seconds *
@@ -4073,7 +4332,7 @@ int main(int argc, char** argv) {
 
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
-                    new_playhead = app.transients.markers()[hit].src_frame;
+                    new_playhead = app.transients.markers()[hit].effective_frame();
                 } else {
                     new_playhead = static_cast<int64_t>(std::llround(
                         app.markers.markers()[hit].time_seconds *
@@ -4167,7 +4426,7 @@ int main(int argc, char** argv) {
         if (hit_idx >= 0 && hit_idx < n) {
             int64_t ph;
             if (transient_drag) {
-                ph = app.transients.markers()[hit_idx].src_frame;
+                ph = app.transients.markers()[hit_idx].effective_frame();
             } else {
                 ph = static_cast<int64_t>(std::llround(
                     app.markers.markers()[hit_idx].time_seconds * sr_d));

@@ -358,6 +358,7 @@ void do_render(const RenderRequest& req) {
         // 24-bit PCM only when the engine's write is the final file AND
         // its internal limiter ran. Trimmed path writes intermediate float.
         ep.output_24bit_pcm       = !tmres.trimmed && user_limiter_en;
+        ep.transient_frames       = req.transient_frames;
 
         if (!run_warptempo_engine(ep)) {
             std::fprintf(stderr, "warptempo_gui: render error: engine failed\n");
@@ -482,4 +483,68 @@ void do_render(const RenderRequest& req) {
     cleanup_all();
     std::fprintf(stderr, "warptempo_gui: render complete: %s\n",
                  output_audio_path.c_str());
+}
+
+bool do_detection(const DetectionRequest& req,
+                  std::vector<int64_t>& out_src_frames) {
+    out_src_frames.clear();
+    if (req.source_audio_path.empty()) {
+        std::fprintf(stderr,
+            "warptempo_gui: detection error: no source audio path\n");
+        return false;
+    }
+
+    SF_INFO src_info{};
+    src_info.format = 0;
+    SNDFILE* sf = sf_open(req.source_audio_path.c_str(), SFM_READ, &src_info);
+    if (!sf) {
+        std::fprintf(stderr,
+            "warptempo_gui: detection error: could not open source '%s'\n",
+            req.source_audio_path.c_str());
+        return false;
+    }
+    const long sample_rate  = src_info.samplerate;
+    const long total_frames = static_cast<long>(src_info.frames);
+    sf_close(sf);
+
+    const double scale = parse_double(
+        settings_get(req.settings_passthrough, "scale"), 1.0);
+
+    TimemapBuildInput tmin;
+    tmin.markers      = resolve_markers_for_render(req.markers);
+    tmin.scale        = scale;
+    tmin.sample_rate  = sample_rate;
+    tmin.total_frames = total_frames;
+
+    TimemapBuildResult tmres;
+    if (!build_timemaps(tmin, tmres)) {
+        std::fprintf(stderr,
+            "warptempo_gui: detection error: timemap build failed\n");
+        return false;
+    }
+
+    DetectionParams dp;
+    dp.source_audio_path = req.source_audio_path;
+    dp.timemap.reserve(tmres.standard.size());
+    for (const auto& s : tmres.standard) {
+        dp.timemap.emplace_back(s.src_frame, s.tgt_frame);
+    }
+    dp.N           = parse_int(
+        settings_get(req.settings_passthrough, "N"), 4096);
+    dp.fftw_threads = parse_int(
+        settings_get(req.settings_passthrough, "fftw_threads"), 0);
+    dp.transients_xover_low = parse_double(
+        settings_get(req.settings_passthrough, "transients_xover_low"), 120.0);
+    dp.transients_xover_high = parse_double(
+        settings_get(req.settings_passthrough, "transients_xover_high"), 3500.0);
+    dp.transients_tau_back_ms = parse_double(
+        settings_get(req.settings_passthrough, "transients_tau_back_ms"), 30.0);
+    dp.transients_thresh_db = parse_double(
+        settings_get(req.settings_passthrough, "transients_thresh_db"), -20.0);
+    dp.transients_refractory_ms = parse_double(
+        settings_get(req.settings_passthrough, "transients_refractory_ms"), 1500.0);
+    dp.transients_anticipation_ms = parse_double(
+        settings_get(req.settings_passthrough, "transients_anticipation_ms"), 100.0);
+
+    return run_warptempo_detection(dp, out_src_frames);
 }

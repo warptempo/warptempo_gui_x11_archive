@@ -45,8 +45,32 @@ bool is_all_digits(const std::string& s) {
     return true;
 }
 
-// Parse "[b=|e=][#]<frame> I" into a GuiTransient. Returns true on success;
-// on failure, fills `err_msg` with a one-line diagnostic.
+// Parse a non-negative integer token. Returns true and writes to `out` on
+// success; on failure fills `err_msg`.
+bool parse_frame_token(const std::string& tok, int64_t& out,
+                       const char* what, std::string& err_msg) {
+    if (tok.empty()) {
+        err_msg = std::string("missing ") + what;
+        return false;
+    }
+    if (!is_all_digits(tok)) {
+        err_msg = std::string(what) + " must be a non-negative integer: " + tok;
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    long long v = std::strtoll(tok.c_str(), &end, 10);
+    if (errno != 0 || end == tok.c_str() || *end != '\0' || v < 0) {
+        err_msg = std::string(what) + " out of range: " + tok;
+        return false;
+    }
+    out = static_cast<int64_t>(v);
+    return true;
+}
+
+// Parse "[b=|e=][#]<frame> <I|D>[ <displaced_frame>]" into a GuiTransient.
+// Returns true on success; on failure, fills `err_msg` with a one-line
+// diagnostic.
 bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg) {
     std::string t = trim_ws(raw);
     if (t.empty()) {
@@ -63,40 +87,57 @@ bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg)
         t.erase(0, 1);
     }
 
-    // Split off the status token. Format requires exactly one space between
-    // <frame> and the status code.
-    const size_t sp = t.find(' ');
-    if (sp == std::string::npos) {
+    // Tokenize on whitespace. Expect 2 or 3 fields:
+    //   <frame> <status>
+    //   <frame> D <displaced_frame>
+    std::vector<std::string> toks;
+    {
+        std::istringstream iss(t);
+        std::string tk;
+        while (iss >> tk) toks.push_back(std::move(tk));
+    }
+    if (toks.size() < 2) {
         err_msg = "missing status code";
         return false;
     }
-    const std::string frame_tok = t.substr(0, sp);
-    std::string rest = t.substr(sp + 1);
-    rest = trim_ws(rest);
-
-    if (frame_tok.empty()) {
-        err_msg = "missing src_frame";
-        return false;
-    }
-    if (!is_all_digits(frame_tok)) {
-        err_msg = "src_frame must be a non-negative integer: " + frame_tok;
+    if (toks.size() > 3) {
+        err_msg = "too many fields";
         return false;
     }
 
-    errno = 0;
-    char* end = nullptr;
-    long long v = std::strtoll(frame_tok.c_str(), &end, 10);
-    if (errno != 0 || end == frame_tok.c_str() || *end != '\0' || v < 0) {
-        err_msg = "src_frame out of range: " + frame_tok;
+    if (!parse_frame_token(toks[0], out.src_frame, "src_frame", err_msg)) {
         return false;
     }
-    out.src_frame = static_cast<int64_t>(v);
 
-    if (rest != "I") {
-        err_msg = "unknown status code: " + rest + " (expected I)";
+    const std::string& status = toks[1];
+    if (status == "I") {
+        out.is_inserted = true;
+        if (toks.size() == 3) {
+            err_msg = "I status must not have a displaced_frame";
+            return false;
+        }
+    } else if (status == "D") {
+        out.is_inserted = false;
+        if (toks.size() == 3) {
+            int64_t df = 0;
+            if (!parse_frame_token(toks[2], df, "displaced_frame", err_msg)) {
+                return false;
+            }
+            if (df == 0) {
+                err_msg = "displaced_frame must be > 0";
+                return false;
+            }
+            if (df == out.src_frame) {
+                err_msg = "displaced_frame must differ from src_frame";
+                return false;
+            }
+            out.has_displacement = true;
+            out.displaced_frame  = df;
+        }
+    } else {
+        err_msg = "unknown status code: " + status + " (expected I or D)";
         return false;
     }
-    out.is_inserted = true;
     return true;
 }
 
@@ -149,14 +190,17 @@ bool GuiTransients::load(const std::string& path) {
             parse_ok = false;
             continue;
         }
-        if (last_frame >= 0 && m.src_frame <= last_frame) {
+        // Strictly-ascending order is keyed on effective_frame: the
+        // visible position of the marker.
+        const int64_t eff = m.effective_frame();
+        if (last_frame >= 0 && eff <= last_frame) {
             errors_.push_back({line_number,
-                "src_frame not strictly increasing: " +
-                std::to_string(m.src_frame)});
+                "effective_frame not strictly increasing: " +
+                std::to_string(eff)});
             parse_ok = false;
             continue;
         }
-        last_frame = m.src_frame;
+        last_frame = eff;
         markers_.push_back(std::move(m));
     }
 
@@ -165,16 +209,18 @@ bool GuiTransients::load(const std::string& path) {
         return false;
     }
     // Frame-0 invariant: a non-empty transient list always carries an
-    // entry at src_frame 0. Phase reset at render start is always
+    // entry at effective_frame 0. Phase reset at render start is always
     // correct, so silently materialize the head if the on-disk file
     // omitted it. An empty file stays empty until the user authors.
-    if (!markers_.empty() && markers_.front().src_frame > 0) {
+    if (!markers_.empty() && markers_.front().effective_frame() > 0) {
         GuiTransient zero;
-        zero.src_frame     = 0;
-        zero.is_inserted   = true;
-        zero.disabled      = false;
-        zero.is_begin_time = false;
-        zero.is_end_time   = false;
+        zero.src_frame        = 0;
+        zero.is_inserted      = true;
+        zero.disabled         = false;
+        zero.is_begin_time    = false;
+        zero.is_end_time      = false;
+        zero.has_displacement = false;
+        zero.displaced_frame  = 0;
         markers_.insert(markers_.begin(), zero);
     }
     return true;
@@ -184,18 +230,21 @@ bool GuiTransients::save(const std::string& path) const {
     // Mid-edit nudge gestures may transit through equal-frame collisions.
     // Drop duplicates silently here (keep the first occurrence) and emit
     // a one-line stderr notice so the user sees that the on-disk content
-    // diverges from the in-memory list.
+    // diverges from the in-memory list. Dedup is keyed on effective_frame
+    // — a D-with-displacement and an I at the same visible position would
+    // both render at one column.
     std::vector<GuiTransient> deduped;
     deduped.reserve(markers_.size());
     int64_t last_frame = std::numeric_limits<int64_t>::min();
     int dropped = 0;
     for (const auto& m : markers_) {
-        if (m.src_frame == last_frame) {
+        const int64_t eff = m.effective_frame();
+        if (eff == last_frame) {
             ++dropped;
             continue;
         }
         deduped.push_back(m);
-        last_frame = m.src_frame;
+        last_frame = eff;
     }
     if (dropped > 0) {
         std::fprintf(stderr,
@@ -208,7 +257,11 @@ bool GuiTransients::save(const std::string& path) const {
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
         if (m.disabled)         out << '#';
-        out << m.src_frame << ' ' << 'I' << '\n';
+        out << m.src_frame << ' ' << (m.is_inserted ? 'I' : 'D');
+        if (!m.is_inserted && m.has_displacement) {
+            out << ' ' << m.displaced_frame;
+        }
+        out << '\n';
     }
     const std::string data = out.str();
 
@@ -260,9 +313,10 @@ bool GuiTransients::delete_file(const std::string& path) const {
 }
 
 int GuiTransients::insert_marker(GuiTransient m) {
+    const int64_t eff = m.effective_frame();
     auto it = std::lower_bound(
-        markers_.begin(), markers_.end(), m.src_frame,
-        [](const GuiTransient& a, int64_t f) { return a.src_frame < f; });
+        markers_.begin(), markers_.end(), eff,
+        [](const GuiTransient& a, int64_t f) { return a.effective_frame() < f; });
     const int idx = static_cast<int>(it - markers_.begin());
     markers_.insert(it, std::move(m));
     return idx;
