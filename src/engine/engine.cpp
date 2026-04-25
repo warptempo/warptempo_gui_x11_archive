@@ -49,6 +49,7 @@ bool run_warptempo_engine(const EngineParams& p) {
     lp.diag                 = p.limiter_diag;
 
     audio_stft.output_audio_file = p.output_audio_path;
+    audio_stft.output_24bit_pcm  = p.output_24bit_pcm;
 
     if (audio_stft.N % 4 != 0) {
         std::cerr << "Error: N must be divisible by 4.\n";

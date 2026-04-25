@@ -28,6 +28,7 @@ struct EngineParams {
     double limiter_tolerance_db       = 0.01;
     int    limiter_num_bands          = 0;
     bool   limiter_diag               = false;
+    bool   output_24bit_pcm           = false;
 };
 
 // Returns true on success, false on failure. Failure reasons are logged to

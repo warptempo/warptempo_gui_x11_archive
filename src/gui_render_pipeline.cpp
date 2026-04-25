@@ -271,21 +271,6 @@ void do_render(const RenderRequest& req) {
     const long total_frames = static_cast<long>(src_info.frames);
     sf_close(sf);
 
-    // --- Compute output path. ---
-    std::filesystem::path src(req.source_audio_path);
-    std::filesystem::path dir = src.parent_path();
-    if (dir.empty()) dir = std::filesystem::path(".");
-
-    const bool midi_engine = (engine == "midi");
-    std::string out_filename;
-    if (!user_limiter_en && !midi_engine) {
-        out_filename = "engine=" + engine + ";limiter=false;" + title
-                     + (midi_engine ? ".mid" : ".wav");
-    } else {
-        out_filename = title + (midi_engine ? ".mid" : ".wav");
-    }
-    std::string output_audio_path = (dir / out_filename).string();
-
     // --- Build timemap from in-memory markers. ---
     TimemapBuildInput tmin;
     tmin.markers      = resolve_markers_for_render(req.markers);
@@ -298,6 +283,27 @@ void do_render(const RenderRequest& req) {
         std::fprintf(stderr, "warptempo_gui: render error: timemap build failed\n");
         return;
     }
+
+    // --- Compute output path. ---
+    std::filesystem::path src(req.source_audio_path);
+    std::filesystem::path dir = src.parent_path();
+    if (dir.empty()) dir = std::filesystem::path(".");
+
+    const bool midi_engine = (engine == "midi");
+    // Prefix is applied iff the output WAV will be genuinely unlimited.
+    // warptempo+trimmed always runs through ffmpeg alimiter downstream, so
+    // limiter_enabled=false on the engine side is still limited on disk.
+    const bool output_unlimited =
+        !midi_engine && !user_limiter_en &&
+        !(engine == "warptempo" && tmres.trimmed);
+    std::string out_filename;
+    if (output_unlimited) {
+        out_filename = "engine=" + engine + ";limiter=false;" + title
+                     + (midi_engine ? ".mid" : ".wav");
+    } else {
+        out_filename = title + (midi_engine ? ".mid" : ".wav");
+    }
+    std::string output_audio_path = (dir / out_filename).string();
 
     // --- Temp file paths (pid-scoped). ---
     const pid_t pid = ::getpid();
@@ -349,6 +355,9 @@ void do_render(const RenderRequest& req) {
         ep.limiter_enabled        = tmres.trimmed ? false : user_limiter_en;
         ep.limiter_diag           = false;
         ep.transients_diag        = false;
+        // 24-bit PCM only when the engine's write is the final file AND
+        // its internal limiter ran. Trimmed path writes intermediate float.
+        ep.output_24bit_pcm       = !tmres.trimmed && user_limiter_en;
 
         if (!run_warptempo_engine(ep)) {
             std::fprintf(stderr, "warptempo_gui: render error: engine failed\n");

@@ -145,6 +145,8 @@ struct AudioSTFT {
 
     // Output path (derived from MD5 of source audio)
     std::string output_audio_file;
+    // When true, synthesis writes 24-bit PCM; otherwise 32-bit float.
+    bool output_24bit_pcm = false;
 
     // Cached frame map (populated once in main, reused by all passes)
     std::vector<int64_t> frame_map;
