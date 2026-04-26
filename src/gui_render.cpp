@@ -46,8 +46,8 @@ bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
 //
 // Variants:
 //   label_ref              → "a.42"
-//   inherit, no def        → "idem"
-//   inherit, with def      → "idem:a.42"
+//   inherit, no def        → "pass"
+//   inherit, with def      → "pass:a.42"
 //   owning, no scale       → "1.23"
 //   owning, with scale     → "1.23*1.2345"
 //   def, no scale          → "1.23:a.03"
@@ -61,7 +61,7 @@ std::string flag_text(const std::vector<GuiMarker>& markers, int idx) {
 
     std::string text;
     if (m.tempo_inherits) {
-        text = "idem";
+        text = "pass";
     } else {
         char tbuf[32];
         std::snprintf(tbuf, sizeof(tbuf), "%.2f", m.tempo_base);

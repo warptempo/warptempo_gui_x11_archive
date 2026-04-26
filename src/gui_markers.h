@@ -6,11 +6,11 @@
 // One warp marker, the GUI's authoring view. Three independent state axes:
 //
 //   1. Tempo source. `tempo_inherits == false`: this marker owns its tempo
-//      (`tempo_base` is the numeric value). `tempo_inherits == true`: the
-//      presentation tempo is inherited from the nearest earlier owning
-//      marker; `tempo_base`/`tempo_scale` then serve as a cache of the
-//      remembered owned value (so toggling inherit off restores what was
-//      there before).
+//      (`tempo_base` is the numeric value). `tempo_inherits == true` (a
+//      "pass" marker): the presentation tempo is resolved live by walking
+//      backward through the marker list to the nearest owning marker.
+//      `tempo_base`/`tempo_scale` carry inert defaults (1.0 / "1.0000")
+//      that are never read while the marker is inheriting.
 //
 //   2. Label relationship. At most one of `label_def` and `label_ref` is
 //      non-empty. `label_def` marks a label origin; `label_ref` cites one.
@@ -101,9 +101,8 @@ namespace gui_markers_internal {
 // editor's commit path. Performs only line-local validation (format,
 // whitespace rejection, payload structure) — cross-marker rules (label_ref
 // existence, label_def uniqueness, time monotonicity) are the caller's
-// responsibility. The inherit-cache (tempo_base/tempo_scale on idem) is
-// also the caller's responsibility; on `idem` this leaves both at their
-// in-struct defaults.
+// responsibility. On `pass`, tempo_base/tempo_scale are populated with
+// inert defaults (1.0 / "1.0000") — there is no cache to preserve.
 bool parse_single_canonical_line(
     const std::string& raw_line,
     GuiMarker& out,

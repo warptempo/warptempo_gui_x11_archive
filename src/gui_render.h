@@ -112,7 +112,7 @@ struct FlagEditorOverlay {
 // with the previously-rendered flag's right edge (+ small pad). Flag text
 // is the canonical post-pipe payload: owned tempo `1.28`, owned+scale
 // `1.28*1.2345`, owned+def `1.28:a.01`, owned+scale+def `1.28*1.2345:a.01`,
-// inherit `idem`, label reference `a.01`. Flags whose indices appear in
+// inherit `pass`, label reference `a.01`. Flags whose indices appear in
 // `selected_set` paint text in `selected_color`; only the `last_selected`
 // flag (if rendered and in the set) gets the background highlight
 // rectangle in `highlight_color`.

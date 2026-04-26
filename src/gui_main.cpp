@@ -1760,15 +1760,15 @@ int main(int argc, char** argv) {
         // same value via the locked prefix, but be explicit).
         const double preserved_time = m->time_seconds;
 
-        // Inherit-cache preservation: typing `idem` leaves the cached
-        // tempo_base / tempo_scale alone so a future toggle can restore.
-        // Typing an explicit tempo overwrites the cache (the user
-        // committed to a new owned value). label_def is independent of
-        // tempo source — `idem:LABEL` carries a def at this position
-        // while inheriting the tempo from a prior owning marker.
+        // Cache-free: typing `pass` writes inert defaults into
+        // tempo_base/tempo_scale; typing an explicit tempo writes the
+        // owned value. label_def is independent of tempo source —
+        // `pass:LABEL` carries a def at this position while inheriting
+        // the tempo from a prior owning marker.
         if (parsed.tempo_inherits) {
             m->tempo_inherits = true;
-            // Keep existing tempo_base / tempo_scale as the cache.
+            m->tempo_base     = 1.0;
+            m->tempo_scale    = "1.0000";
             m->label_def      = parsed.label_def;
             m->label_ref.clear();
         } else {
@@ -2275,20 +2275,11 @@ int main(int argc, char** argv) {
         GuiMarker nm;
         nm.time_seconds    = time_seconds;
         nm.tempo_inherits  = inherit;
-        // For inherit markers, pre-seed the cached tempo from the nearest
-        // earlier owning marker. `insert_marker` returns the index; we
-        // compute the source now based on the marker list as it will be
-        // after insertion — equivalent to resolving from the insertion
-        // point, since the walk-backward stops at the first owner.
+        // pass markers carry inert defaults; their effective tempo is
+        // resolved live from the marker list at every read site.
         if (inherit) {
-            // Find the index we'll be inserted at, then walk backward.
-            int insertion_idx = 0;
-            for (const auto& m : mv) {
-                if (m.time_seconds < time_seconds) insertion_idx++;
-                else break;
-            }
-            nm.tempo_base  = resolve_inherited_tempo(mv, insertion_idx);
-            nm.tempo_scale = resolve_inherited_tempo_scale(mv, insertion_idx);
+            nm.tempo_base  = 1.0;
+            nm.tempo_scale = "1.0000";
         } else {
             nm.tempo_base = 1.0;
             nm.tempo_scale.clear();
@@ -2450,21 +2441,43 @@ int main(int argc, char** argv) {
         invalidate_dirty_and_timestamp();
     };
 
-    // Toggle the tempo source of each selected marker between owned and
-    // inherit. Markers that can't inherit (first marker, label refs) are
-    // silently skipped per chunk I single-marker rules.
+    // Shift+P: convert each selected marker's tempo source. Cache-free —
+    // the only stored state on a pass marker is `tempo_inherits = true`
+    // plus inert defaults. Three input cases per marker:
+    //   - owning   → pass: inert defaults; label_def preserved.
+    //   - pass     → owning: freeze the resolved tempo/scale at this moment;
+    //                label_def preserved.
+    //   - label_ref → pass: clear the ref; inert defaults.
+    // The first marker is silently skipped (it must own its tempo).
     auto toggle_inherits = [&]() {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
         std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
+        const auto& mv_const = app.markers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
             GuiMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             if (idx == 0) continue;
-            if (!m->label_ref.empty()) continue;
-            m->tempo_inherits = !m->tempo_inherits;
+            if (!m->label_ref.empty()) {
+                m->label_ref.clear();
+                m->tempo_inherits = true;
+                m->tempo_base     = 1.0;
+                m->tempo_scale    = "1.0000";
+            } else if (m->tempo_inherits) {
+                const double resolved_tempo =
+                    resolve_inherited_tempo(mv_const, idx);
+                const std::string resolved_scale =
+                    resolve_inherited_tempo_scale(mv_const, idx);
+                m->tempo_inherits = false;
+                m->tempo_base     = resolved_tempo;
+                m->tempo_scale    = resolved_scale;
+            } else {
+                m->tempo_inherits = true;
+                m->tempo_base     = 1.0;
+                m->tempo_scale    = "1.0000";
+            }
             changed = true;
         }
         if (!changed) return;
@@ -2642,25 +2655,38 @@ int main(int argc, char** argv) {
         invalidate_dirty_and_timestamp();
     };
 
-    // Nudge every owned-tempo selected marker by `delta`. Inherit markers
-    // and label refs in the set are silently skipped. Clamps to [0.01, 9.99].
-    // Only dirties / invalidates if at least one marker's tempo changed.
+    // Nudge every selected marker by `delta`. Label refs are silently
+    // skipped (no tempo to nudge — convert via Shift+P first). Pass markers
+    // resolve walk-backward to get their starting tempo/scale, then freeze
+    // to owning at the nudged value. Owning markers nudge in place.
+    // Clamps to [0.01, 9.99]. Only dirties / invalidates on real change.
     auto adjust_tempo = [&](double delta) {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
         std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
+        const auto& mv_const = app.markers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
             GuiMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             if (!m->label_ref.empty()) continue;
-            if (m->tempo_inherits) continue;
-            double new_tempo = m->tempo_base + delta;
+            double      start_tempo;
+            std::string start_scale;
+            if (m->tempo_inherits) {
+                start_tempo = resolve_inherited_tempo(mv_const, idx);
+                start_scale = resolve_inherited_tempo_scale(mv_const, idx);
+            } else {
+                start_tempo = m->tempo_base;
+                start_scale = m->tempo_scale;
+            }
+            double new_tempo = start_tempo + delta;
             if (new_tempo < 0.01) new_tempo = 0.01;
             if (new_tempo > 9.99) new_tempo = 9.99;
-            if (new_tempo == m->tempo_base) continue;
-            m->tempo_base = new_tempo;
+            if (!m->tempo_inherits && new_tempo == m->tempo_base) continue;
+            m->tempo_inherits = false;
+            m->tempo_base     = new_tempo;
+            m->tempo_scale    = start_scale;
             invalidate_marker_column(idx);
             changed = true;
         }
@@ -4375,15 +4401,16 @@ int main(int argc, char** argv) {
             else                               drop_marker_at_playhead();
             return;
         }
-        if (keysym == XK_i && !ctrl) {
-            if (app.active_mode == 'T') {
-                // Transient mode: only Shift+I (toggle disabled) is meaningful.
-                // Plain `i` (toggle inherit) has no transient analogue.
-                if (shift) toggle_transient_disabled();
-                return;
-            }
-            if (shift) toggle_disabled();
-            else       toggle_inherits();
+        // Shift+P: toggle inherit (warp only). Plain `p` is unbound.
+        if (keysym == XK_p && !ctrl && !alt && shift) {
+            if (app.active_mode == 'T') return;
+            toggle_inherits();
+            return;
+        }
+        // Shift+D: toggle disabled (warp + transient). Plain `d` is unbound.
+        if (keysym == XK_d && !ctrl && !alt && shift) {
+            if (app.active_mode == 'T') toggle_transient_disabled();
+            else                        toggle_disabled();
             return;
         }
         if (keysym == XK_Delete && !ctrl) {

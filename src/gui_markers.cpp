@@ -199,10 +199,11 @@ bool parse_new_payload(const std::string& payload,
     }
 
     if (colon == std::string::npos) {
-        // Single part: tempo, idem, or label_ref.
-        if (payload == "idem") {
+        // Single part: tempo, pass, or label_ref.
+        if (payload == "pass") {
             m.tempo_inherits = true;
-            // tempo_base/tempo_scale to be filled by caller (walk-back cache).
+            m.tempo_base     = 1.0;
+            m.tempo_scale    = "1.0000";
             return true;
         }
         if (is_valid_label_format(payload)) {
@@ -232,9 +233,9 @@ bool parse_new_payload(const std::string& payload,
         return true;
     }
 
-    // Two parts: (TEMPO[*SCALE] | idem) : label_def. The three GuiMarker
+    // Two parts: (TEMPO[*SCALE] | pass) : label_def. The three GuiMarker
     // state axes (tempo source, label relationship, disabled) are
-    // independent; `idem:LABEL` is the inheriting + label_def combination.
+    // independent; `pass:LABEL` is the inheriting + label_def combination.
     const std::string tempo_with_scale = payload.substr(0, colon);
     const std::string label_def        = payload.substr(colon + 1);
 
@@ -246,9 +247,10 @@ bool parse_new_payload(const std::string& payload,
         error_out = "invalid label definition: " + label_def;
         return false;
     }
-    if (tempo_with_scale == "idem") {
+    if (tempo_with_scale == "pass") {
         m.tempo_inherits = true;
-        // tempo_base/tempo_scale to be filled by caller (walk-back cache).
+        m.tempo_base     = 1.0;
+        m.tempo_scale    = "1.0000";
         m.label_def      = label_def;
         return true;
     }
@@ -436,8 +438,10 @@ bool GuiMarkers::load(const std::string& path) {
 
     // ----- Pass 2: build markers -----------------------------------------
 
-    double      previous_tempo_base  = 1.0;
-    std::string previous_tempo_scale;
+    // `have_prev_numeric` gates the legacy `""""` ditto sentinel: ditto can
+    // only appear after a numeric tempo. The actual tempo carried forward
+    // is no longer recorded — pass markers in the in-memory model carry
+    // inert defaults and resolve live via walk-backward instead.
     bool have_prev_numeric = false;
     bool parse_ok          = true;
     bool first_marker_seen = false;
@@ -548,8 +552,8 @@ bool GuiMarkers::load(const std::string& path) {
                 }
                 had_nonstandard_content_ = true;
                 m.tempo_inherits = true;
-                m.tempo_base     = previous_tempo_base;
-                m.tempo_scale    = previous_tempo_scale;
+                m.tempo_base     = 1.0;
+                m.tempo_scale    = "1.0000";
             } else if (tempo_numeric) {
                 const size_t star = tempo_raw.find('*');
                 const std::string base_part = (star == std::string::npos)
@@ -558,9 +562,7 @@ bool GuiMarkers::load(const std::string& path) {
                 m.tempo_base     = eval_math_string(base_part);
                 m.tempo_scale    = (star == std::string::npos)
                     ? std::string() : tempo_raw.substr(star + 1);
-                previous_tempo_base    = m.tempo_base;
-                previous_tempo_scale   = m.tempo_scale;
-                have_prev_numeric      = true;
+                have_prev_numeric = true;
             } else {
                 if (!is_valid_label_format(tempo_raw)) {
                     errors_.push_back({line_number,
@@ -708,22 +710,9 @@ bool GuiMarkers::load(const std::string& path) {
             seen_def_line[m.label_def] = line_number;
         }
 
-        // Inherit-cache walk-back: idem markers carry the prior owning
-        // marker's tempo/scale in memory so a future toggle restores it.
-        if (m.tempo_inherits) {
-            if (!have_prev_numeric) {
-                errors_.push_back({line_number,
-                    "idem has no preceding owning tempo"});
-                parse_ok = false;
-                continue;
-            }
-            m.tempo_base  = previous_tempo_base;
-            m.tempo_scale = previous_tempo_scale;
-        } else if (m.label_ref.empty()) {
-            previous_tempo_base  = m.tempo_base;
-            previous_tempo_scale = m.tempo_scale;
-            have_prev_numeric    = true;
-        }
+        // pass markers carry inert defaults (set by parse_new_payload). No
+        // cache: their effective tempo is resolved live via walk-backward
+        // through the marker list at every read site.
 
         last_time = m.time_seconds;
         markers_.push_back(std::move(m));
@@ -764,8 +753,8 @@ bool GuiMarkers::save(const std::string& path) const {
 
         // Payload:
         //   label_ref               → "a.42"
-        //   inherit, no def         → "idem"
-        //   inherit, with def       → "idem:a.42"
+        //   inherit, no def         → "pass"
+        //   inherit, with def       → "pass:a.42"
         //   owning, no scale        → "1.23"
         //   owning, with scale      → "1.23*1.2345"
         //   def, no scale           → "1.23:a.03"
@@ -774,7 +763,7 @@ bool GuiMarkers::save(const std::string& path) const {
             out << m.label_ref;
         } else {
             if (m.tempo_inherits) {
-                out << "idem";
+                out << "pass";
             } else {
                 char tbuf[32];
                 std::snprintf(tbuf, sizeof(tbuf), "%.2f", m.tempo_base);
