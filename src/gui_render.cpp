@@ -17,12 +17,15 @@ namespace perf_counters {
 
 namespace {
 
-// True if the label defined by marker at `def_index` is disabled. The
-// storage rule: `disabled` is only meaningful on label-defining markers.
+// True if the marker at `idx` should render as disabled. Per chunk U
+// patch 3, `disabled` is allowed on any marker — a locally set flag
+// always counts. For an active (non-locally-disabled) `label_ref`, the
+// cascade rule applies: the ref inherits its target label_def's
+// disabled state.
 bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
     if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
     const auto& m = markers[idx];
-    if (!m.label_def.empty()) return m.disabled;
+    if (m.disabled) return true;
     if (!m.label_ref.empty()) {
         // Walk all markers to find the definition. O(N^2) across the list
         // but N is small (hundreds max).

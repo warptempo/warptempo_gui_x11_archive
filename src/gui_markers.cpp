@@ -525,13 +525,6 @@ bool GuiMarkers::load(const std::string& path) {
             }
 
             if (line_disabled) {
-                if (m.label_def.empty()) {
-                    errors_.push_back({line_number,
-                        "disabled `#` prefix only allowed on label "
-                        "definitions"});
-                    parse_ok = false;
-                    continue;
-                }
                 m.disabled = true;
             }
         }
@@ -558,11 +551,11 @@ bool GuiMarkers::save(const std::string& path) const {
         // Screen-mirroring on disk (chunk S.2.1):
         //   [b=|e=][#]<timestamp> <tempo-or-ref> [(<label_def>)]
         // is_begin_time and is_end_time are mutually exclusive (S.1
-        // auto-swap). The leading `#` only carries meaning on a label def,
-        // so suppress it otherwise.
+        // auto-swap). The leading `#` is emitted whenever `disabled` is
+        // set (chunk U patch 3), regardless of marker type.
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
-        if (m.disabled && !m.label_def.empty()) out << '#';
+        if (m.disabled) out << '#';
         out << format_timestamp(m.time_seconds) << ' ';
 
         // Defensive guard against invalid in-memory combinations.

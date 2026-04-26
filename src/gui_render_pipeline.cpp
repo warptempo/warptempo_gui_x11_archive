@@ -185,14 +185,16 @@ std::vector<MarkerForRender> resolve_markers_for_render(
     // Walk backward through SOURCE markers from at_index, returning the
     // nearest earlier marker's tempo if it owns its tempo and is not
     // itself disabled. Skips: tempo_inherits markers, label_ref markers,
-    // and disabled label_def markers. Default if none found: {1.0, ""}.
+    // and disabled markers (any kind — chunk U patch 3 allows `disabled`
+    // on non-label-defs, and a disabled marker is never a valid tempo
+    // source). Default if none found: {1.0, ""}.
     auto walk_back_owning_tempo = [&](size_t at_index)
         -> std::pair<double, std::string> {
         for (int j = static_cast<int>(at_index) - 1; j >= 0; --j) {
             const auto& p = src[j];
             if (p.tempo_inherits) continue;
             if (!p.label_ref.empty()) continue;
-            if (!p.label_def.empty() && p.disabled) continue;
+            if (p.disabled) continue;
             return { p.tempo_base, p.tempo_scale };
         }
         return { 1.0, std::string{} };
@@ -202,15 +204,18 @@ std::vector<MarkerForRender> resolve_markers_for_render(
     out.reserve(src.size());
     for (size_t i = 0; i < src.size(); ++i) {
         const auto& g = src[i];
-        const bool is_disabled_label_def =
-            !g.label_def.empty() && g.disabled;
-        const bool is_disabled_label_ref =
-            !g.label_ref.empty() && is_disabled_ref(g.label_ref);
-        const bool is_disabled_cascade =
-            is_disabled_label_def || is_disabled_label_ref;
+        const bool is_disabled_label_ref_cascade =
+            !g.disabled && !g.label_ref.empty()
+            && is_disabled_ref(g.label_ref);
+        // Chunk U patch 3: `disabled` is allowed on any marker; whatever
+        // its kind, a disabled marker's tempo is silenced. The label_ref
+        // cascade is a separate path (the ref itself is not disabled but
+        // its target is).
+        const bool is_effectively_disabled =
+            g.disabled || is_disabled_label_ref_cascade;
         const bool has_trim_flag = g.is_begin_time || g.is_end_time;
 
-        if (is_disabled_cascade && !has_trim_flag) continue;
+        if (is_effectively_disabled && !has_trim_flag) continue;
 
         MarkerForRender m;
         m.time_seconds  = g.time_seconds;
@@ -219,11 +224,10 @@ std::vector<MarkerForRender> resolve_markers_for_render(
         m.is_begin_time = g.is_begin_time;
         m.is_end_time   = g.is_end_time;
 
-        if (is_disabled_cascade) {
-            // Kept solely for the trim flag — the marker doesn't own a
-            // tempo (its label is silenced by cascade), so resolve via
-            // walk-back through earlier non-disabled, non-inheriting,
-            // non-label_ref markers.
+        if (is_effectively_disabled) {
+            // Kept solely for the trim flag — the marker's own tempo is
+            // silenced, so resolve via walk-back through earlier
+            // non-disabled, non-inheriting, non-label_ref markers.
             auto [base, scale] = walk_back_owning_tempo(i);
             m.tempo_base  = base;
             m.tempo_scale = scale;

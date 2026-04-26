@@ -15,10 +15,13 @@
 //   2. Label relationship. At most one of `label_def` and `label_ref` is
 //      non-empty. `label_def` marks a label origin; `label_ref` cites one.
 //
-//   3. Disabled flag. Only meaningful on a label-defining marker. At display
-//      and save time, any marker that references a disabled-defined label
-//      is rendered/saved as disabled too — the cascade is computed, not
-//      stored.
+//   3. Disabled flag. Allowed on any marker. A disabled marker has its
+//      tempo contribution silenced; trim flags (`b=`/`e=`) are still
+//      honored at render time (see chunk U patch 2). When the disabled
+//      marker is a `label_def`, all `label_ref` markers pointing to it
+//      are also treated as disabled (cascade). The cascade rule applies
+//      only to label_def markers; a disabled non-label-def is locally
+//      disabled and does not propagate.
 struct GuiMarker {
     double time_seconds = 0.0;
 

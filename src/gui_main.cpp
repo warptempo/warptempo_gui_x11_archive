@@ -2274,8 +2274,9 @@ int main(int argc, char** argv) {
         invalidate_dirty_and_timestamp();
     };
 
-    // Toggle the disabled flag on each selected marker that has a label_def.
-    // Others are silently skipped (label_refs inherit disabled from the def).
+    // Toggle the disabled flag on each selected marker. Per chunk U patch 3
+    // the flag is allowed on any marker (cascade still applies only when the
+    // toggled marker is a label_def).
     auto toggle_disabled = [&]() {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
@@ -2285,7 +2286,6 @@ int main(int argc, char** argv) {
         for (int idx : app.selected_markers) {
             GuiMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
-            if (m->label_def.empty()) continue;
             m->disabled = !m->disabled;
             changed = true;
         }
