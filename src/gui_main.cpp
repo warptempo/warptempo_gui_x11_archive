@@ -3,6 +3,7 @@
 #include "gui_playback.h"
 #include "gui_render.h"
 #include "gui_render_pipeline.h"
+#include "gui_text_display.h"
 #include "gui_text_editor.h"
 #include "gui_transients.h"
 #include "gui_x11.h"
@@ -79,6 +80,11 @@ constexpr int kMarkerHitHalfPx = 3;
 // roll it from ButtonPress timing + position deltas.
 constexpr int kDoubleClickMs      = 300;
 constexpr int kDoubleClickPixels  = 5;
+
+// Time the cursor must dwell on a popup-eligible flag rect before the
+// hover popup appears. Distinct from kDoubleClickMs (point-event window
+// vs continuous-state duration) even though they currently share a value.
+constexpr int kHoverDelayMs       = 500;
 
 // ms-per-pixel for each numeric zoom level. Level 0 is most zoomed in.
 constexpr double kZoomMsPerPixel[] = {
@@ -225,17 +231,24 @@ struct UndoHistory {
     }
 };
 
-// State for the plain/Shift left-button playhead-drag gesture. Modifier
-// state is captured at press and not re-read during motion; the gesture
-// ends on release (or on Escape, which ends at current position without
-// restoring). `last_added_marker` tracks the most-recently-snapped-to
-// marker *added fresh* by this gesture, so subsequent snap-to-another
-// can un-toggle it without removing pre-existing selections.
+// State for the plain/Shift left-button playhead-drag gesture. The drag
+// only positions the playhead (with a 3px snap-to-marker magnet); selection
+// is set at press time and never mutated by motion. The gesture ends on
+// release (or on Escape, which ends at current position).
 struct PlayheadDragState {
-    bool active             = false;
-    bool shift_at_press     = false;
-    int  last_added_marker  = -1;
-    bool last_added_was_fresh = false;
+    bool active = false;
+};
+
+// V.A3b hover popup state. A popup-eligible warp marker (pass marker or
+// label_ref) under the cursor for kHoverDelayMs becomes a tooltip showing
+// the resolved tempo. The motion handler sets `marker_index` + `entry_time`
+// when the cursor first lands on an eligible rect; the tick handler flips
+// `visible` when the dwell threshold is crossed; mutation paths /
+// dismiss conditions clear the whole struct.
+struct HoverPopupState {
+    int  marker_index = -1;
+    bool visible      = false;
+    std::chrono::steady_clock::time_point entry_time{};
 };
 
 // What action triggered the modal dialog; the activate-button dispatch
@@ -378,6 +391,16 @@ struct AppState {
     // Playhead drag state (plain / Shift left-button). Cleared on button
     // release, Escape, and file load.
     PlayheadDragState playhead_drag;
+
+    // V.A3b hover-popup state. See HoverPopupState above.
+    HoverPopupState   hover_popup;
+
+    // V.A3b Addendum 3: cursor screen position from the last on_motion
+    // event. Used by recompute_hover_at_cursor() to re-evaluate hover
+    // after a viewport mutation (when the cursor is stationary but rects
+    // have shifted). -1 means "no motion seen yet".
+    int               last_mouse_x = -1;
+    int               last_mouse_y = -1;
 
     // Undo/redo history for marker mutations. `dirty` below becomes a
     // derived signal: dirty = history.is_dirty(). Save/load reshape the
@@ -934,6 +957,13 @@ int main(int argc, char** argv) {
         }
     };
 
+    // V.A3b Addendum 3: forward-declared so the viewport-mutator lambdas
+    // below can invoke it. The body is assigned later (after hit_test_flag
+    // and clear_hover_popup are in scope). Guarded with a truthiness check
+    // because callbacks are wired after this assignment, so by the time
+    // any viewport mutator fires from input, the body is in place.
+    std::function<void()> recompute_hover_at_cursor;
+
     // move_playhead_to: update playhead, keep viewport so playhead stays
     // visible. Invalidate only what changed. Clamps to the full audio
     // range; trim is purely cosmetic so the playhead is free to sit in
@@ -973,6 +1003,12 @@ int main(int argc, char** argv) {
             invalidate_playhead_columns(old_px, new_px);
         }
         invalidate_timestamp_area();
+        // V.A3b Addendum 3: viewport may have shifted (Home/End or any
+        // playhead jump that pushed the viewport). Re-evaluate hover at
+        // the cursor's last known coords.
+        if (viewport_changed && recompute_hover_at_cursor) {
+            recompute_hover_at_cursor();
+        }
     };
 
     auto move_playhead_pixels = [&](int delta_px) {
@@ -1009,6 +1045,13 @@ int main(int argc, char** argv) {
 
         invalidate_waveform_area();
         invalidate_timestamp_area();
+        // Flags / hover popup live in the top strip — rect positions
+        // change when the viewport scale changes.
+        const GuiRect ts = top_strip_area(app);
+        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+        // V.A3b Addendum 3: rects shifted under the (possibly stationary)
+        // cursor — re-evaluate hover.
+        if (recompute_hover_at_cursor) recompute_hover_at_cursor();
     };
 
     auto zoom_in = [&]() {
@@ -1041,8 +1084,13 @@ int main(int argc, char** argv) {
         clamp_viewport_start(app, audio);
         if (app.viewport_start_sample != old_vp) {
             invalidate_waveform_area();
-            // Timestamp shows playhead time, which didn't change — no need
-            // to invalidate it. Kept simple for consistency anyway.
+            // Flag positions move with the viewport; the hover popup rides
+            // along, so the top strip must repaint too.
+            const GuiRect ts = top_strip_area(app);
+            gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+            // V.A3b Addendum 3: rects shifted under the (possibly
+            // stationary) cursor — re-evaluate hover.
+            if (recompute_hover_at_cursor) recompute_hover_at_cursor();
         }
     };
 
@@ -1054,6 +1102,11 @@ int main(int argc, char** argv) {
         clamp_viewport_start(app, audio);
         if (app.viewport_start_sample != old_vp) {
             invalidate_waveform_area();
+            const GuiRect ts = top_strip_area(app);
+            gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+            // V.A3b Addendum 3: rects shifted under the (possibly
+            // stationary) cursor — re-evaluate hover.
+            if (recompute_hover_at_cursor) recompute_hover_at_cursor();
         }
     };
 
@@ -1262,6 +1315,86 @@ int main(int argc, char** argv) {
                                  app.selected_markers,
                                  app.last_selected_marker,
                                  overlay);
+
+                    // V.A3b hover popup. Drawn on top of the flag strip,
+                    // strictly after render_flags. Motion + tick already
+                    // gate visibility; redraw just paints what state says.
+                    // Inlined (rather than calling helper lambdas) because
+                    // the redraw lambda is defined before those helpers.
+                    if (app.hover_popup.visible) {
+                        const auto& mv = app.markers.markers();
+                        const int hidx = app.hover_popup.marker_index;
+                        const bool eligible =
+                            (hidx >= 0 &&
+                             hidx < static_cast<int>(mv.size()) &&
+                             (mv[hidx].tempo_inherits ||
+                              !mv[hidx].label_ref.empty()));
+                        if (eligible) {
+                            // Locate the on-screen flag rect for this idx.
+                            auto rects = compute_flag_hit_rects(
+                                cr, top_strip, mv,
+                                vp_start, vp_end, sr, kFlagFontSize);
+                            GuiRect anchor{0, 0, 0, 0};
+                            for (const auto& r : rects) {
+                                if (r.marker_index == hidx) {
+                                    // anchor.x is the flag rect's text-origin
+                                    // (rect's geometric x + render_flags' hl_pad
+                                    // = 2px), so the popup's leading character
+                                    // sits at the same column as the flag's
+                                    // leading character.
+                                    anchor.x = static_cast<int>(std::lround(r.x)) + 2;
+                                    anchor.y = static_cast<int>(std::lround(r.y));
+                                    anchor.w = static_cast<int>(std::lround(r.w));
+                                    anchor.h = static_cast<int>(std::lround(r.h));
+                                    break;
+                                }
+                            }
+                            if (anchor.w > 0 && anchor.h > 0) {
+                                // Resolve the popup text.
+                                int resolve_from = hidx;
+                                if (!mv[hidx].label_ref.empty()) {
+                                    for (int i = 0;
+                                         i < static_cast<int>(mv.size()); ++i) {
+                                        if (mv[i].label_def ==
+                                            mv[hidx].label_ref) {
+                                            resolve_from = i;
+                                            break;
+                                        }
+                                    }
+                                }
+                                int walk_index = resolve_from;
+                                if (resolve_from <
+                                        static_cast<int>(mv.size()) &&
+                                    !mv[resolve_from].tempo_inherits &&
+                                    mv[resolve_from].label_ref.empty()) {
+                                    walk_index = resolve_from + 1;
+                                }
+                                const double tval =
+                                    resolve_inherited_tempo(mv, walk_index);
+                                const std::string scale =
+                                    resolve_inherited_tempo_scale(
+                                        mv, walk_index);
+                                char tbuf[32];
+                                std::snprintf(tbuf, sizeof(tbuf),
+                                              "%.2f", tval);
+                                std::string content = tbuf;
+                                if (!scale.empty()) {
+                                    content += "*";
+                                    content += scale;
+                                }
+
+                                gui_text_display::State td;
+                                td.anchor   = anchor;
+                                td.content  = content;
+                                td.visible  = true;
+                                td.color    = kMarkerColor;
+                                td.position =
+                                    gui_text_display::Position::Top;
+                                gui_text_display::render(cr, td,
+                                                         kFlagFontSize);
+                            }
+                        }
+                    }
                 }
                 const auto f1 = clock::now();
                 t_flags_ms =
@@ -1452,6 +1585,28 @@ int main(int argc, char** argv) {
         gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
     };
 
+    // V.A3b: a warp marker is hover-popup-eligible iff its rect doesn't
+    // already display a numeric tempo: pass markers (with or without a
+    // label_def) and label_ref markers. Owning markers display their tempo
+    // in the rect, so no popup is needed. Transient mode has no pass
+    // concept and is never eligible.
+    auto popup_eligible_marker = [&](int idx) -> bool {
+        if (app.active_mode != 'W') return false;
+        if (idx < 0) return false;
+        const auto& mv = app.markers.markers();
+        if (idx >= static_cast<int>(mv.size())) return false;
+        const auto& m = mv[idx];
+        return m.tempo_inherits || !m.label_ref.empty();
+    };
+
+    // Reset the hover popup state. If the popup was visible, invalidate the
+    // top strip so the next paint erases it. Safe to call from any path.
+    auto clear_hover_popup = [&]() {
+        const bool was_visible = app.hover_popup.visible;
+        app.hover_popup = HoverPopupState{};
+        if (was_visible) invalidate_top_strip();
+    };
+
     auto invalidate_markers_columns = [&](const std::set<int>& idxs) {
         for (int i : idxs) invalidate_marker_column(i);
     };
@@ -1600,6 +1755,7 @@ int main(int argc, char** argv) {
         e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
+        clear_hover_popup();
     };
 
     // Transient counterpart. Symmetric: caller passes the transient pre-
@@ -1616,6 +1772,7 @@ int main(int argc, char** argv) {
         e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
+        clear_hover_popup();
     };
 
     // Cross-file undo: both pre-states explicit. Used by the b/e toggle
@@ -1632,6 +1789,7 @@ int main(int argc, char** argv) {
         e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
+        clear_hover_popup();
     };
 
     // -- V.A1 top-flag editor helpers ---------------------------------------
@@ -1680,6 +1838,7 @@ int main(int argc, char** argv) {
             app.top_flag_editor, idx,
             build_locked_prefix(mv[idx]),
             flag_text_for_marker(mv, idx));
+        clear_hover_popup();
         invalidate_top_strip();
     };
 
@@ -2031,6 +2190,7 @@ int main(int argc, char** argv) {
     auto do_undo = [&]() {
         if (app.history.undo_stack.empty()) return;
         stop_playback_if_playing();
+        clear_hover_popup();
         UndoEntry entry = std::move(app.history.undo_stack.back());
         app.history.undo_stack.pop_back();
 
@@ -2092,6 +2252,7 @@ int main(int argc, char** argv) {
     auto do_redo = [&]() {
         if (app.history.redo_stack.empty()) return;
         stop_playback_if_playing();
+        clear_hover_popup();
         UndoEntry entry = std::move(app.history.redo_stack.back());
         app.history.redo_stack.pop_back();
 
@@ -3134,6 +3295,7 @@ int main(int argc, char** argv) {
             app.last_selected_marker  = t.transient_last_selected;
         }
         app.active_mode = target_mode;
+        clear_hover_popup();
     };
 
     // `t` key: toggle into/out of transient mode. Entry preconditions
@@ -3286,6 +3448,7 @@ int main(int argc, char** argv) {
         app.active_mode    = 'W';
         app.drag          = DragState{};
         app.playhead_drag = PlayheadDragState{};
+        app.hover_popup   = HoverPopupState{};
         app.history.reset();
         app.dirty              = false;
         app.warp_dirty         = false;
@@ -3331,6 +3494,7 @@ int main(int argc, char** argv) {
         app.dialog.prompt_text    =
             "Unsaved changes. Save before continuing?";
         app.dialog.button_labels  = {"Save", "Discard", "Cancel"};
+        clear_hover_popup();
         invalidate_all();
     };
 
@@ -3344,6 +3508,7 @@ int main(int argc, char** argv) {
         app.dialog.prompt_text    =
             "Re-detect transients? Existing detection will be replaced.";
         app.dialog.button_labels  = {"Detect", "Cancel"};
+        clear_hover_popup();
         invalidate_all();
     };
 
@@ -3643,6 +3808,33 @@ int main(int argc, char** argv) {
         return -1;
     };
 
+    // V.A3b Addendum 3: re-evaluate hover at the cursor's last on_motion
+    // coordinates. Called after viewport mutations (zoom, scroll, center,
+    // playhead-driven viewport shift) so a stationary cursor's hover state
+    // tracks the rects that just slid under it. Mirrors the on_motion
+    // hover-detection branch: same gating, same hit-test, same state
+    // transitions; the tick handler still drives the dwell-to-visible flip.
+    recompute_hover_at_cursor = [&]() {
+        if (app.last_mouse_x < 0 || app.last_mouse_y < 0) return;
+        if (app.dialog.active ||
+            app.drag.active ||
+            app.playhead_drag.active ||
+            app.active_mode != 'W' ||
+            gui_text_editor::is_active(app.top_flag_editor) ||
+            app.queue_running) {
+            clear_hover_popup();
+            return;
+        }
+        const int hit = hit_test_flag(app.last_mouse_x, app.last_mouse_y);
+        if (hit != app.hover_popup.marker_index) {
+            if (app.hover_popup.visible) invalidate_top_strip();
+            app.hover_popup.marker_index = hit;
+            app.hover_popup.visible      = false;
+            app.hover_popup.entry_time   =
+                std::chrono::steady_clock::now();
+        }
+    };
+
     // Begin a Ctrl+drag. Expects caller to have already applied the initial
     // selection change (ctrl semantics). Returns true if drag was started.
     // Mode-aware: dragging applies to the active list (warp markers or
@@ -3754,6 +3946,7 @@ int main(int argc, char** argv) {
         d.hit_marker             = hit;
         d.pre_drag_playhead_sample = app.playhead_sample;
         app.drag = std::move(d);
+        clear_hover_popup();
         return true;
     };
 
@@ -3826,6 +4019,7 @@ int main(int argc, char** argv) {
     // the audio cursor and visible state match what the user saw before.
     auto cancel_drag = [&]() {
         if (!app.drag.active) return;
+        clear_hover_popup();
         const bool transient = (app.drag.drag_mode == 'T');
         const double sr_d = static_cast<double>(audio.sample_rate());
         // Restore from the pre-drag snapshot rather than reverse-deriving
@@ -4134,6 +4328,7 @@ int main(int argc, char** argv) {
         if (ctrl && alt && !shift &&
             (keysym == XK_r || keysym == XK_R)) {
             if (!app.source_audio_path.empty()) {
+                clear_hover_popup();
                 RenderRequest req;
                 req.source_audio_path    = app.source_audio_path;
                 req.markers              = app.markers.markers();
@@ -4286,6 +4481,7 @@ int main(int argc, char** argv) {
 
             app.queue_cancel_requested = false;
             app.queue_running          = true;
+            clear_hover_popup();
             const int total = static_cast<int>(pending.size());
             int rendered = 0;
             bool cancelled = false;
@@ -4431,6 +4627,7 @@ int main(int argc, char** argv) {
             // back to the audio cursor, overwriting the target tab's
             // stored playhead.
             stop_playback_if_playing();
+            clear_hover_popup();
             refresh_active_tab_from_app();
             app.active_tab = (app.active_tab == 'A') ? 'B' : 'A';
             const Tab& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
@@ -4718,13 +4915,9 @@ int main(int argc, char** argv) {
                     // Press on a marker (within 3px).
                     if (!shift) {
                         set_single_selection(hit);
-                        app.playhead_drag.last_added_marker    = -1;
-                        app.playhead_drag.last_added_was_fresh = false;
                     } else {
                         // Shift+press on marker: selection otherwise preserved;
-                        // add hit if not already present. Track whether this
-                        // was a fresh add so subsequent snap-during-drag can
-                        // un-toggle only fresh additions.
+                        // add hit if not already present.
                         const bool was_in = app.selected_markers.count(hit) > 0;
                         if (!was_in) {
                             app.selected_markers.insert(hit);
@@ -4732,8 +4925,6 @@ int main(int argc, char** argv) {
                             invalidate_top_strip();
                         }
                         app.last_selected_marker = hit;
-                        app.playhead_drag.last_added_marker    = hit;
-                        app.playhead_drag.last_added_was_fresh = !was_in;
                     }
                     int64_t sample;
                     if (app.active_mode == 'T') {
@@ -4744,8 +4935,7 @@ int main(int argc, char** argv) {
                             static_cast<double>(sr)));
                     }
                     move_playhead_to(sample);
-                    app.playhead_drag.active         = true;
-                    app.playhead_drag.shift_at_press = shift;
+                    app.playhead_drag.active = true;
                 } else {
                     // Press on empty waveform.
                     const double spp = current_samples_per_pixel(app, audio);
@@ -4758,15 +4948,15 @@ int main(int argc, char** argv) {
                         static_cast<int64_t>(std::llround(click_rel_x * spp));
                     if (!shift) clear_selection();
                     move_playhead_to(sample);
-                    app.playhead_drag.active               = true;
-                    app.playhead_drag.shift_at_press       = shift;
-                    app.playhead_drag.last_added_marker    = -1;
-                    app.playhead_drag.last_added_was_fresh = false;
+                    app.playhead_drag.active = true;
                 }
             }
         } else if (button == 4 || button == 5) {
-            // Wheel in flag strip or window margins is ignored per spec.
-            if (!inside_waveform) return;
+            // Wheel is accepted in the waveform area and the top strip
+            // (V.A3b: users hover the strip for the popup, so Alt+wheel
+            // viewport-scroll and friends still need to fire there).
+            // Wheel in window margins outside both areas is ignored.
+            if (!inside_waveform && !inside_top) return;
             if (ctrl && alt) {
                 // Ctrl+Alt+wheel fine-pan: 2% of visible viewport per tick.
                 const int64_t step = std::max<int64_t>(
@@ -4803,15 +4993,22 @@ int main(int argc, char** argv) {
         commit_drag();
     });
 
-    gui.set_on_motion([&](int mouse_x, int /*mouse_y*/, unsigned int mods) {
+    gui.set_on_motion([&](int mouse_x, int mouse_y, unsigned int mods) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
         }
-        if (app.dialog.active) return;
+        // V.A3b Addendum 3: record latest cursor coords so viewport
+        // mutators can re-evaluate hover at the cursor's last position.
+        app.last_mouse_x = mouse_x;
+        app.last_mouse_y = mouse_y;
+        if (app.dialog.active) {
+            clear_hover_popup();
+            return;
+        }
         if (app.playhead_drag.active) {
-            // Modifier changes mid-drag are ignored: only shift_at_press
-            // governs gesture behavior. Left button must still be held; if
-            // it's not, the release was lost — terminate the drag.
+            clear_hover_popup();
+            // Left button must still be held; if not, the release was lost —
+            // terminate the drag. Modifier changes mid-drag are ignored.
             if ((mods & Button1Mask) == 0) {
                 app.playhead_drag = PlayheadDragState{};
                 return;
@@ -4823,11 +5020,10 @@ int main(int argc, char** argv) {
             if (spp <= 0.0) return;
 
             // Marker snap test — uses the same 3px epsilon as marker hit-test.
+            // Selection is fixed at press time and is NOT mutated here; the
+            // snap is purely a playhead-positioning magnet.
             const int hit = hit_test_marker_line(mouse_x);
-
-            bool selection_changed = false;
             int64_t new_playhead;
-
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
                     new_playhead = app.transients.markers()[hit].effective_frame();
@@ -4835,50 +5031,6 @@ int main(int argc, char** argv) {
                     new_playhead = static_cast<int64_t>(std::llround(
                         app.markers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
-                }
-                if (!app.playhead_drag.shift_at_press) {
-                    // Plain drag: replace selection with {hit} unless it's
-                    // already the sole selection.
-                    const bool already_sole =
-                        app.selected_markers.size() == 1 &&
-                        app.selected_markers.count(hit) > 0;
-                    if (!already_sole) {
-                        set_single_selection(hit);
-                        selection_changed = true;
-                    }
-                } else {
-                    // Shift drag: if snapping to a different marker than the
-                    // gesture's last-added, un-toggle the previous (only if
-                    // fresh) and add the new.
-                    if (app.playhead_drag.last_added_marker != hit) {
-                        const int prev = app.playhead_drag.last_added_marker;
-                        if (prev != -1 &&
-                            app.playhead_drag.last_added_was_fresh) {
-                            if (app.selected_markers.erase(prev) > 0) {
-                                invalidate_marker_column(prev);
-                                if (app.last_selected_marker == prev) {
-                                    // repair_last_selected isn't in scope
-                                    // here; match its behavior inline.
-                                    if (app.selected_markers.empty()) {
-                                        app.last_selected_marker = -1;
-                                    } else {
-                                        app.last_selected_marker =
-                                            *app.selected_markers.rbegin();
-                                    }
-                                }
-                                selection_changed = true;
-                            }
-                        }
-                        const bool was_in = app.selected_markers.count(hit) > 0;
-                        if (!was_in) {
-                            app.selected_markers.insert(hit);
-                            invalidate_marker_column(hit);
-                            selection_changed = true;
-                        }
-                        app.last_selected_marker = hit;
-                        app.playhead_drag.last_added_marker    = hit;
-                        app.playhead_drag.last_added_was_fresh = !was_in;
-                    }
                 }
             } else {
                 // No marker within epsilon: playhead follows cursor freely.
@@ -4892,10 +5044,31 @@ int main(int argc, char** argv) {
             if (new_playhead != app.playhead_sample) {
                 move_playhead_to(new_playhead);
             }
-            if (selection_changed) invalidate_top_strip();
             return;
         }
-        if (!app.drag.active) return;
+        if (!app.drag.active) {
+            // No active gesture: run hover-popup detection. Only in warp
+            // mode, with no editor, no dialog (already returned), no drag.
+            // The dwell timer is started/restarted on every transition into
+            // an eligible rect; the on_tick handler flips visibility.
+            if (app.active_mode == 'W' &&
+                !gui_text_editor::is_active(app.top_flag_editor) &&
+                !app.queue_running) {
+                const int hit = hit_test_flag(mouse_x, mouse_y);
+                if (hit != app.hover_popup.marker_index) {
+                    if (app.hover_popup.visible) invalidate_top_strip();
+                    app.hover_popup.marker_index = hit;
+                    app.hover_popup.visible      = false;
+                    app.hover_popup.entry_time   =
+                        std::chrono::steady_clock::now();
+                }
+            } else {
+                clear_hover_popup();
+            }
+            return;
+        }
+        // A drag is active — drop any pending popup.
+        clear_hover_popup();
         // Left button must still be held down — otherwise release was lost.
         if ((mods & Button1Mask) == 0) {
             commit_drag();
@@ -4968,6 +5141,7 @@ int main(int argc, char** argv) {
         playback.shutdown();
         app.is_playing     = false;
         app.playback_cursor = 0;
+        app.hover_popup    = HoverPopupState{};
 
         app.loading       = true;
         app.load_progress = 0.0f;
@@ -5232,6 +5406,22 @@ int main(int argc, char** argv) {
             }
         }
 
+        // V.A3b: dwell-driven popup show. The motion handler already gates
+        // on warp mode + no editor + no drag + no dialog and clears
+        // hover_popup when those conditions break, so here it's enough to
+        // check the elapsed time and re-validate eligibility.
+        if (!app.hover_popup.visible &&
+            app.hover_popup.marker_index >= 0 &&
+            popup_eligible_marker(app.hover_popup.marker_index)) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - app.hover_popup.entry_time).count();
+            if (ms >= kHoverDelayMs) {
+                app.hover_popup.visible = true;
+                invalidate_top_strip();
+            }
+        }
+
         if (app.loading || audio.total_frames() <= 0) return;
 
         const bool ma_playing = playback.is_playing();
@@ -5268,6 +5458,13 @@ int main(int argc, char** argv) {
         // cursor blink can flip. ~125ms gives ample resolution on a
         // 500ms half-period without burning CPU.
         if (gui_text_editor::is_active(app.top_flag_editor)) return 125;
+        // V.A3b: while a hover is pending (dwell timer running but popup
+        // not yet visible), wake periodically so the tick-driven check
+        // can flip visibility on time. Once visible, no extra wake is
+        // needed — input events drive any state change.
+        if (!app.hover_popup.visible && app.hover_popup.marker_index >= 0) {
+            return 125;
+        }
         return -1;
     });
 
