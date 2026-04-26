@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -35,17 +36,28 @@ bool is_valid_label_format(const std::string& s) {
     return std::regex_match(s, re);
 }
 
-// Parse "MM:SS.mmm" to seconds. Caller should validate format first.
+// New-format tempo: exactly one integer digit, dot, two decimal digits.
+bool is_valid_tempo_format(const std::string& s) {
+    static const std::regex re("^[0-9]\\.[0-9]{2}$");
+    return std::regex_match(s, re);
+}
+
+// New-format scale: exactly one integer digit, dot, four decimal digits.
+bool is_valid_scale_format(const std::string& s) {
+    static const std::regex re("^[0-9]\\.[0-9]{4}$");
+    return std::regex_match(s, re);
+}
+
+// Parse "MM:SS.mmm" to seconds. Caller validates format first.
 double parse_timestamp(const std::string& s) {
     const int min    = std::stoi(s.substr(0, 2));
     const double sec = std::stod(s.substr(3));
     return min * 60.0 + sec;
 }
 
-// Evaluate a sum-of-signed-decimals like "+0.003", "-0.126",
-// "1.23+0.05-0.03". Whitespace is stripped. Non-numeric trailing tokens end
-// evaluation silently — the parser validates format upstream, so this is
-// best-effort for well-formed input only.
+// Legacy-only: evaluate a sum-of-signed-decimals like "1.23+0.05-0.03".
+// Whitespace is stripped. Used on legacy load only; new format rejects
+// arithmetic in the tempo column.
 double eval_math_string(const std::string& in) {
     std::string s;
     s.reserve(in.size());
@@ -87,28 +99,11 @@ std::vector<std::string> split_pipe(const std::string& s) {
     std::stringstream ss(s);
     std::string seg;
     while (std::getline(ss, seg, '|')) out.push_back(seg);
-    // getline on a string ending with '|' won't emit the empty trailing
-    // column; for the warpmarkers format every non-empty column matters,
-    // and a trailing empty col has no meaning, so we leave this as-is.
     return out;
 }
 
-// Split on runs of ASCII spaces, dropping empty tokens. Used to break a
-// new-format line into its columns (timestamp + up to two data tokens).
-std::vector<std::string> split_spaces(const std::string& s) {
-    std::vector<std::string> out;
-    size_t i = 0;
-    while (i < s.size()) {
-        while (i < s.size() && s[i] == ' ') ++i;
-        const size_t start = i;
-        while (i < s.size() && s[i] != ' ') ++i;
-        if (start < i) out.emplace_back(s.substr(start, i - start));
-    }
-    return out;
-}
-
-// Strip b=/begin_time=/e=/end_time= prefixes in place and flag which were
-// present. The full-word forms take priority (checked first).
+// Strip b=/begin_time=/e=/end_time= prefixes in place. The full-word forms
+// take priority (checked first).
 void strip_trim_prefix(std::string& line, bool& is_begin, bool& is_end) {
     if (starts_with(line, "begin_time=")) {
         is_begin = true;
@@ -151,7 +146,198 @@ std::string format_timestamp(double seconds) {
     return buf;
 }
 
+// Normalize a scale string to canonical N.NNNN form. Used by save() to
+// re-emit legacy-loaded scales (which may have had any precision) in the
+// new format. If the string can't be parsed, returns it unchanged so the
+// data isn't lost — but the next reload will reject it.
+std::string normalize_scale_string(const std::string& s) {
+    if (s.empty()) return s;
+    try {
+        const double v = std::stod(s);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4f", v);
+        return buf;
+    } catch (...) {
+        return s;
+    }
+}
+
+// Parse a new-format payload (the part after the pipe) into a partly-
+// populated GuiMarker — sets tempo/label fields only. Cross-marker checks
+// (label_ref existence, label_def uniqueness) are the caller's job.
+//
+// On success, returns true and the GuiMarker carries the parsed payload.
+// On failure, returns false and `error_out` is set.
+//
+// `disabled_in` is plumbed through so the caller can attach a metadata
+// flag (`#`) that came from outside the payload. Time and trim flags
+// are not handled here.
+bool parse_new_payload(const std::string& payload,
+                       GuiMarker& m,
+                       std::string& error_out) {
+    if (payload.empty()) {
+        error_out = "empty payload";
+        return false;
+    }
+    if (payload.find('(') != std::string::npos ||
+        payload.find(')') != std::string::npos) {
+        error_out = "parens are not valid in the new format: " + payload;
+        return false;
+    }
+    if (payload.find(' ') != std::string::npos ||
+        payload.find('\t') != std::string::npos) {
+        error_out = "whitespace is not valid in the new format: " + payload;
+        return false;
+    }
+
+    // Split on `:` — at most one colon expected.
+    const size_t colon = payload.find(':');
+    if (colon != std::string::npos &&
+        payload.find(':', colon + 1) != std::string::npos) {
+        error_out = "too many colons in payload: " + payload;
+        return false;
+    }
+
+    if (colon == std::string::npos) {
+        // Single part: tempo, idem, or label_ref.
+        if (payload == "idem") {
+            m.tempo_inherits = true;
+            // tempo_base/tempo_scale to be filled by caller (walk-back cache).
+            return true;
+        }
+        if (is_valid_label_format(payload)) {
+            m.label_ref      = payload;
+            m.tempo_inherits = false;
+            m.tempo_base     = 0.0;
+            m.tempo_scale.clear();
+            return true;
+        }
+        // Tempo (numeric, with optional *scale).
+        const size_t star = payload.find('*');
+        const std::string tempo_part = (star == std::string::npos)
+            ? payload : payload.substr(0, star);
+        const std::string scale_part = (star == std::string::npos)
+            ? std::string() : payload.substr(star + 1);
+        if (!is_valid_tempo_format(tempo_part)) {
+            error_out = "tempo must be N.NN format: " + tempo_part;
+            return false;
+        }
+        if (star != std::string::npos && !is_valid_scale_format(scale_part)) {
+            error_out = "scale must be N.NNNN format: " + scale_part;
+            return false;
+        }
+        m.tempo_inherits = false;
+        m.tempo_base     = std::stod(tempo_part);
+        m.tempo_scale    = scale_part;
+        return true;
+    }
+
+    // Two parts: (TEMPO[*SCALE] | idem) : label_def. The three GuiMarker
+    // state axes (tempo source, label relationship, disabled) are
+    // independent; `idem:LABEL` is the inheriting + label_def combination.
+    const std::string tempo_with_scale = payload.substr(0, colon);
+    const std::string label_def        = payload.substr(colon + 1);
+
+    if (tempo_with_scale.empty()) {
+        error_out = "missing tempo before colon";
+        return false;
+    }
+    if (!is_valid_label_format(label_def)) {
+        error_out = "invalid label definition: " + label_def;
+        return false;
+    }
+    if (tempo_with_scale == "idem") {
+        m.tempo_inherits = true;
+        // tempo_base/tempo_scale to be filled by caller (walk-back cache).
+        m.label_def      = label_def;
+        return true;
+    }
+    const size_t star = tempo_with_scale.find('*');
+    const std::string tempo_part = (star == std::string::npos)
+        ? tempo_with_scale : tempo_with_scale.substr(0, star);
+    const std::string scale_part = (star == std::string::npos)
+        ? std::string() : tempo_with_scale.substr(star + 1);
+    if (!is_valid_tempo_format(tempo_part)) {
+        error_out = "tempo must be N.NN format: " + tempo_part;
+        return false;
+    }
+    if (star != std::string::npos && !is_valid_scale_format(scale_part)) {
+        error_out = "scale must be N.NNNN format: " + scale_part;
+        return false;
+    }
+    m.tempo_inherits = false;
+    m.tempo_base     = std::stod(tempo_part);
+    m.tempo_scale    = scale_part;
+    m.label_def      = label_def;
+    return true;
+}
+
 } // namespace
+
+// --- public single-line parser ---------------------------------------------
+//
+// Used by the GUI text editor to validate a single canonical line during
+// commit. Cross-marker checks (label_ref existence, label_def uniqueness)
+// are the caller's responsibility — pass `known_label_defs` with the names
+// of every other marker's label_def so the editor can reject refs to
+// undefined labels. Time monotonicity isn't checked (single line).
+//
+// Defined in the header as a free function for editor reuse.
+namespace gui_markers_internal {
+
+bool parse_single_canonical_line(
+    const std::string& raw_line,
+    GuiMarker& out,
+    std::string* error_out) {
+
+    auto fail = [&](const char* msg) {
+        if (error_out) *error_out = msg;
+        return false;
+    };
+    auto fail_s = [&](const std::string& msg) {
+        if (error_out) *error_out = msg;
+        return false;
+    };
+
+    std::string t = raw_line;
+    if (t.empty()) return fail("empty line");
+
+    // No whitespace anywhere on the line.
+    for (char c : t) {
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            return fail("no whitespace allowed in canonical line");
+        }
+    }
+
+    out = GuiMarker{};
+
+    // [b=|e=]?  [#]?  MM:SS.SSS  |  PAYLOAD
+    bool ib = false, ie = false;
+    strip_trim_prefix(t, ib, ie);
+    if (ib && ie) return fail("cannot have both b= and e=");
+    out.is_begin_time = ib;
+    out.is_end_time   = ie;
+
+    if (!t.empty() && t[0] == '#') {
+        out.disabled = true;
+        t.erase(0, 1);
+    }
+
+    if (t.size() < 9 || !is_valid_time_format(t.substr(0, 9))) {
+        return fail_s("invalid time format: " + t.substr(0, std::min<size_t>(9, t.size())));
+    }
+    out.time_seconds = parse_timestamp(t.substr(0, 9));
+    t.erase(0, 9);
+
+    if (t.empty() || t[0] != '|') {
+        return fail("expected '|' after timestamp");
+    }
+    t.erase(0, 1);
+
+    return parse_new_payload(t, out, *error_out);
+}
+
+} // namespace gui_markers_internal
 
 bool GuiMarkers::load(const std::string& path) {
     markers_.clear();
@@ -171,38 +357,47 @@ bool GuiMarkers::load(const std::string& path) {
     }
     if (!raw_lines.empty()) strip_bom(raw_lines.front());
 
-    // ----- Pass 1: gather the set of defined labels (both formats) -------
+    // ----- File-level legacy detection ------------------------------------
     //
-    // A label reference is only valid if its label appears as a def somewhere
-    // in the file. Disabled-def lines (legacy `#a.xx`, new `#<timestamp>...`)
-    // still count as defs; the cascade is resolved at render time from the
-    // defining marker.
+    // A file is legacy if any line contains the `""""` ditto sentinel.
+    // Mixed-format files are not handled — the first save migrates the
+    // entire file in one shot.
+    bool is_legacy_file = false;
+    for (const auto& raw : raw_lines) {
+        if (raw.find("\"\"\"\"") != std::string::npos) {
+            is_legacy_file = true;
+            break;
+        }
+    }
+
+    // ----- Pass 1: gather defined labels ---------------------------------
     //
-    // Format auto-detection: after stripping b=/e= and a leading `#` (when
-    // followed by a timestamp), a `|` anywhere in the remainder means
-    // legacy; otherwise the line is in the new (space-delimited) format.
+    // For both formats. A label reference is only valid if its label
+    // appears as a def somewhere in the file. Disabled defs still count.
 
-    std::set<std::string> defined;
+    std::set<std::string>            defined;
+    std::map<std::string, int>       first_def_line;
 
-    for (const std::string& raw : raw_lines) {
+    for (size_t idx = 0; idx < raw_lines.size(); ++idx) {
+        const int line_number = static_cast<int>(idx + 1);
+        const std::string& raw = raw_lines[idx];
         if (is_indented_raw(raw)) continue;
         std::string t = trim_ws(raw);
         if (t.empty()) continue;
 
-        // Order matters: b=/e= comes before `#` per the new-format spec.
         bool ib = false, ie = false;
         strip_trim_prefix(t, ib, ie);
 
         if (!t.empty() && t[0] == '#') {
             if (t.size() >= 10 && is_valid_time_format(t.substr(1, 9))) {
-                t.erase(0, 1); // disabled new-format marker
+                t.erase(0, 1);
             } else {
-                continue; // comment line — never carries a label def
+                continue;
             }
         }
         if (t.empty()) continue;
 
-        if (t.find('|') != std::string::npos) {
+        if (is_legacy_file) {
             // Legacy: column 3 holds the label def. Truncate at first space
             // so trailing freeform text doesn't end up inside the column.
             const size_t sp = t.find(' ');
@@ -212,23 +407,34 @@ bool GuiMarkers::load(const std::string& path) {
             if (cols.size() > 2 && !cols[2].empty()) {
                 std::string lbl = cols[2];
                 if (!lbl.empty() && lbl[0] == '#') lbl.erase(0, 1);
-                if (is_valid_label_format(lbl)) defined.insert(lbl);
+                if (is_valid_label_format(lbl)) {
+                    if (defined.insert(lbl).second) {
+                        first_def_line[lbl] = line_number;
+                    }
+                }
             }
         } else {
-            // New format: tokens[2] is the parens-wrapped label def when
-            // present. (tokens[0] = timestamp; tokens[1] = tempo or ref.)
-            const auto tokens = split_spaces(t);
-            if (tokens.size() >= 3) {
-                const std::string& tok = tokens[2];
-                if (tok.size() >= 2 && tok.front() == '(' && tok.back() == ')') {
-                    std::string lbl = tok.substr(1, tok.size() - 2);
-                    if (is_valid_label_format(lbl)) defined.insert(lbl);
+            // New format: payload after `|`, optionally containing `:label`.
+            const size_t pipe = t.find('|');
+            if (pipe == std::string::npos) continue;
+            const std::string payload = t.substr(pipe + 1);
+            if (payload.find('(') != std::string::npos ||
+                payload.find(')') != std::string::npos) {
+                continue;
+            }
+            const size_t colon = payload.find(':');
+            if (colon == std::string::npos) continue;
+            const std::string lbl = payload.substr(colon + 1);
+            if (is_valid_label_format(lbl)) {
+                if (defined.count(lbl) == 0) {
+                    defined.insert(lbl);
+                    first_def_line[lbl] = line_number;
                 }
             }
         }
     }
 
-    // ----- Pass 2: build markers ------------------------------------------
+    // ----- Pass 2: build markers -----------------------------------------
 
     double      previous_tempo_base  = 1.0;
     std::string previous_tempo_scale;
@@ -236,6 +442,10 @@ bool GuiMarkers::load(const std::string& path) {
     bool parse_ok          = true;
     bool first_marker_seen = false;
     double last_time       = -1.0;
+
+    // Track which line first defined each label (for duplicate errors).
+    std::set<std::string>      seen_def_in_pass2;
+    std::map<std::string, int> seen_def_line;
 
     for (size_t idx = 0; idx < raw_lines.size(); ++idx) {
         const int line_number = static_cast<int>(idx + 1);
@@ -250,9 +460,6 @@ bool GuiMarkers::load(const std::string& path) {
             continue;
         }
 
-        // Order: b=/e= first, then check for the new-format `#` disabled
-        // prefix, disambiguating against legacy `#`-comment lines by
-        // requiring a parseable timestamp immediately after the `#`.
         bool is_begin = false, is_end = false;
         strip_trim_prefix(t, is_begin, is_end);
 
@@ -271,84 +478,57 @@ bool GuiMarkers::load(const std::string& path) {
             continue;
         }
 
-        const bool legacy_line = (t.find('|') != std::string::npos);
-
-        // ---------- Time + first-marker + monotonicity (shared) ----------
-        std::string time_raw;
-        std::vector<std::string> tokens;
-        std::vector<std::string> cols;
-
-        if (legacy_line) {
+        // ---------- Legacy parse path (load-only, file-level routed) ----
+        if (is_legacy_file) {
             const size_t sp = t.find(' ');
             if (sp != std::string::npos) {
                 had_nonstandard_content_ = true;
                 t = t.substr(0, sp);
             }
-            cols = split_pipe(t);
+            const auto cols = split_pipe(t);
             if (cols.size() < 2) {
                 errors_.push_back({line_number,
                     "need at least time|tempo columns"});
                 parse_ok = false;
                 continue;
             }
-            time_raw = cols[0];
-        } else {
-            tokens = split_spaces(t);
-            if (tokens.empty()) continue;
-            time_raw = tokens[0];
-        }
+            const std::string& time_raw = cols[0];
 
-        if (time_raw.size() < 9 ||
-            !is_valid_time_format(time_raw.substr(0, 9))) {
-            if (legacy_line) {
+            if (time_raw.size() < 9 ||
+                !is_valid_time_format(time_raw.substr(0, 9))) {
                 errors_.push_back({line_number,
                     "invalid time format: " + time_raw});
                 parse_ok = false;
-            } else {
-                // Mirror legacy behavior of silently dropping non-pipe,
-                // non-comment junk lines (e.g. `---` separators).
-                had_nonstandard_content_ = true;
-            }
-            continue;
-        }
-
-        const std::string time_initial = time_raw.substr(0, 9);
-        double final_time = parse_timestamp(time_initial);
-        if (time_raw.size() > 9) {
-            final_time += eval_math_string(time_raw.substr(9));
-        }
-
-        if (!first_marker_seen) {
-            if (time_initial != "00:00.000") {
-                errors_.push_back({line_number,
-                    "first marker must be 00:00.000 (got " + time_initial +
-                    ")"});
-                parse_ok = false;
-                first_marker_seen = true;
                 continue;
             }
-            first_marker_seen = true;
-        }
+            const std::string time_initial = time_raw.substr(0, 9);
+            double final_time = parse_timestamp(time_initial);
+            if (time_raw.size() > 9) {
+                final_time += eval_math_string(time_raw.substr(9));
+            }
 
-        if (last_time >= 0.0 && final_time <= last_time) {
-            errors_.push_back({line_number,
-                "time not strictly increasing: " + time_initial});
-            parse_ok = false;
-            continue;
-        }
+            if (!first_marker_seen) {
+                if (time_initial != "00:00.000") {
+                    errors_.push_back({line_number,
+                        "first marker must be 00:00.000 (got " + time_initial +
+                        ")"});
+                    parse_ok = false;
+                    first_marker_seen = true;
+                    continue;
+                }
+                first_marker_seen = true;
+            }
+            if (last_time >= 0.0 && final_time <= last_time) {
+                errors_.push_back({line_number,
+                    "time not strictly increasing: " + time_initial});
+                parse_ok = false;
+                continue;
+            }
 
-        GuiMarker m;
-        m.time_seconds  = final_time;
-        m.is_begin_time = is_begin;
-        m.is_end_time   = is_end;
-
-        if (legacy_line) {
-            // ---------- Legacy parse path (unchanged behavior) -----------
-            // line_disabled cannot be set here: legacy `#` at line start
-            // would have been treated as a comment above (no timestamp
-            // follows it in legacy files), so the disambiguation above
-            // never trips for a legitimate legacy line.
-            (void)line_disabled;
+            GuiMarker m;
+            m.time_seconds  = final_time;
+            m.is_begin_time = is_begin;
+            m.is_end_time   = is_end;
 
             const std::string& tempo_raw = cols[1];
             const std::string  label_raw = (cols.size() > 2) ? cols[2]
@@ -367,9 +547,6 @@ bool GuiMarkers::load(const std::string& path) {
                     continue;
                 }
                 had_nonstandard_content_ = true;
-                // Inherit marker: the tempo is resolved at render time by
-                // walking backward. The cached numeric is preserved here so
-                // toggling to "owned" in the editor restores a sensible value.
                 m.tempo_inherits = true;
                 m.tempo_base     = previous_tempo_base;
                 m.tempo_scale    = previous_tempo_scale;
@@ -398,7 +575,7 @@ bool GuiMarkers::load(const std::string& path) {
                     continue;
                 }
                 m.label_ref      = tempo_raw;
-                m.tempo_inherits = false; // irrelevant for refs but keep tidy
+                m.tempo_inherits = false;
                 m.tempo_base     = 0.0;
                 m.tempo_scale.clear();
             }
@@ -426,107 +603,126 @@ bool GuiMarkers::load(const std::string& path) {
                 m.label_def = def;
                 m.disabled  = def_disabled;
             }
-        } else {
-            // ---------- New format parse path -----------------------------
-            if (tokens.size() < 2) {
+            (void)line_disabled;
+
+            last_time = m.time_seconds;
+            markers_.push_back(std::move(m));
+            continue;
+        }
+
+        // ---------- New-format parse path -------------------------------
+
+        // Reject leftover parens-form input early.
+        if (t.find('(') != std::string::npos ||
+            t.find(')') != std::string::npos) {
+            errors_.push_back({line_number,
+                "parens are not valid in the new format"});
+            parse_ok = false;
+            continue;
+        }
+
+        // Disallow whitespace adjacent to anything inside the line — the
+        // canonical form is whitespace-free entirely. trim_ws already
+        // trimmed leading/trailing; an internal space here is malformed.
+        if (t.find(' ') != std::string::npos ||
+            t.find('\t') != std::string::npos) {
+            errors_.push_back({line_number,
+                "whitespace is not valid in the new format"});
+            parse_ok = false;
+            continue;
+        }
+
+        const size_t pipe = t.find('|');
+        if (pipe == std::string::npos) {
+            errors_.push_back({line_number,
+                "missing '|' between time and payload"});
+            parse_ok = false;
+            continue;
+        }
+        if (t.find('|', pipe + 1) != std::string::npos) {
+            errors_.push_back({line_number,
+                "too many pipes in line"});
+            parse_ok = false;
+            continue;
+        }
+
+        const std::string time_raw = t.substr(0, pipe);
+        const std::string payload  = t.substr(pipe + 1);
+
+        if (time_raw.size() != 9 || !is_valid_time_format(time_raw)) {
+            errors_.push_back({line_number,
+                "invalid time format: " + time_raw});
+            parse_ok = false;
+            continue;
+        }
+        const double final_time = parse_timestamp(time_raw);
+
+        if (!first_marker_seen) {
+            if (time_raw != "00:00.000") {
                 errors_.push_back({line_number,
-                    "missing tempo or label column"});
+                    "first marker must be 00:00.000 (got " + time_raw +
+                    ")"});
+                parse_ok = false;
+                first_marker_seen = true;
+                continue;
+            }
+            first_marker_seen = true;
+        }
+        if (last_time >= 0.0 && final_time <= last_time) {
+            errors_.push_back({line_number,
+                "time not strictly increasing: " + time_raw});
+            parse_ok = false;
+            continue;
+        }
+
+        GuiMarker m;
+        m.time_seconds  = final_time;
+        m.is_begin_time = is_begin;
+        m.is_end_time   = is_end;
+        if (line_disabled) m.disabled = true;
+
+        std::string err;
+        if (!parse_new_payload(payload, m, err)) {
+            errors_.push_back({line_number, err});
+            parse_ok = false;
+            continue;
+        }
+
+        // Cross-marker validation.
+        if (!m.label_ref.empty() && defined.count(m.label_ref) == 0) {
+            errors_.push_back({line_number,
+                "reference to undefined label: " + m.label_ref});
+            parse_ok = false;
+            continue;
+        }
+        if (!m.label_def.empty()) {
+            if (seen_def_in_pass2.count(m.label_def)) {
+                errors_.push_back({line_number,
+                    "duplicate label definition: " + m.label_def +
+                    " (first defined at line " +
+                    std::to_string(seen_def_line[m.label_def]) + ")"});
                 parse_ok = false;
                 continue;
             }
-            if (tokens.size() > 3) {
+            seen_def_in_pass2.insert(m.label_def);
+            seen_def_line[m.label_def] = line_number;
+        }
+
+        // Inherit-cache walk-back: idem markers carry the prior owning
+        // marker's tempo/scale in memory so a future toggle restores it.
+        if (m.tempo_inherits) {
+            if (!have_prev_numeric) {
                 errors_.push_back({line_number,
-                    "too many columns (expected at most 3)"});
+                    "idem has no preceding owning tempo"});
                 parse_ok = false;
                 continue;
             }
-
-            const std::string& col1 = tokens[1];
-            const bool col1_paren = col1.size() >= 2 &&
-                col1.front() == '(' && col1.back() == ')';
-            const bool col1_numeric = !col1.empty() &&
-                (std::isdigit(static_cast<unsigned char>(col1[0])) ||
-                 col1[0] == '.');
-
-            if (col1_paren) {
-                const std::string val = col1.substr(1, col1.size() - 2);
-                if (val.empty() ||
-                    !(std::isdigit(static_cast<unsigned char>(val[0])) ||
-                      val[0] == '.')) {
-                    errors_.push_back({line_number,
-                        "invalid inherit value: " + col1});
-                    parse_ok = false;
-                    continue;
-                }
-                // Cached scale is preserved inside the parens as
-                // `(<base>*<scale>)` so legacy ditto markers that inherited
-                // the previous scale survive the round-trip. Flag text
-                // still drops scale on inherits per spec.
-                const size_t star = val.find('*');
-                const std::string base_part = (star == std::string::npos)
-                    ? val : val.substr(0, star);
-                m.tempo_inherits = true;
-                m.tempo_base     = eval_math_string(base_part);
-                m.tempo_scale    = (star == std::string::npos)
-                    ? std::string() : val.substr(star + 1);
-            } else if (col1_numeric) {
-                const size_t star = col1.find('*');
-                const std::string base_part = (star == std::string::npos)
-                    ? col1 : col1.substr(0, star);
-                m.tempo_inherits = false;
-                m.tempo_base     = eval_math_string(base_part);
-                m.tempo_scale    = (star == std::string::npos)
-                    ? std::string() : col1.substr(star + 1);
-                previous_tempo_base    = m.tempo_base;
-                previous_tempo_scale   = m.tempo_scale;
-                have_prev_numeric      = true;
-            } else if (is_valid_label_format(col1)) {
-                if (defined.count(col1) == 0) {
-                    errors_.push_back({line_number,
-                        "reference to undefined label: " + col1});
-                    parse_ok = false;
-                    continue;
-                }
-                m.label_ref      = col1;
-                m.tempo_inherits = false;
-                m.tempo_base     = 0.0;
-                m.tempo_scale.clear();
-            } else {
-                errors_.push_back({line_number,
-                    "invalid tempo or label reference: " + col1});
-                parse_ok = false;
-                continue;
-            }
-
-            if (tokens.size() == 3) {
-                const std::string& col2 = tokens[2];
-                if (col2.size() < 2 ||
-                    col2.front() != '(' || col2.back() != ')') {
-                    errors_.push_back({line_number,
-                        "label definition must be wrapped in parens: " + col2});
-                    parse_ok = false;
-                    continue;
-                }
-                const std::string def = col2.substr(1, col2.size() - 2);
-                if (!is_valid_label_format(def)) {
-                    errors_.push_back({line_number,
-                        "invalid label definition: " + col2});
-                    parse_ok = false;
-                    continue;
-                }
-                if (!m.label_ref.empty()) {
-                    errors_.push_back({line_number,
-                        "marker cannot be both a label reference and a label "
-                        "definition"});
-                    parse_ok = false;
-                    continue;
-                }
-                m.label_def = def;
-            }
-
-            if (line_disabled) {
-                m.disabled = true;
-            }
+            m.tempo_base  = previous_tempo_base;
+            m.tempo_scale = previous_tempo_scale;
+        } else if (m.label_ref.empty()) {
+            previous_tempo_base  = m.tempo_base;
+            previous_tempo_scale = m.tempo_scale;
+            have_prev_numeric    = true;
         }
 
         last_time = m.time_seconds;
@@ -548,15 +744,13 @@ bool GuiMarkers::load(const std::string& path) {
 bool GuiMarkers::save(const std::string& path) const {
     std::ostringstream out;
     for (const auto& m : markers_) {
-        // Screen-mirroring on disk (chunk S.2.1):
-        //   [b=|e=][#]<timestamp> <tempo-or-ref> [(<label_def>)]
-        // is_begin_time and is_end_time are mutually exclusive (S.1
-        // auto-swap). The leading `#` is emitted whenever `disabled` is
-        // set (chunk U patch 3), regardless of marker type.
+        // Canonical new format, no whitespace anywhere on the line:
+        //   [b=|e=]?[#]?MM:SS.SSS|PAYLOAD
+        // PAYLOAD per Part 1A of V.A1.
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
         if (m.disabled) out << '#';
-        out << format_timestamp(m.time_seconds) << ' ';
+        out << format_timestamp(m.time_seconds) << '|';
 
         // Defensive guard against invalid in-memory combinations.
         const bool both_def_and_ref =
@@ -568,32 +762,30 @@ bool GuiMarkers::save(const std::string& path) const {
                 m.time_seconds);
         }
 
-        // Tempo column:
-        //   label reference     → label text
-        //   tempo_inherits=true → "(<value>)"  (cached value on disk)
-        //   otherwise           → "<value>" with optional "*<scale>"
+        // Payload:
+        //   label_ref               → "a.42"
+        //   inherit, no def         → "idem"
+        //   inherit, with def       → "idem:a.42"
+        //   owning, no scale        → "1.23"
+        //   owning, with scale      → "1.23*1.2345"
+        //   def, no scale           → "1.23:a.03"
+        //   def, with scale         → "1.23*1.2345:a.03"
         if (!m.label_ref.empty()) {
             out << m.label_ref;
         } else {
-            char tbuf[32];
-            std::snprintf(tbuf, sizeof(tbuf), "%.2f", m.tempo_base);
             if (m.tempo_inherits) {
-                // Inherits embed any cached scale inside the parens to
-                // round-trip legacy ditto-after-scaled markers. Flag text
-                // still hides scale on inherits.
-                out << '(' << tbuf;
-                if (!m.tempo_scale.empty()) out << '*' << m.tempo_scale;
-                out << ')';
+                out << "idem";
             } else {
+                char tbuf[32];
+                std::snprintf(tbuf, sizeof(tbuf), "%.2f", m.tempo_base);
                 out << tbuf;
-                if (!m.tempo_scale.empty()) out << '*' << m.tempo_scale;
+                if (!m.tempo_scale.empty()) {
+                    out << '*' << normalize_scale_string(m.tempo_scale);
+                }
             }
-        }
-
-        // Label-definition column, parens-wrapped, only on defs (never
-        // alongside a reference).
-        if (!m.label_def.empty() && m.label_ref.empty()) {
-            out << ' ' << '(' << m.label_def << ')';
+            if (!m.label_def.empty()) {
+                out << ':' << m.label_def;
+            }
         }
 
         out << '\n';
@@ -633,7 +825,6 @@ bool GuiMarkers::save(const std::string& path) const {
         ::unlink(tmp_path.c_str());
         return false;
     }
-    // open() applies umask; reassert intended mode explicitly.
     ::chmod(tmp_path.c_str(), mode);
 
     if (::rename(tmp_path.c_str(), path.c_str()) != 0) {

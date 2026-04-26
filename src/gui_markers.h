@@ -94,3 +94,19 @@ private:
     std::vector<GuiMarkerError>  errors_;
     bool                         had_nonstandard_content_ = false;
 };
+
+namespace gui_markers_internal {
+
+// Parse one canonical new-format line into a GuiMarker. Used by the GUI
+// editor's commit path. Performs only line-local validation (format,
+// whitespace rejection, payload structure) — cross-marker rules (label_ref
+// existence, label_def uniqueness, time monotonicity) are the caller's
+// responsibility. The inherit-cache (tempo_base/tempo_scale on idem) is
+// also the caller's responsibility; on `idem` this leaves both at their
+// in-struct defaults.
+bool parse_single_canonical_line(
+    const std::string& raw_line,
+    GuiMarker& out,
+    std::string* error_out);
+
+} // namespace gui_markers_internal

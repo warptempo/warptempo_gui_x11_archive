@@ -110,13 +110,15 @@ bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg)
     }
 
     const std::string& status = toks[1];
-    if (status == "I") {
+    // Accept both legacy uppercase and new-canonical lowercase. Save
+    // always emits lowercase per V.A1 Part 3.
+    if (status == "i" || status == "I") {
         out.is_inserted = true;
         if (toks.size() == 3) {
-            err_msg = "I status must not have a displaced_frame";
+            err_msg = "i status must not have a displaced_frame";
             return false;
         }
-    } else if (status == "D") {
+    } else if (status == "d" || status == "D") {
         out.is_inserted = false;
         if (toks.size() == 3) {
             int64_t df = 0;
@@ -135,7 +137,7 @@ bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg)
             out.displaced_frame  = df;
         }
     } else {
-        err_msg = "unknown status code: " + status + " (expected I or D)";
+        err_msg = "unknown status code: " + status + " (expected i or d)";
         return false;
     }
     return true;
@@ -257,7 +259,7 @@ bool GuiTransients::save(const std::string& path) const {
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
         if (m.disabled)         out << '#';
-        out << m.src_frame << ' ' << (m.is_inserted ? 'I' : 'D');
+        out << m.src_frame << ' ' << (m.is_inserted ? 'i' : 'd');
         if (!m.is_inserted && m.has_displacement) {
             out << ' ' << m.displaced_frame;
         }

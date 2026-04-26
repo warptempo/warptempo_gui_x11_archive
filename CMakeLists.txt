@@ -49,6 +49,7 @@ add_executable(warptempo_gui
     src/gui_audio.cpp
     src/gui_render.cpp
     src/gui_markers.cpp
+    src/gui_text_editor.cpp
     src/gui_transients.cpp
     src/gui_playback.cpp
     src/gui_render_pipeline.cpp

@@ -3,6 +3,7 @@
 #include "gui_playback.h"
 #include "gui_render.h"
 #include "gui_render_pipeline.h"
+#include "gui_text_editor.h"
 #include "gui_transients.h"
 #include "gui_x11.h"
 
@@ -442,6 +443,14 @@ struct AppState {
     // Unsaved-work dialog. Active only when a close / revert gesture
     // fires while history is dirty. See Part 2 of chunk Q.
     DialogState dialog;
+
+    // Top-flag text editor (V.A1). Active only when editing a flag rect
+    // in warp mode. The editor owns the keyboard while active and
+    // overlays a custom rect + cursor on top of render_flags.
+    gui_text_editor::State top_flag_editor;
+    // Last-painted cursor visibility, so the tick can detect a flip and
+    // invalidate the top strip without redundant repaints.
+    bool top_flag_editor_blink_last = false;
 
     // Render-queue state (chunk U). `queue_running` is true only inside the
     // Ctrl+Alt+Shift+E walker. The Esc handler checks it to scope the
@@ -1235,13 +1244,24 @@ int main(int argc, char** argv) {
                         app.selected_markers,
                         app.last_selected_marker);
                 } else {
+                    FlagEditorOverlay overlay;
+                    if (gui_text_editor::is_active(app.top_flag_editor)) {
+                        overlay.marker_index   = app.top_flag_editor.target;
+                        overlay.pending        = app.top_flag_editor.pending;
+                        overlay.cursor_pos     = app.top_flag_editor.cursor_pos;
+                        overlay.is_red         = app.top_flag_editor.red;
+                        overlay.cursor_visible =
+                            gui_text_editor::cursor_visible_now(
+                                app.top_flag_editor);
+                    }
                     render_flags(cr, top_strip, app.markers.markers(),
                                  vp_start, vp_end, sr,
                                  kMarkerColor, kMarkerDimColor,
                                  kSelectedColor, kFlagHighlightColor,
                                  kFlagFontSize,
                                  app.selected_markers,
-                                 app.last_selected_marker);
+                                 app.last_selected_marker,
+                                 overlay);
                 }
                 const auto f1 = clock::now();
                 t_flags_ms =
@@ -1612,6 +1632,187 @@ int main(int argc, char** argv) {
         e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
+    };
+
+    // -- V.A1 top-flag editor helpers ---------------------------------------
+
+    // Build the locked-prefix string for `m` — exactly what the canonical
+    // serializer would write before the pipe character, with the pipe
+    // included. The editor renders this prefix outside the editable rect
+    // (left-anchored at the marker column); the pipe is part of the
+    // prefix but visually anchors to the marker line.
+    auto build_locked_prefix = [&](const GuiMarker& m) -> std::string {
+        std::string out;
+        if (m.is_begin_time)    out = "b=";
+        else if (m.is_end_time) out = "e=";
+        if (m.disabled) out += '#';
+        // MM:SS.SSS
+        double sec = m.time_seconds;
+        if (sec < 0) sec = 0;
+        long total_ms = static_cast<long>(std::llround(sec * 1000.0));
+        const long mn = total_ms / 60000;
+        total_ms     -= mn * 60000;
+        const long s  = total_ms / 1000;
+        const long ms = total_ms - s * 1000;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%02ld:%02ld.%03ld", mn, s, ms);
+        out += buf;
+        out += '|';
+        return out;
+    };
+
+    auto exit_top_flag_edit_no_commit = [&]() {
+        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        gui_text_editor::deactivate(app.top_flag_editor);
+        invalidate_top_strip();
+    };
+
+    auto enter_top_flag_edit = [&](int idx) {
+        if (idx < 0) return;
+        const auto& mv = app.markers.markers();
+        if (idx >= static_cast<int>(mv.size())) return;
+        // Discard any prior edit silently before switching targets.
+        if (gui_text_editor::is_active(app.top_flag_editor) &&
+            app.top_flag_editor.target != idx) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+        }
+        gui_text_editor::enter(
+            app.top_flag_editor, idx,
+            build_locked_prefix(mv[idx]),
+            flag_text_for_marker(mv, idx));
+        invalidate_top_strip();
+    };
+
+    // Validate `pending` as a single canonical line and, on success, write
+    // the parsed marker's fields back onto markers_[idx]. Cascade-renames
+    // label_def changes onto every other marker that referenced the old
+    // name. Pushes one undo entry covering all touched markers.
+    //
+    // On failure: sets `red`, leaves pending/cursor intact, leaves the
+    // editor active.
+    auto commit_top_flag_edit = [&]() {
+        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        const int idx = app.top_flag_editor.target;
+        const auto& mv_const = app.markers.markers();
+        if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
+            // Editor target became invalid (e.g. file reload). Drop edit.
+            exit_top_flag_edit_no_commit();
+            return;
+        }
+
+        const std::string candidate =
+            app.top_flag_editor.locked_prefix + app.top_flag_editor.pending;
+
+        GuiMarker parsed;
+        std::string err;
+        bool ok = gui_markers_internal::parse_single_canonical_line(
+            candidate, parsed, &err);
+
+        // Cross-marker checks (edit target excluded).
+        if (ok && !parsed.label_ref.empty()) {
+            bool found = false;
+            for (int i = 0; i < static_cast<int>(mv_const.size()); ++i) {
+                if (i == idx) continue;
+                if (mv_const[i].label_def == parsed.label_ref) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                ok = false;
+                err = "reference to undefined label: " + parsed.label_ref;
+            }
+        }
+        if (ok && !parsed.label_def.empty()) {
+            for (int i = 0; i < static_cast<int>(mv_const.size()); ++i) {
+                if (i == idx) continue;
+                if (mv_const[i].label_def == parsed.label_def) {
+                    ok = false;
+                    err = "duplicate label definition: " + parsed.label_def;
+                    break;
+                }
+            }
+        }
+
+        if (!ok) {
+            app.top_flag_editor.red = true;
+            invalidate_top_strip();
+            std::fprintf(stderr,
+                "warptempo_gui: edit rejected: %s\n", err.c_str());
+            return;
+        }
+
+        // Capture pre-state for undo BEFORE mutating.
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::set<int>          hint_sel  = app.selected_markers;
+        const int              hint_last = app.last_selected_marker;
+
+        const std::string old_def = mv_const[idx].label_def;
+        const std::string new_def = parsed.label_def;
+
+        GuiMarker* m = app.markers.marker_mut(idx);
+        if (!m) {
+            exit_top_flag_edit_no_commit();
+            return;
+        }
+
+        // Time stays locked; preserve it (parse already produced the
+        // same value via the locked prefix, but be explicit).
+        const double preserved_time = m->time_seconds;
+
+        // Inherit-cache preservation: typing `idem` leaves the cached
+        // tempo_base / tempo_scale alone so a future toggle can restore.
+        // Typing an explicit tempo overwrites the cache (the user
+        // committed to a new owned value). label_def is independent of
+        // tempo source — `idem:LABEL` carries a def at this position
+        // while inheriting the tempo from a prior owning marker.
+        if (parsed.tempo_inherits) {
+            m->tempo_inherits = true;
+            // Keep existing tempo_base / tempo_scale as the cache.
+            m->label_def      = parsed.label_def;
+            m->label_ref.clear();
+        } else {
+            m->tempo_inherits = false;
+            m->tempo_base     = parsed.tempo_base;
+            m->tempo_scale    = parsed.tempo_scale;
+            m->label_def      = parsed.label_def;
+            m->label_ref      = parsed.label_ref;
+        }
+        m->time_seconds = preserved_time;
+        // is_begin_time / is_end_time / disabled live in locked prefix —
+        // parse_single_canonical_line populated them; reapply.
+        m->is_begin_time = parsed.is_begin_time;
+        m->is_end_time   = parsed.is_end_time;
+        m->disabled      = parsed.disabled;
+
+        // Cascade rename: if label_def changed and old_def was non-empty,
+        // every other marker that referenced old_def gets its ref updated
+        // to the new name (or cleared if new_def is empty — the user
+        // converted a def to non-def).
+        int n_refs_renamed = 0;
+        if (!old_def.empty() && old_def != new_def) {
+            auto& mv_mut = app.markers.markers_mut();
+            for (int i = 0; i < static_cast<int>(mv_mut.size()); ++i) {
+                if (i == idx) continue;
+                if (mv_mut[i].label_ref == old_def) {
+                    mv_mut[i].label_ref = new_def;
+                    ++n_refs_renamed;
+                }
+            }
+            std::fprintf(stderr,
+                "[warptempo_gui] renamed label_def '%s' -> '%s'; "
+                "updated %d refs\n",
+                old_def.c_str(), new_def.c_str(), n_refs_renamed);
+        }
+
+        push_undo(std::move(pre_state), OpKind::Other,
+                  std::move(hint_sel), hint_last);
+        recompute_dirty();
+
+        gui_text_editor::deactivate(app.top_flag_editor);
+
+        invalidate_waveform_area();
+        invalidate_dirty_and_timestamp();
     };
 
     // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
@@ -3839,6 +4040,31 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // V.A1 top-flag editor owns the keyboard while active. Routes here
+        // BEFORE queue/drag/playhead Esc handlers so Esc cancels the edit
+        // first; Esc with no active edit falls through to the rest.
+        if (gui_text_editor::is_active(app.top_flag_editor)) {
+            (void)ctrl; (void)alt; // Modifiers swallowed except Shift→colon.
+            const auto action = gui_text_editor::handle_key(
+                app.top_flag_editor, keysym, mods);
+            if (action == gui_text_editor::KeyAction::CommitRequested) {
+                commit_top_flag_edit();
+                return;
+            }
+            if (action == gui_text_editor::KeyAction::CancelRequested) {
+                exit_top_flag_edit_no_commit();
+                return;
+            }
+            if (action == gui_text_editor::KeyAction::Consumed) {
+                invalidate_top_strip();
+                return;
+            }
+            // NotConsumed: editor saw nothing useful; fall through is wrong
+            // because the editor must own all keys while active. Treat as
+            // consumed.
+            return;
+        }
+
         // Esc during a render-all run requests cancellation between
         // entries. Only fires while the queue walker is active; outside
         // that window Esc retains its other meanings (drag-cancel, etc).
@@ -4328,6 +4554,31 @@ int main(int argc, char** argv) {
             // empty space (a no-op for the playhead) stops the audio.
             if (inside_waveform || inside_top) stop_playback_if_playing();
 
+            // V.A1 editor: mouse handling.
+            //   click inside top strip on the editing flag: no-op
+            //   click inside top strip on a different flag: switch target
+            //   click anywhere else: exit edit (no commit), then fall
+            //     through so the click routes through normal handling.
+            if (gui_text_editor::is_active(app.top_flag_editor)) {
+                if (inside_top) {
+                    const int hit_now = hit_test_flag(x, y);
+                    if (hit_now == app.top_flag_editor.target) {
+                        return; // no-op on same flag
+                    }
+                    if (hit_now >= 0 && app.active_mode != 'T') {
+                        enter_top_flag_edit(hit_now);
+                        return;
+                    }
+                    // Top strip click that isn't on a flag: exit and fall
+                    // through to normal handling.
+                    exit_top_flag_edit_no_commit();
+                } else {
+                    exit_top_flag_edit_no_commit();
+                    // Fall through so the click can drive a playhead
+                    // drag, marker click, etc.
+                }
+            }
+
             // Detect double-click from timing + position deltas.
             const auto now = std::chrono::steady_clock::now();
             const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -4398,9 +4649,25 @@ int main(int argc, char** argv) {
 
             // Non-Ctrl: plain or Shift press. In the waveform area this
             // starts a playhead-drag gesture. In the top strip (flag click)
-            // we keep the legacy select-on-click behavior.
+            // a warp-mode flag click enters the V.A1 text editor; in
+            // transient mode we keep the legacy select-on-click behavior.
             if (inside_top) {
                 if (hit >= 0) {
+                    if (app.active_mode != 'T' && !shift) {
+                        // V.A1: plain click on a warp flag enters edit
+                        // mode. Selects the marker as well so the rest of
+                        // the UI tracks (timestamp jumps, marker column
+                        // highlights). Shift+click keeps the legacy
+                        // multi-select toggle.
+                        set_single_selection(hit);
+                        const int sr = audio.sample_rate();
+                        const int64_t sample = static_cast<int64_t>(std::llround(
+                            app.markers.markers()[hit].time_seconds *
+                            static_cast<double>(sr)));
+                        move_playhead_to(sample);
+                        enter_top_flag_edit(hit);
+                        return;
+                    }
                     if (shift) toggle_selection_membership(hit);
                     else       set_single_selection(hit);
                     const int sr = audio.sample_rate();
@@ -4926,6 +5193,18 @@ int main(int argc, char** argv) {
     // invalidating just the columns and timestamp that changed. Also
     // detects natural end-of-playback via the atomic playing flag.
     gui.set_on_tick([&]() {
+        // Blink the editor cursor independently of playback. Compare the
+        // current visibility against the last painted state and invalidate
+        // the top strip when it flips. Cheap: top_strip is small.
+        if (gui_text_editor::is_active(app.top_flag_editor)) {
+            const bool now_visible =
+                gui_text_editor::cursor_visible_now(app.top_flag_editor);
+            if (now_visible != app.top_flag_editor_blink_last) {
+                app.top_flag_editor_blink_last = now_visible;
+                invalidate_top_strip();
+            }
+        }
+
         if (app.loading || audio.total_frames() <= 0) return;
 
         const bool ma_playing = playback.is_playing();
@@ -4957,7 +5236,12 @@ int main(int argc, char** argv) {
     // Idle timeout: wake the poll loop every ~16 ms during playback so the
     // tick can advance the playhead even in the absence of input events.
     gui.set_idle_timeout_provider([&]() -> int {
-        return (app.is_playing || playback.is_playing()) ? 16 : -1;
+        if (app.is_playing || playback.is_playing()) return 16;
+        // While the top-flag editor is active, wake periodically so the
+        // cursor blink can flip. ~125ms gives ample resolution on a
+        // 500ms half-period without burning CPU.
+        if (gui_text_editor::is_active(app.top_flag_editor)) return 125;
+        return -1;
     });
 
     // Paint the initial background before any synchronous load begins so the

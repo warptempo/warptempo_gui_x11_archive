@@ -39,54 +39,51 @@ bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
     return false;
 }
 
-// Screen mirrors disk (chunk S.2.1). Flag text construction:
-//   1. Optional `b=` / `e=` prefix from is_begin_time / is_end_time.
-//   2. Tempo column:
-//        label ref       → "a.01"
-//        owned           → "1.28", with optional "*<scale>" appended
-//        inherit         → "(1.28)"  (value resolved by walk-backward)
-//   3. Optional " (label_def)" suffix.
-// The `#` disabled marker prefix is on-disk only — visual disabled state
-// is conveyed by the dim color, not by the flag text.
+// Flag text mirrors the canonical line's PAYLOAD (post-pipe). All
+// metadata (b=/e=/#) is invisible in the rect; the `|` separator sits to
+// the left of the rect, anchoring it to the marker column. Disabled state
+// is conveyed by color (dimmed via `effective_disabled`), not by glyphs.
+//
+// Variants:
+//   label_ref              → "a.42"
+//   inherit, no def        → "idem"
+//   inherit, with def      → "idem:a.42"
+//   owning, no scale       → "1.23"
+//   owning, with scale     → "1.23*1.2345"
+//   def, no scale          → "1.23:a.03"
+//   def, with scale        → "1.23*1.2345:a.03"
 std::string flag_text(const std::vector<GuiMarker>& markers, int idx) {
     const auto& m = markers[idx];
 
-    std::string text;
-    if (m.is_begin_time)    text = "b=";
-    else if (m.is_end_time) text = "e=";
-
     if (!m.label_ref.empty()) {
-        text += m.label_ref;
-        return text;
+        return m.label_ref;
     }
 
-    double tempo = m.tempo_base;
+    std::string text;
     if (m.tempo_inherits) {
-        tempo = resolve_inherited_tempo(markers, idx);
-    }
-    char tbuf[32];
-    std::snprintf(tbuf, sizeof(tbuf), "%.2f", tempo);
-
-    if (m.tempo_inherits) {
-        text += "(";
-        text += tbuf;
-        text += ")";
+        text = "idem";
     } else {
-        text += tbuf;
+        char tbuf[32];
+        std::snprintf(tbuf, sizeof(tbuf), "%.2f", m.tempo_base);
+        text = tbuf;
         if (!m.tempo_scale.empty()) {
             text += "*";
             text += m.tempo_scale;
         }
     }
     if (!m.label_def.empty()) {
-        text += " (";
+        text += ":";
         text += m.label_def;
-        text += ")";
     }
     return text;
 }
 
 } // namespace
+
+std::string flag_text_for_marker(const std::vector<GuiMarker>& markers, int idx) {
+    if (idx < 0 || idx >= static_cast<int>(markers.size())) return {};
+    return flag_text(markers, idx);
+}
 
 double resolve_inherited_tempo(const std::vector<GuiMarker>& markers, int index) {
     for (int i = index - 1; i >= 0; --i) {
@@ -442,7 +439,8 @@ void render_flags(cairo_t* cr,
                   GuiColor highlight_color,
                   double font_size,
                   const std::set<int>& selected_set,
-                  int last_selected) {
+                  int last_selected,
+                  const FlagEditorOverlay& editor) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -455,12 +453,11 @@ void render_flags(cairo_t* cr,
 
     const double hl_pad = 2.0;
 
-    // Canonical measurement: a string that includes both parens (descender)
-    // and uppercase-letter ascent. Computed once per render call so every
-    // flag's background rectangle uses the same y/height regardless of the
-    // flag's own text extents.
+    // Canonical measurement: covers the longest valid payload glyphs so
+    // every flag's background rectangle uses the same y/height regardless
+    // of the flag's own text extents.
     cairo_text_extents_t uniform_ext;
-    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
@@ -470,23 +467,34 @@ void render_flags(cairo_t* cr,
             const bool is_selected = selected_set.count(i) > 0;
             const bool is_last     = (i == last_selected) && is_selected;
             const bool dis         = effective_disabled(markers, i);
+            const bool is_editing  = (i == editor.marker_index);
 
-            // Only the last-selected flag gets the background highlight.
-            // Height and vertical position come from `uniform_ext` so the
-            // box is identical across flag types (text stays centered on
-            // `baseline_y` independently). The box's left edge sits on
-            // `text_left` — the marker's integer-snapped pixel column —
-            // with no x_bearing adjustment. There IS now left-side text
-            // padding: the box's left edge stays anchored to the marker
-            // column, but the text is inset `hl_pad` so the highlight has
-            // symmetric padding around the glyphs.
-            if (is_last) {
-                cairo_set_source_rgb(cr, highlight_color.r,
-                                     highlight_color.g, highlight_color.b);
+            // Pick what to draw: editing rect uses `pending` and may go
+            // wider than the original flag (no width cap — overlap is
+            // accepted per V.A1).
+            std::string draw_text = is_editing ? editor.pending : text;
+            cairo_text_extents_t draw_ext = ext;
+            if (is_editing) {
+                cairo_text_extents(cr, draw_text.c_str(), &draw_ext);
+            }
+
+            // Background rect: editor → highlight or red; otherwise the
+            // last-selected flag gets the highlight color.
+            const bool draw_bg = is_editing || is_last;
+            if (draw_bg) {
+                if (is_editing && editor.is_red) {
+                    cairo_set_source_rgb(cr,
+                                         editor.red_color.r,
+                                         editor.red_color.g,
+                                         editor.red_color.b);
+                } else {
+                    cairo_set_source_rgb(cr, highlight_color.r,
+                                         highlight_color.g, highlight_color.b);
+                }
                 cairo_rectangle(cr,
                                 text_left,
                                 baseline_y + uniform_ext.y_bearing - hl_pad,
-                                hl_pad + ext.x_bearing + ext.width + hl_pad,
+                                hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad,
                                 uniform_ext.height + 2 * hl_pad);
                 cairo_fill(cr);
             }
@@ -498,7 +506,31 @@ void render_flags(cairo_t* cr,
             }
             cairo_set_source_rgb(cr, c.r, c.g, c.b);
             cairo_move_to(cr, text_left + hl_pad, baseline_y);
-            cairo_show_text(cr, text.c_str());
+            cairo_show_text(cr, draw_text.c_str());
+
+            if (is_editing && editor.cursor_visible) {
+                // Cursor: 1px vertical bar at byte offset `cursor_pos`.
+                double cursor_x_offset = 0.0;
+                if (editor.cursor_pos > 0) {
+                    cairo_text_extents_t pext;
+                    const std::string before =
+                        draw_text.substr(0,
+                            static_cast<size_t>(editor.cursor_pos));
+                    cairo_text_extents(cr, before.c_str(), &pext);
+                    cursor_x_offset = pext.x_advance;
+                }
+                const double cur_x =
+                    text_left + hl_pad + cursor_x_offset;
+                cairo_set_source_rgb(cr, c.r, c.g, c.b);
+                cairo_set_line_width(cr, 1.0);
+                cairo_move_to(cr, std::round(cur_x) + 0.5,
+                              baseline_y + uniform_ext.y_bearing - hl_pad);
+                cairo_line_to(cr, std::round(cur_x) + 0.5,
+                              baseline_y + uniform_ext.y_bearing
+                                  + uniform_ext.height + hl_pad);
+                cairo_stroke(cr);
+            }
+
             if constexpr (kDebugPerf) perf_counters::flag_drawn++;
         });
 
@@ -529,7 +561,7 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     // corrected visual highlight box so clicks anywhere inside the painted
     // background register on the marker.
     cairo_text_extents_t uniform_ext;
-    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
     const double hl_pad = 2.0;
 
     iterate_visible_flags(cr, top_strip_area, markers,
@@ -559,11 +591,11 @@ std::string transient_flag_text(const GuiTransient& m) {
     if (m.is_begin_time)    text = "b=";
     else if (m.is_end_time) text = "e=";
     if (m.is_inserted) {
-        text += 'I';
+        text += 'i';
     } else if (m.has_displacement) {
-        text += "D*";
+        text += "d*";
     } else {
-        text += 'D';
+        text += 'd';
     }
     return text;
 }
@@ -717,7 +749,7 @@ void render_transient_flags(cairo_t* cr,
     const double hl_pad = 2.0;
 
     cairo_text_extents_t uniform_ext;
-    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
     iterate_visible_transient_flags(cr, top_strip_area, transients,
                                     viewport_start_sample, viewport_end_sample,
@@ -773,7 +805,7 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_set_font_size(cr, font_size);
 
     cairo_text_extents_t uniform_ext;
-    cairo_text_extents(cr, "(1.28) (a.aa)", &uniform_ext);
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
     const double hl_pad = 2.0;
 
     iterate_visible_transient_flags(cr, top_strip_area, transients,

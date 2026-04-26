@@ -91,15 +91,31 @@ void render_markers(cairo_t* cr,
                     const std::set<int>& selected_set,
                     int last_selected);
 
+// Editor overlay used by V.A1's top-flag editor. When `marker_index >= 0`
+// and matches a flag the renderer is about to draw, that flag's text is
+// replaced with `pending` and the background paints either highlight or
+// `red_color` depending on `is_red`. A 1px-wide cursor is drawn at the
+// x-position corresponding to `cursor_pos` (byte index into `pending`).
+// `cursor_visible` toggles the bar on/off for blink. Pass marker_index =
+// -1 to disable the overlay (normal rendering).
+struct FlagEditorOverlay {
+    int         marker_index   = -1;
+    std::string pending;
+    int         cursor_pos     = 0;
+    bool        is_red         = false;
+    bool        cursor_visible = false;
+    GuiColor    red_color      = {0.75, 0.20, 0.18};
+};
+
 // Draws flag annotations in `top_strip_area` above visible markers. Iterates
 // left-to-right and greedily skips any flag whose left edge would collide
 // with the previously-rendered flag's right edge (+ small pad). Flag text
-// derives from the marker's state: owned tempo `1.28`, owned+def
-// `1.28 (a.01)`, inherit `(1.28)` where the value is resolved by walking
-// backward, inherit+def `(1.28) (a.01)`, reference `a.01`. Scale factor is
-// not surfaced. Flags whose indices appear in `selected_set` paint text in
-// `selected_color`; only the `last_selected` flag (if rendered and in the
-// set) gets the background highlight rectangle in `highlight_color`.
+// is the canonical post-pipe payload: owned tempo `1.28`, owned+scale
+// `1.28*1.2345`, owned+def `1.28:a.01`, owned+scale+def `1.28*1.2345:a.01`,
+// inherit `idem`, label reference `a.01`. Flags whose indices appear in
+// `selected_set` paint text in `selected_color`; only the `last_selected`
+// flag (if rendered and in the set) gets the background highlight
+// rectangle in `highlight_color`.
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
                   const std::vector<GuiMarker>& markers,
@@ -112,7 +128,8 @@ void render_flags(cairo_t* cr,
                   GuiColor highlight_color,
                   double font_size,
                   const std::set<int>& selected_set,
-                  int last_selected);
+                  int last_selected,
+                  const FlagEditorOverlay& editor = {});
 
 // Same greedy-pack and elision logic as render_flags, without drawing —
 // returns the screen-coord rects of the flags that would be rendered. The
@@ -167,6 +184,11 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     long long viewport_end_sample,
     int sample_rate,
     double font_size);
+
+// Returns the text that render_flags would draw for `markers[idx]`. Used
+// by the GUI text editor to seed the editable payload (the on-screen rect
+// content) when entering edit mode on a flag.
+std::string flag_text_for_marker(const std::vector<GuiMarker>& markers, int idx);
 
 // Walks backward from `index` through `markers` to find the nearest marker
 // that owns its tempo (tempo_inherits == false and not a label reference).
