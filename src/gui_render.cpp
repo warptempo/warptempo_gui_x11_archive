@@ -15,6 +15,12 @@ namespace perf_counters {
     int flag_elided          = 0;
 }
 
+// V.B Addendum 2: extra vertical padding (top + bottom) added to the inner
+// padding of flag rects, hit rects, and the iteration popup edit bg. The
+// horizontal pad (`hl_pad`) is unchanged. Value applies symmetrically:
+// rects grow by 2*kVPadExtraPx in height, with kVPadExtraPx on each side.
+constexpr double kVPadExtraPx = 1.0;
+
 namespace {
 
 // True if the marker at `idx` should render as disabled. Per chunk U
@@ -465,7 +471,13 @@ void render_flags(cairo_t* cr,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
             const bool is_selected = selected_set.count(i) > 0;
-            const bool is_last     = (i == last_selected) && is_selected;
+            // Suppress the last-selected highlight on the flag whose iter
+            // popup currently owns the editor: the highlight must be
+            // exclusive to the focused rect, not shared by both rects of
+            // the same marker.
+            const bool is_iter_focus = (i == editor.iter_editor_target);
+            const bool is_last     =
+                (i == last_selected) && is_selected && !is_iter_focus;
             const bool dis         = effective_disabled(markers, i);
             const bool is_editing  = (i == editor.marker_index);
 
@@ -493,9 +505,9 @@ void render_flags(cairo_t* cr,
                 }
                 cairo_rectangle(cr,
                                 text_left,
-                                baseline_y + uniform_ext.y_bearing - hl_pad,
+                                baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
                                 hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad,
-                                uniform_ext.height + 2 * hl_pad);
+                                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx);
                 cairo_fill(cr);
             }
 
@@ -524,10 +536,10 @@ void render_flags(cairo_t* cr,
                 cairo_set_source_rgb(cr, c.r, c.g, c.b);
                 cairo_set_line_width(cr, 1.0);
                 cairo_move_to(cr, std::round(cur_x) + 0.5,
-                              baseline_y + uniform_ext.y_bearing - hl_pad);
+                              baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx);
                 cairo_line_to(cr, std::round(cur_x) + 0.5,
                               baseline_y + uniform_ext.y_bearing
-                                  + uniform_ext.height + hl_pad);
+                                  + uniform_ext.height + hl_pad + kVPadExtraPx);
                 cairo_stroke(cr);
             }
 
@@ -572,9 +584,9 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
             FlagHitRect r;
             r.marker_index = i;
             r.x = text_left;
-            r.y = baseline_y + uniform_ext.y_bearing - hl_pad;
+            r.y = baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx;
             r.w = hl_pad + ext.x_bearing + ext.width + hl_pad;
-            r.h = uniform_ext.height + 2 * hl_pad;
+            r.h = uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx;
             out.push_back(r);
         });
 
@@ -765,9 +777,9 @@ void render_transient_flags(cairo_t* cr,
                                      highlight_color.g, highlight_color.b);
                 cairo_rectangle(cr,
                                 text_left,
-                                baseline_y + uniform_ext.y_bearing - hl_pad,
+                                baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
                                 hl_pad + ext.x_bearing + ext.width + hl_pad,
-                                uniform_ext.height + 2 * hl_pad);
+                                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx);
                 cairo_fill(cr);
             }
 
@@ -816,9 +828,9 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
             FlagHitRect r;
             r.marker_index = i;
             r.x = text_left;
-            r.y = baseline_y + uniform_ext.y_bearing - hl_pad;
+            r.y = baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx;
             r.w = hl_pad + ext.x_bearing + ext.width + hl_pad;
-            r.h = uniform_ext.height + 2 * hl_pad;
+            r.h = uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx;
             out.push_back(r);
         });
 

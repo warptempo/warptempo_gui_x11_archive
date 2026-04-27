@@ -24,11 +24,25 @@ namespace gui_text_editor {
 // file) can be trimmed back to canonical form.
 constexpr int kMaxPendingChars = 16;
 
+// Vocabulary the editor accepts on the keyboard. Different call sites
+// edit different payload shapes; the kind selects which keys produce a
+// printable character. V.A1's flag editor uses FlagPayload (digits,
+// letters, `.`, `*`, `:`); V.B's iteration popup uses IterationBracket
+// (digits, `.`, `+`, `-`, `,`, `[`, `]`).
+enum class Kind {
+    FlagPayload,
+    IterationBracket,
+};
+
 // State for a single editable rect.
 struct State {
     // Identifier of the entity being edited. -1 means "not editing".
     // The caller decides what this means (a marker index in V.A1).
     int target = -1;
+
+    // Vocabulary discriminator. The caller sets this in `enter()` and
+    // the keystroke handler routes printable detection accordingly.
+    Kind kind = Kind::FlagPayload;
 
     // Editable text — currently the canonical post-pipe payload.
     std::string pending;
@@ -57,10 +71,12 @@ inline bool is_active(const State& s) { return s.target >= 0; }
 void deactivate(State& s);
 
 // Begin editing `target` with the given locked prefix and seed pending.
-// Cursor lands at end of pending.
+// Cursor lands at end of pending. `kind` selects the vocabulary the
+// keystroke handler will accept while this editor is active.
 void enter(State& s, int target,
            std::string locked_prefix,
-           std::string initial_pending);
+           std::string initial_pending,
+           Kind kind = Kind::FlagPayload);
 
 // Apply a key event to the editor. Returns true if the key was consumed
 // — the caller should NOT route a consumed key to other handlers.

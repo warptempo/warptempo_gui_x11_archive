@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,14 @@ struct GuiMarker {
     bool disabled      = false;
     bool is_begin_time = false;
     bool is_end_time   = false;
+
+    // V.B iteration mode. Session-only render-parameter scratchpad: never
+    // serialized, lost on app close, populated and edited inline via the
+    // iteration popup that appears above each owning marker's flag rect
+    // when iteration mode is on. NaN means "blank" (popup shows []); when
+    // set, both are non-NaN and iter_start <= iter_end.
+    double iter_start = std::numeric_limits<double>::quiet_NaN();
+    double iter_end   = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct GuiMarkerError {

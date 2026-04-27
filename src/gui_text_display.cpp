@@ -5,6 +5,11 @@ namespace gui_text_display {
 namespace {
 // Pixel gap between the popup baseline and the anchor edge.
 constexpr double kVerticalGapPx = 4.0;
+// V.B Addendum 2: extra inner padding on the popup's own (implicit) rect.
+// Mirrors gui_render.cpp's kVPadExtraPx so the popup's text sits the same
+// kVerticalGapPx away from the (now-bigger) anchor's edge while leaving
+// kVPadExtraPx of clearance between text and the popup rect's near edge.
+constexpr double kVPadExtraPx = 1.0;
 } // namespace
 
 void render(cairo_t* cr, const State& s, double font_size) {
@@ -29,15 +34,18 @@ void render(cairo_t* cr, const State& s, double font_size) {
     double baseline_y;
     if (s.position == Position::Top) {
         // Place baseline so the descent of the text sits `kVerticalGapPx`
-        // above the top edge of the anchor.
+        // above the top edge of the anchor, with kVPadExtraPx of additional
+        // clearance for the popup's own bottom inner padding.
         baseline_y = static_cast<double>(s.anchor.y)
                    - kVerticalGapPx
+                   - kVPadExtraPx
                    - (ext.height + ext.y_bearing);
     } else {
-        // Bottom: top of glyph cluster sits `kVerticalGapPx` below the
-        // bottom edge of the anchor.
+        // Bottom: top of glyph cluster sits `kVerticalGapPx` plus the
+        // popup's own top inner padding below the bottom edge of the anchor.
         baseline_y = static_cast<double>(s.anchor.y + s.anchor.h)
                    + kVerticalGapPx
+                   + kVPadExtraPx
                    - ext.y_bearing;
     }
 

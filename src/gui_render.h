@@ -98,13 +98,21 @@ void render_markers(cairo_t* cr,
 // x-position corresponding to `cursor_pos` (byte index into `pending`).
 // `cursor_visible` toggles the bar on/off for blink. Pass marker_index =
 // -1 to disable the overlay (normal rendering).
+//
+// V.B Addendum 2: `iter_editor_target` carries the marker index whose
+// iteration popup (drawn above the flag strip) currently owns the
+// IterationBracket-kind editor. The flag rect for that marker must
+// suppress its last-selected background highlight so only the focused
+// element (the iter popup) shows the highlight. -1 means "no iteration
+// popup is being edited".
 struct FlagEditorOverlay {
-    int         marker_index   = -1;
+    int         marker_index       = -1;
+    int         iter_editor_target = -1;
     std::string pending;
-    int         cursor_pos     = 0;
-    bool        is_red         = false;
-    bool        cursor_visible = false;
-    GuiColor    red_color      = {0.75, 0.20, 0.18};
+    int         cursor_pos         = 0;
+    bool        is_red             = false;
+    bool        cursor_visible     = false;
+    GuiColor    red_color          = {0.75, 0.20, 0.18};
 };
 
 // Draws flag annotations in `top_strip_area` above visible markers. Iterates

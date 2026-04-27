@@ -112,6 +112,209 @@ constexpr double kTabLetterGapPx          = 10.0;
 // (±6 px of playhead_x), and subpixel rounding margin.
 constexpr int kPlayheadHalfPx = 8;
 
+// Pixel gap between the popup's top edge and the flag rect's top edge
+// (mirrors gui_text_display::kVerticalGapPx). Used for iteration popup
+// hit-testing and vertical placement.
+constexpr double kIterPopupVerticalGapPx = 4.0;
+// V.B Addendum 2: extra inner padding on top/bottom of the iteration
+// popup's bg rect (mirrors gui_render.cpp::kVPadExtraPx and
+// gui_text_display.cpp::kVPadExtraPx). The flag hit-rect already grew by
+// 2*kVPadExtraPx vertically, so the iter popup's hit_rect inherits that
+// height and the gap to the flag rect is preserved automatically; the
+// edit-state text baseline is shifted up by kIterPopupVPadExtraPx so the
+// pending text clears the popup rect's bottom inner padding.
+constexpr double kIterPopupVPadExtraPx = 1.0;
+
+// V.B iteration mode: format the popup's bracket text for marker `m`.
+// "[]" when both iter values are NaN; "[%+0.2f,%+0.2f]" when set.
+inline std::string format_iter_bracket_text(const GuiMarker& m) {
+    if (std::isnan(m.iter_start) || std::isnan(m.iter_end)) {
+        return "[]";
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "[%+0.2f,%+0.2f]",
+                  m.iter_start, m.iter_end);
+    return buf;
+}
+
+// V.B iteration mode: an owning marker (tempo_inherits=false AND no
+// label_ref) gets a persistent iteration popup. Pass markers and
+// label_ref markers are excluded; disabled status does not matter.
+inline bool iter_popup_eligible_marker(const GuiMarker& m) {
+    return !m.tempo_inherits && m.label_ref.empty();
+}
+
+// On-screen popup geometry for one iteration popup. `flag_rect` is the
+// underlying flag's rect (used to anchor); `hit_rect` is the clickable
+// region; `text` is the current popup text (for paint and seed-on-edit).
+struct IterPopupHit {
+    int          marker_index;
+    GuiRect      flag_rect;
+    GuiRect      hit_rect;
+    std::string  text;
+};
+
+// Compute iteration popup hit-rects for visible owning markers in
+// `top_strip_area`. Uses `compute_flag_hit_rects` for the underlying flag
+// positions (so popups inherit the flag-strip greedy elision). Each
+// popup sits kIterPopupVerticalGapPx above its flag's top edge. The
+// hit_rect height matches the flag's height; width is the monospace
+// extent of the popup's current text plus a small horizontal pad so
+// edits with longer pending strings stay clickable.
+inline std::vector<IterPopupHit> compute_iter_popup_hits(
+    cairo_t* cr,
+    GuiRect top_strip_area,
+    const std::vector<GuiMarker>& markers,
+    long long viewport_start_sample,
+    long long viewport_end_sample,
+    int sample_rate,
+    double font_size) {
+    std::vector<IterPopupHit> out;
+    auto rects = compute_flag_hit_rects(
+        cr, top_strip_area, markers,
+        viewport_start_sample, viewport_end_sample,
+        sample_rate, font_size);
+    if (rects.empty()) return out;
+
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, font_size);
+    // The widest possible iteration text drives a uniform hit-rect width
+    // so popups don't visibly jiggle in size as values change. Matches
+    // the [%+0.2f,%+0.2f] format with single-digit integer parts.
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "[+0.00,+0.00]", &uniform_ext);
+    const double hl_pad = 2.0;
+
+    for (const auto& r : rects) {
+        const int idx = r.marker_index;
+        if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
+        if (!iter_popup_eligible_marker(markers[idx])) continue;
+        IterPopupHit h;
+        h.marker_index = idx;
+        h.flag_rect.x = static_cast<int>(std::lround(r.x));
+        h.flag_rect.y = static_cast<int>(std::lround(r.y));
+        h.flag_rect.w = static_cast<int>(std::lround(r.w));
+        h.flag_rect.h = static_cast<int>(std::lround(r.h));
+        h.text = format_iter_bracket_text(markers[idx]);
+        cairo_text_extents_t ext;
+        cairo_text_extents(cr, h.text.c_str(), &ext);
+        const int popup_w =
+            static_cast<int>(std::ceil(uniform_ext.x_advance + 2 * hl_pad));
+        const int popup_h = h.flag_rect.h;
+        h.hit_rect.x = h.flag_rect.x;
+        h.hit_rect.y = h.flag_rect.y -
+            static_cast<int>(std::lround(kIterPopupVerticalGapPx)) -
+            popup_h;
+        h.hit_rect.w = popup_w;
+        h.hit_rect.h = popup_h;
+        out.push_back(h);
+    }
+    cairo_restore(cr);
+    return out;
+}
+
+// V.A3b hover-popup text. Replicates parser.cpp's resolution math so the
+// popup matches what the engine emits into the .timemap. Pass markers
+// emit "= TEMPO" or "= TEMPO*SCALE" (single equals; resolved tempo of
+// the nearest prior owning marker). Label_ref markers emit
+// "~= BASE*COMBINED_SCALE" (tilde-equals; mirrors parser.cpp lines
+// 612/651). BASE is rendered at 2 decimals; COMBINED_SCALE is
+// `def_scale * multiplier` when the def has a typed scale, else just
+// `multiplier`, rendered at 4 decimals. Returns "" when the marker
+// doesn't qualify for a hover popup (owning, missing def, malformed).
+inline std::string compute_hover_popup_text(
+    const std::vector<GuiMarker>& mv, int idx, int sample_rate) {
+    if (idx < 0 || idx >= static_cast<int>(mv.size())) return "";
+    const GuiMarker& m = mv[idx];
+
+    if (m.tempo_inherits) {
+        // resolve_inherited_tempo walks backward from `walk-1`. Starting
+        // at idx+1 lets it return idx's resolved tempo if idx happens to
+        // be the only inheriting marker in front of an owning origin.
+        const int walk = idx + 1;
+        const double tval = resolve_inherited_tempo(mv, walk);
+        const std::string sc = resolve_inherited_tempo_scale(mv, walk);
+        char tbuf[32];
+        std::snprintf(tbuf, sizeof(tbuf), "%.2f", tval);
+        std::string out = "= ";
+        out += tbuf;
+        if (!sc.empty()) {
+            out += "*";
+            out += sc;
+        }
+        return out;
+    }
+
+    if (!m.label_ref.empty()) {
+        int def_idx = -1;
+        for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+            if (mv[i].label_def == m.label_ref) {
+                def_idx = i;
+                break;
+            }
+        }
+        if (def_idx < 0) return "";
+        if (def_idx + 1 >= static_cast<int>(mv.size())) return "";
+        if (idx     + 1 >= static_cast<int>(mv.size())) return "";
+        const double sr_d = static_cast<double>(sample_rate);
+        if (sr_d <= 0.0) return "";
+
+        const double lr_src_dist =
+            (mv[idx + 1].time_seconds - mv[idx].time_seconds) * sr_d;
+        const double def_src_dist =
+            (mv[def_idx + 1].time_seconds - mv[def_idx].time_seconds) * sr_d;
+        if (def_src_dist <= 0.0 || lr_src_dist <= 0.0) return "";
+
+        const GuiMarker& def = mv[def_idx];
+        double      def_base;
+        std::string def_scale_str;
+        bool        def_has_typed_scale;
+        if (def.tempo_inherits) {
+            // Pass-def: fall back to inheritance walk. The resolved tempo
+            // is treated as a fully-effective number with no separate
+            // typed scale (inheritance returns base*scale).
+            def_base = resolve_inherited_tempo(mv, def_idx);
+            def_scale_str = "";
+            def_has_typed_scale = false;
+        } else {
+            def_base = def.tempo_base;
+            def_scale_str = def.tempo_scale;
+            def_has_typed_scale = !def_scale_str.empty();
+        }
+        double def_scale_val = 1.0;
+        if (def_has_typed_scale) {
+            try { def_scale_val = std::stod(def_scale_str); }
+            catch (...) { def_scale_val = 1.0; }
+        }
+        const double def_eff_tempo = def_base * def_scale_val;
+        if (def_base == 0.0 || def_eff_tempo == 0.0) return "";
+
+        // settings.scale cancels in parser.cpp's line 648 expression:
+        //   multiplier = (lr_src_dist * def_eff_tempo)
+        //              / (def_base * def_src_dist)
+        const double multiplier =
+            (lr_src_dist * def_eff_tempo) / (def_base * def_src_dist);
+        const double combined_scale = def_has_typed_scale
+            ? (def_scale_val * multiplier)
+            : multiplier;
+
+        char base_buf[32];
+        std::snprintf(base_buf, sizeof(base_buf), "%.2f", def_base);
+        char scale_buf[32];
+        std::snprintf(scale_buf, sizeof(scale_buf), "%.4f", combined_scale);
+        std::string out = "~= ";
+        out += base_buf;
+        out += "*";
+        out += scale_buf;
+        return out;
+    }
+
+    return "";
+}
+
 // Classification of each undo entry by the net effect of its op on the
 // marker vector. Used by post-restore rules to decide selection and
 // playhead behavior; count-preserving ops split Move vs Other so Move can
@@ -245,9 +448,17 @@ struct PlayheadDragState {
 // when the cursor first lands on an eligible rect; the tick handler flips
 // `visible` when the dwell threshold is crossed; mutation paths /
 // dismiss conditions clear the whole struct.
+//
+// `cached_text` is the popup's content string, computed on rect-entry
+// (when the dwell timer starts) and rendered at delay-completion.
+// Precomputing during the otherwise-idle delay window hides the
+// label_ref math (def lookup, frame-distance ratio) behind time the
+// user is already waiting through, so the popup-show frame doesn't
+// stutter. Discarded with the rest of the struct on rect-exit.
 struct HoverPopupState {
-    int  marker_index = -1;
-    bool visible      = false;
+    int         marker_index = -1;
+    bool        visible      = false;
+    std::string cached_text;
     std::chrono::steady_clock::time_point entry_time{};
 };
 
@@ -481,6 +692,13 @@ struct AppState {
     // is set by Esc during a queue run and read between entries.
     bool queue_running           = false;
     bool queue_cancel_requested  = false;
+
+    // V.B iteration mode. Toggled by plain `i` in warp mode (no-op in
+    // transient mode). Session-only; survives mode-switches but is lost
+    // on app close. When true, hover popups are suppressed and a
+    // persistent iteration popup is rendered above every owning
+    // marker's flag rect.
+    bool iteration_mode_enabled = false;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -1298,7 +1516,15 @@ int main(int argc, char** argv) {
                         app.last_selected_marker);
                 } else {
                     FlagEditorOverlay overlay;
-                    if (gui_text_editor::is_active(app.top_flag_editor)) {
+                    // Only the V.A1 FlagPayload kind paints into the flag
+                    // rect; the V.B IterationBracket kind owns the popup
+                    // above the rect and leaves the flag's normal text
+                    // alone. When the iter popup is the focused editor
+                    // target, the flag rect below must suppress its
+                    // last-selected highlight (V.B Addendum 2).
+                    if (gui_text_editor::is_active(app.top_flag_editor) &&
+                        app.top_flag_editor.kind ==
+                            gui_text_editor::Kind::FlagPayload) {
                         overlay.marker_index   = app.top_flag_editor.target;
                         overlay.pending        = app.top_flag_editor.pending;
                         overlay.cursor_pos     = app.top_flag_editor.cursor_pos;
@@ -1306,6 +1532,11 @@ int main(int argc, char** argv) {
                         overlay.cursor_visible =
                             gui_text_editor::cursor_visible_now(
                                 app.top_flag_editor);
+                    } else if (gui_text_editor::is_active(app.top_flag_editor) &&
+                               app.top_flag_editor.kind ==
+                                   gui_text_editor::Kind::IterationBracket) {
+                        overlay.iter_editor_target =
+                            app.top_flag_editor.target;
                     }
                     render_flags(cr, top_strip, app.markers.markers(),
                                  vp_start, vp_end, sr,
@@ -1319,18 +1550,20 @@ int main(int argc, char** argv) {
                     // V.A3b hover popup. Drawn on top of the flag strip,
                     // strictly after render_flags. Motion + tick already
                     // gate visibility; redraw just paints what state says.
-                    // Inlined (rather than calling helper lambdas) because
-                    // the redraw lambda is defined before those helpers.
-                    if (app.hover_popup.visible) {
+                    // The popup text was precomputed at hover-entry into
+                    // `app.hover_popup.cached_text` so this redraw branch
+                    // doesn't have to repeat the parser-mirroring math.
+                    if (app.hover_popup.visible &&
+                        !app.iteration_mode_enabled) {
                         const auto& mv = app.markers.markers();
                         const int hidx = app.hover_popup.marker_index;
                         const bool eligible =
                             (hidx >= 0 &&
                              hidx < static_cast<int>(mv.size()) &&
                              (mv[hidx].tempo_inherits ||
-                              !mv[hidx].label_ref.empty()));
+                              !mv[hidx].label_ref.empty()) &&
+                             !app.hover_popup.cached_text.empty());
                         if (eligible) {
-                            // Locate the on-screen flag rect for this idx.
                             auto rects = compute_flag_hit_rects(
                                 cr, top_strip, mv,
                                 vp_start, vp_end, sr, kFlagFontSize);
@@ -1350,42 +1583,130 @@ int main(int argc, char** argv) {
                                 }
                             }
                             if (anchor.w > 0 && anchor.h > 0) {
-                                // Resolve the popup text.
-                                int resolve_from = hidx;
-                                if (!mv[hidx].label_ref.empty()) {
-                                    for (int i = 0;
-                                         i < static_cast<int>(mv.size()); ++i) {
-                                        if (mv[i].label_def ==
-                                            mv[hidx].label_ref) {
-                                            resolve_from = i;
-                                            break;
-                                        }
-                                    }
-                                }
-                                int walk_index = resolve_from;
-                                if (resolve_from <
-                                        static_cast<int>(mv.size()) &&
-                                    !mv[resolve_from].tempo_inherits &&
-                                    mv[resolve_from].label_ref.empty()) {
-                                    walk_index = resolve_from + 1;
-                                }
-                                const double tval =
-                                    resolve_inherited_tempo(mv, walk_index);
-                                const std::string scale =
-                                    resolve_inherited_tempo_scale(
-                                        mv, walk_index);
-                                char tbuf[32];
-                                std::snprintf(tbuf, sizeof(tbuf),
-                                              "%.2f", tval);
-                                std::string content = tbuf;
-                                if (!scale.empty()) {
-                                    content += "*";
-                                    content += scale;
-                                }
-
                                 gui_text_display::State td;
                                 td.anchor   = anchor;
-                                td.content  = content;
+                                td.content  = app.hover_popup.cached_text;
+                                td.visible  = true;
+                                td.color    = kMarkerColor;
+                                td.position =
+                                    gui_text_display::Position::Top;
+                                gui_text_display::render(cr, td,
+                                                         kFlagFontSize);
+                            }
+                        }
+                    }
+
+                    // V.B iteration popups. Persistent per-flag annotations
+                    // when iteration mode is on. Each owning marker gets a
+                    // popup above its flag rect; pass markers and label_ref
+                    // markers are excluded (no own tempo to vary). When the
+                    // top_flag_editor is active in IterationBracket kind on
+                    // marker `T`, popup `T` paints the editor's pending
+                    // text (with the [] brackets visible during edit) and
+                    // a 1-px cursor at cursor_pos; other popups paint
+                    // their formatted iter text normally.
+                    if (app.iteration_mode_enabled) {
+                        const auto& mv = app.markers.markers();
+                        auto hits = compute_iter_popup_hits(
+                            cr, top_strip, mv,
+                            vp_start, vp_end, sr, kFlagFontSize);
+                        const bool editor_on_iter =
+                            gui_text_editor::is_active(app.top_flag_editor) &&
+                            app.top_flag_editor.kind ==
+                                gui_text_editor::Kind::IterationBracket;
+                        for (const auto& h : hits) {
+                            // Anchor for gui_text_display: x at the flag's
+                            // text-origin (flag.x + 2, mirrors hover popup),
+                            // y/w/h from the flag rect itself.
+                            GuiRect anchor{
+                                h.flag_rect.x + 2,
+                                h.flag_rect.y,
+                                h.flag_rect.w,
+                                h.flag_rect.h
+                            };
+                            if (editor_on_iter &&
+                                app.top_flag_editor.target == h.marker_index) {
+                                // Editor overlay: paint a background swatch
+                                // (red on parse failure, otherwise the
+                                // standard flag highlight) under the popup,
+                                // render the editor's pending text in place
+                                // of the formatted iter text, then a cursor.
+                                const std::string& pending =
+                                    app.top_flag_editor.pending;
+                                cairo_save(cr);
+                                cairo_select_font_face(cr, "monospace",
+                                    CAIRO_FONT_SLANT_NORMAL,
+                                    CAIRO_FONT_WEIGHT_NORMAL);
+                                cairo_set_font_size(cr, kFlagFontSize);
+                                cairo_text_extents_t pext;
+                                cairo_text_extents(cr, pending.c_str(), &pext);
+                                cairo_text_extents_t uext;
+                                cairo_text_extents(cr, "[+0.00,+0.00]", &uext);
+                                const double hl_pad = 2.0;
+                                // Edit field tracks the pending text width
+                                // plus the rendered popup's horizontal pad,
+                                // so trailing whitespace doesn't appear at
+                                // the right edge during edit.
+                                const double bg_w =
+                                    pext.x_advance + 2.0 * hl_pad;
+                                // Place the bg rect to mirror render_flags:
+                                // top-left = (anchor.x - hl_pad,
+                                //             anchor.y - gap - flag.h).
+                                const double bg_x =
+                                    static_cast<double>(anchor.x) - hl_pad;
+                                const double bg_y =
+                                    static_cast<double>(h.hit_rect.y);
+                                const double bg_h =
+                                    static_cast<double>(h.hit_rect.h);
+                                const GuiColor bg_col =
+                                    app.top_flag_editor.red
+                                        ? GuiColor{0.75, 0.20, 0.18}
+                                        : kFlagHighlightColor;
+                                cairo_set_source_rgb(cr,
+                                    bg_col.r, bg_col.g, bg_col.b);
+                                cairo_rectangle(cr, bg_x, bg_y, bg_w, bg_h);
+                                cairo_fill(cr);
+
+                                // Render pending text at the popup baseline.
+                                // The kVPadExtraPx subtraction matches the
+                                // popup's own top/bottom inner padding so
+                                // the visible gap between the iter popup's
+                                // bottom edge and the flag rect's top edge
+                                // stays at kIterPopupVerticalGapPx after
+                                // both rects grew by the addendum's +1px.
+                                const double baseline_y =
+                                    static_cast<double>(anchor.y)
+                                  - kIterPopupVerticalGapPx
+                                  - kIterPopupVPadExtraPx
+                                  - (uext.height + uext.y_bearing);
+                                cairo_set_source_rgb(cr,
+                                    kMarkerColor.r, kMarkerColor.g,
+                                    kMarkerColor.b);
+                                cairo_move_to(cr,
+                                    static_cast<double>(anchor.x), baseline_y);
+                                cairo_show_text(cr, pending.c_str());
+
+                                // 1-px cursor at the cursor_pos byte offset.
+                                if (gui_text_editor::cursor_visible_now(
+                                        app.top_flag_editor)) {
+                                    std::string left = pending.substr(
+                                        0, static_cast<size_t>(
+                                            app.top_flag_editor.cursor_pos));
+                                    cairo_text_extents_t lext;
+                                    cairo_text_extents(cr, left.c_str(), &lext);
+                                    const double cx =
+                                        static_cast<double>(anchor.x) +
+                                        lext.x_advance;
+                                    cairo_set_line_width(cr, 1.0);
+                                    cairo_move_to(cr, cx, bg_y);
+                                    cairo_line_to(cr, cx, bg_y + bg_h);
+                                    cairo_stroke(cr);
+                                }
+                                cairo_restore(cr);
+                            } else {
+                                gui_text_display::State td;
+                                td.anchor   = anchor;
+                                td.content  = h.text;
                                 td.visible  = true;
                                 td.color    = kMarkerColor;
                                 td.position =
@@ -1590,8 +1911,14 @@ int main(int argc, char** argv) {
     // label_def) and label_ref markers. Owning markers display their tempo
     // in the rect, so no popup is needed. Transient mode has no pass
     // concept and is never eligible.
+    //
+    // V.B: when iteration mode is on, the hover popup for these same
+    // marker types is suppressed entirely — the persistent iteration
+    // popups occupy that visual space, and stacking a transient hover
+    // hint on top would just clutter the strip.
     auto popup_eligible_marker = [&](int idx) -> bool {
         if (app.active_mode != 'W') return false;
+        if (app.iteration_mode_enabled) return false;
         if (idx < 0) return false;
         const auto& mv = app.markers.markers();
         if (idx >= static_cast<int>(mv.size())) return false;
@@ -1972,6 +2299,210 @@ int main(int argc, char** argv) {
 
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
+    };
+
+    // -- V.B iteration popup edit helpers -----------------------------------
+
+    // Open an iteration popup edit on `idx`. The seed pending is the
+    // current popup display ("[]" or "[+0.10,-0.05]") so the user can
+    // backspace into a valid edit position. Reuses `top_flag_editor`
+    // state but with Kind::IterationBracket so the editor's keyboard
+    // vocabulary swaps to `[]+-,.` and digits.
+    auto enter_iter_edit = [&](int idx) {
+        if (idx < 0) return;
+        if (!app.iteration_mode_enabled) return;
+        const auto& mv = app.markers.markers();
+        if (idx >= static_cast<int>(mv.size())) return;
+        if (!iter_popup_eligible_marker(mv[idx])) return;
+        if (gui_text_editor::is_active(app.top_flag_editor) &&
+            app.top_flag_editor.target != idx) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+        }
+        gui_text_editor::enter(
+            app.top_flag_editor, idx,
+            /*locked_prefix=*/"",
+            /*initial_pending=*/format_iter_bracket_text(mv[idx]),
+            gui_text_editor::Kind::IterationBracket);
+        clear_hover_popup();
+        invalidate_top_strip();
+    };
+
+    // Commit the iteration popup's pending buffer. Four accepted forms:
+    //   1. ""           → iter_start/iter_end := NaN (clear).
+    //   2. "[]"         → iter_start/iter_end := NaN (clear).
+    //   3. "[%+0.2f,%+0.2f]" with start <= end → set iter values.
+    //   4. signed decimal "[+|-]NN[.NN]" → additive offset to tempo_base,
+    //      clamped to [0.01, 9.99]; iter values cleared.
+    // Anything else: red flash, stay in edit. Each accepted commit
+    // pushes one undo entry. Only case 4 affects the on-disk dirty flag
+    // (iter values are session-only and never serialized).
+    auto commit_iter_edit = [&]() {
+        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        if (app.top_flag_editor.kind !=
+                gui_text_editor::Kind::IterationBracket) return;
+        const int idx = app.top_flag_editor.target;
+        const auto& mv_const = app.markers.markers();
+        if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+            invalidate_top_strip();
+            return;
+        }
+        const std::string& s = app.top_flag_editor.pending;
+
+        bool   clear_iter   = false;
+        bool   set_iter     = false;
+        double new_start    = 0.0;
+        double new_end      = 0.0;
+        bool   offset_tempo = false;
+        double tempo_delta  = 0.0;
+
+        if (s.empty() || s == "[]") {
+            clear_iter = true;
+        } else {
+            // Case 3: bracketed pair. Strict format — sign, digits, '.',
+            // exactly 2 digits — and start <= end.
+            auto parse_signed_2dp = [](const std::string& v,
+                                       double& out) -> bool {
+                if (v.size() < 4) return false;
+                if (v[0] != '+' && v[0] != '-') return false;
+                const auto dot = v.find('.', 1);
+                if (dot == std::string::npos) return false;
+                if (dot == 1) return false;
+                if (v.size() - dot - 1 != 2) return false;
+                for (size_t i = 1; i < v.size(); ++i) {
+                    if (i == dot) continue;
+                    if (!std::isdigit(
+                            static_cast<unsigned char>(v[i]))) return false;
+                }
+                try { out = std::stod(v); }
+                catch (...) { return false; }
+                return true;
+            };
+            bool tried_pair = false;
+            if (s.size() >= 2 && s.front() == '[' && s.back() == ']') {
+                const std::string inner = s.substr(1, s.size() - 2);
+                const auto comma = inner.find(',');
+                if (comma != std::string::npos) {
+                    double pa, pb;
+                    if (parse_signed_2dp(inner.substr(0, comma), pa) &&
+                        parse_signed_2dp(inner.substr(comma + 1), pb) &&
+                        pa <= pb) {
+                        new_start = pa;
+                        new_end   = pb;
+                        set_iter  = true;
+                    }
+                    tried_pair = true;
+                }
+            }
+            // Case 4: signed decimal additive offset to tempo_base.
+            // Recognized only when bracket-pair parse failed; both cases
+            // are mutually exclusive by syntax.
+            if (!set_iter && !tried_pair) {
+                if (s.size() >= 2 && (s[0] == '+' || s[0] == '-')) {
+                    bool seen_dot = false;
+                    int  digit_count = 0;
+                    bool ok = true;
+                    for (size_t i = 1; i < s.size(); ++i) {
+                        const char c = s[i];
+                        if (c == '.') {
+                            if (seen_dot) { ok = false; break; }
+                            seen_dot = true;
+                            continue;
+                        }
+                        if (!std::isdigit(
+                                static_cast<unsigned char>(c))) {
+                            ok = false; break;
+                        }
+                        ++digit_count;
+                    }
+                    if (ok && digit_count > 0) {
+                        try { tempo_delta = std::stod(s); offset_tempo = true; }
+                        catch (...) { offset_tempo = false; }
+                    }
+                }
+            }
+        }
+
+        if (!clear_iter && !set_iter && !offset_tempo) {
+            app.top_flag_editor.red = true;
+            invalidate_top_strip();
+            std::fprintf(stderr,
+                "warptempo_gui: iter edit rejected: invalid syntax: %s\n",
+                s.c_str());
+            return;
+        }
+
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::set<int>          hint_sel  = app.selected_markers;
+        const int              hint_last = app.last_selected_marker;
+
+        GuiMarker* m = app.markers.marker_mut(idx);
+        if (!m) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+            invalidate_top_strip();
+            return;
+        }
+
+        bool tempo_changed = false;
+        if (offset_tempo) {
+            double new_tempo = m->tempo_base + tempo_delta;
+            if (new_tempo < 0.01) new_tempo = 0.01;
+            if (new_tempo > 9.99) new_tempo = 9.99;
+            // Snap to 2 decimals to mirror the owning-marker precision
+            // used elsewhere (drop-marker, nudge, etc.).
+            new_tempo = std::round(new_tempo * 100.0) / 100.0;
+            if (new_tempo != m->tempo_base) {
+                m->tempo_base = new_tempo;
+                tempo_changed = true;
+            }
+            m->iter_start = std::numeric_limits<double>::quiet_NaN();
+            m->iter_end   = std::numeric_limits<double>::quiet_NaN();
+        } else if (set_iter) {
+            m->iter_start = new_start;
+            m->iter_end   = new_end;
+        } else if (clear_iter) {
+            m->iter_start = std::numeric_limits<double>::quiet_NaN();
+            m->iter_end   = std::numeric_limits<double>::quiet_NaN();
+        }
+
+        push_undo(std::move(pre_state), OpKind::Other,
+                  std::move(hint_sel), hint_last);
+        if (tempo_changed) {
+            recompute_dirty();
+            invalidate_waveform_area();
+            invalidate_dirty_and_timestamp();
+        }
+
+        gui_text_editor::deactivate(app.top_flag_editor);
+        invalidate_top_strip();
+    };
+
+    // Bulk-clear the session-only iter values across all warp markers.
+    // Triggered by Shift+I while iteration mode is on. Single undo
+    // entry. No-op when no marker carries iter values (avoids a noise
+    // entry on the undo stack).
+    auto bulk_clear_iter_values = [&]() {
+        if (!app.iteration_mode_enabled) return;
+        if (app.active_mode != 'W') return;
+        auto& mv = app.markers.markers_mut();
+        bool any = false;
+        for (const auto& m : mv) {
+            if (!std::isnan(m.iter_start) || !std::isnan(m.iter_end)) {
+                any = true;
+                break;
+            }
+        }
+        if (!any) return;
+        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::set<int>          hint_sel  = app.selected_markers;
+        const int              hint_last = app.last_selected_marker;
+        for (auto& m : mv) {
+            m.iter_start = std::numeric_limits<double>::quiet_NaN();
+            m.iter_end   = std::numeric_limits<double>::quiet_NaN();
+        }
+        push_undo(std::move(pre_state), OpKind::Other,
+                  std::move(hint_sel), hint_last);
+        invalidate_top_strip();
     };
 
     // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
@@ -3808,6 +4339,37 @@ int main(int argc, char** argv) {
         return -1;
     };
 
+    // V.B: iteration popup hit-test. Returns the marker index whose
+    // iteration popup contains (mouse_x, mouse_y), or -1. Always returns
+    // -1 when iteration mode is off or in transient mode (no popups).
+    auto hit_test_iter_popup = [&](int mouse_x, int mouse_y) -> int {
+        if (!app.iteration_mode_enabled) return -1;
+        if (app.active_mode != 'W') return -1;
+        const GuiRect area = waveform_area(app);
+        const GuiRect top  = top_strip_area(app);
+        cairo_surface_t* scratch_s = cairo_image_surface_create(
+            CAIRO_FORMAT_ARGB32, 1, 1);
+        cairo_t* scratch_cr = cairo_create(scratch_s);
+        const double spp = current_samples_per_pixel(app, audio);
+        const int64_t vp_start = app.viewport_start_sample;
+        const int64_t vp_end = vp_start +
+            static_cast<int64_t>(std::llround(spp * area.w));
+        auto hits = compute_iter_popup_hits(
+            scratch_cr, top, app.markers.markers(),
+            vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
+        cairo_destroy(scratch_cr);
+        cairo_surface_destroy(scratch_s);
+        for (const auto& h : hits) {
+            if (mouse_x >= h.hit_rect.x &&
+                mouse_x < h.hit_rect.x + h.hit_rect.w &&
+                mouse_y >= h.hit_rect.y &&
+                mouse_y < h.hit_rect.y + h.hit_rect.h) {
+                return h.marker_index;
+            }
+        }
+        return -1;
+    };
+
     // V.A3b Addendum 3: re-evaluate hover at the cursor's last on_motion
     // coordinates. Called after viewport mutations (zoom, scroll, center,
     // playhead-driven viewport shift) so a stationary cursor's hover state
@@ -3820,6 +4382,7 @@ int main(int argc, char** argv) {
             app.drag.active ||
             app.playhead_drag.active ||
             app.active_mode != 'W' ||
+            app.iteration_mode_enabled ||
             gui_text_editor::is_active(app.top_flag_editor) ||
             app.queue_running) {
             clear_hover_popup();
@@ -3832,6 +4395,15 @@ int main(int argc, char** argv) {
             app.hover_popup.visible      = false;
             app.hover_popup.entry_time   =
                 std::chrono::steady_clock::now();
+            // Precompute the popup's display text at rect-entry so the
+            // delay-completion paint doesn't have to recompute it. Empty
+            // when `hit` is not popup-eligible (the redraw branch then
+            // skips paint and keeps the strip clean).
+            app.hover_popup.cached_text =
+                popup_eligible_marker(hit)
+                    ? compute_hover_popup_text(
+                          app.markers.markers(), hit, audio.sample_rate())
+                    : std::string();
         }
     };
 
@@ -4268,7 +4840,12 @@ int main(int argc, char** argv) {
             const auto action = gui_text_editor::handle_key(
                 app.top_flag_editor, keysym, mods);
             if (action == gui_text_editor::KeyAction::CommitRequested) {
-                commit_top_flag_edit();
+                if (app.top_flag_editor.kind ==
+                        gui_text_editor::Kind::IterationBracket) {
+                    commit_iter_edit();
+                } else {
+                    commit_top_flag_edit();
+                }
                 return;
             }
             if (action == gui_text_editor::KeyAction::CancelRequested) {
@@ -4587,6 +5164,29 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // V.B `i` (no modifiers) toggles iteration mode in warp. Silent
+        // no-op in transient mode (transient flags carry no tempo to
+        // iterate). The editor-active branch above already swallows any
+        // keystroke while a popup edit is in flight, so this code only
+        // runs with no active editor. Toggling repaints the top strip
+        // so iteration popups appear or vanish in one frame.
+        if (keysym == XK_i && !ctrl && !shift && !alt) {
+            if (app.active_mode == 'W') {
+                app.iteration_mode_enabled = !app.iteration_mode_enabled;
+                clear_hover_popup();
+                invalidate_top_strip();
+            }
+            return;
+        }
+        // V.B Shift+I bulk-clears every marker's iter values. Only fires
+        // while iteration mode is on; otherwise silent no-op.
+        if (keysym == XK_i && !ctrl && shift && !alt) {
+            if (app.active_mode == 'W' && app.iteration_mode_enabled) {
+                bulk_clear_iter_values();
+            }
+            return;
+        }
+
         // XLookupKeysym with index 0 returns the unshifted keysym, so a
         // Shift+letter press arrives as the lowercase XK_* with ShiftMask in
         // mods — disambiguate via the `shift` bool, not uppercase keysyms.
@@ -4778,23 +5378,37 @@ int main(int argc, char** argv) {
             // empty space (a no-op for the playhead) stops the audio.
             if (inside_waveform || inside_top) stop_playback_if_playing();
 
-            // V.A1 editor: mouse handling.
-            //   click inside top strip on the editing flag: no-op
-            //   click inside top strip on a different flag: switch target
+            // V.A1 / V.B editor: mouse handling.
+            //   click inside top strip on the editing target: no-op
+            //   click inside top strip on a different popup/flag: switch
+            //     target (iter popup wins over the flag below it when
+            //     iteration mode is on)
             //   click anywhere else: exit edit (no commit), then fall
             //     through so the click routes through normal handling.
             if (gui_text_editor::is_active(app.top_flag_editor)) {
                 if (inside_top) {
+                    const int iter_hit = hit_test_iter_popup(x, y);
+                    if (iter_hit >= 0) {
+                        if (app.top_flag_editor.kind ==
+                                gui_text_editor::Kind::IterationBracket &&
+                            iter_hit == app.top_flag_editor.target) {
+                            return; // no-op on same popup
+                        }
+                        enter_iter_edit(iter_hit);
+                        return;
+                    }
                     const int hit_now = hit_test_flag(x, y);
-                    if (hit_now == app.top_flag_editor.target) {
+                    if (app.top_flag_editor.kind ==
+                            gui_text_editor::Kind::FlagPayload &&
+                        hit_now == app.top_flag_editor.target) {
                         return; // no-op on same flag
                     }
                     if (hit_now >= 0 && app.active_mode != 'T') {
                         enter_top_flag_edit(hit_now);
                         return;
                     }
-                    // Top strip click that isn't on a flag: exit and fall
-                    // through to normal handling.
+                    // Top strip click that isn't on a popup or flag: exit
+                    // and fall through to normal handling.
                     exit_top_flag_edit_no_commit();
                 } else {
                     exit_top_flag_edit_no_commit();
@@ -4843,6 +5457,19 @@ int main(int argc, char** argv) {
             app.last_click_x        = x;
             app.last_click_y        = y;
             app.last_click_consumed = false;
+
+            // Iteration popup click takes priority over flag click when
+            // iteration mode is on. The popup sits above the flag rect so
+            // their hit zones don't overlap, but checking the popup first
+            // makes the intent unambiguous when the flag-strip extents
+            // change shape.
+            if (inside_top && !ctrl) {
+                const int iter_hit = hit_test_iter_popup(x, y);
+                if (iter_hit >= 0) {
+                    enter_iter_edit(iter_hit);
+                    return;
+                }
+            }
 
             // Consolidated hit-test across waveform (marker line) and top
             // strip (flag rect). A flag click behaves exactly like a click
@@ -5048,10 +5675,12 @@ int main(int argc, char** argv) {
         }
         if (!app.drag.active) {
             // No active gesture: run hover-popup detection. Only in warp
-            // mode, with no editor, no dialog (already returned), no drag.
+            // mode, with no editor, no dialog (already returned), no drag,
+            // and not while iteration mode owns the popup space.
             // The dwell timer is started/restarted on every transition into
             // an eligible rect; the on_tick handler flips visibility.
             if (app.active_mode == 'W' &&
+                !app.iteration_mode_enabled &&
                 !gui_text_editor::is_active(app.top_flag_editor) &&
                 !app.queue_running) {
                 const int hit = hit_test_flag(mouse_x, mouse_y);
@@ -5061,6 +5690,14 @@ int main(int argc, char** argv) {
                     app.hover_popup.visible      = false;
                     app.hover_popup.entry_time   =
                         std::chrono::steady_clock::now();
+                    // Precompute popup text at rect-entry so the
+                    // delay-completion paint doesn't repeat the math.
+                    app.hover_popup.cached_text =
+                        popup_eligible_marker(hit)
+                            ? compute_hover_popup_text(
+                                  app.markers.markers(), hit,
+                                  audio.sample_rate())
+                            : std::string();
                 }
             } else {
                 clear_hover_popup();

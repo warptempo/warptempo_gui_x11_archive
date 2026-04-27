@@ -12,19 +12,35 @@ namespace {
 // Vocabulary closed set, no whitespace, no pipe (pipe is in the locked
 // prefix). Letters lowercase only — uppercase swallowed. Map an X11
 // keysym (paired with mods) to the literal char to insert; returns 0
-// for "not a printable in this vocabulary".
-char keysym_to_char(unsigned long keysym, unsigned int mods) {
+// for "not a printable in this vocabulary". `kind` selects between the
+// flag-payload alphabet and the iteration-bracket alphabet.
+char keysym_to_char(unsigned long keysym, unsigned int mods, Kind kind) {
     const bool shift = (mods & ShiftMask) != 0;
-    // Digits.
+
+    // Digits and decimal point are common to both kinds.
     if (keysym >= XK_0 && keysym <= XK_9 && !shift) {
         return static_cast<char>('0' + (keysym - XK_0));
     }
-    // Letters a-z (lowercase only — Shift+letter is rejected).
+    if (keysym == XK_period && !shift) return '.';
+
+    if (kind == Kind::IterationBracket) {
+        // Brackets, comma, signed-number prefixes. No letters, no `*`,
+        // no `:` — those would be syntactically invalid in the
+        // iteration popup payload.
+        if (keysym == XK_bracketleft  && !shift) return '[';
+        if (keysym == XK_bracketright && !shift) return ']';
+        if (keysym == XK_comma        && !shift) return ',';
+        if (keysym == XK_minus        && !shift) return '-';
+        if (keysym == XK_plus)                   return '+';
+        // US layout: Shift+= produces +.
+        if (keysym == XK_equal && shift)         return '+';
+        return 0;
+    }
+
+    // FlagPayload kind.
     if (keysym >= XK_a && keysym <= XK_z && !shift) {
         return static_cast<char>('a' + (keysym - XK_a));
     }
-    // Punctuation glyphs in the vocabulary.
-    if (keysym == XK_period && !shift)    return '.';
     if (keysym == XK_asterisk)            return '*';
     if (keysym == XK_colon)               return ':';
     // US layout: Shift+; gives :. Treat as colon.
@@ -42,6 +58,7 @@ void touch_blink(State& s) {
 
 void deactivate(State& s) {
     s.target        = -1;
+    s.kind          = Kind::FlagPayload;
     s.pending.clear();
     s.locked_prefix.clear();
     s.cursor_pos    = 0;
@@ -50,8 +67,10 @@ void deactivate(State& s) {
 
 void enter(State& s, int target,
            std::string locked_prefix,
-           std::string initial_pending) {
+           std::string initial_pending,
+           Kind kind) {
     s.target        = target;
+    s.kind          = kind;
     s.locked_prefix = std::move(locked_prefix);
     s.pending       = std::move(initial_pending);
     s.cursor_pos    = static_cast<int>(s.pending.size());
@@ -111,7 +130,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
     }
 
     // Printable insertion (length-capped).
-    const char ch = keysym_to_char(keysym, mods);
+    const char ch = keysym_to_char(keysym, mods, s.kind);
     if (ch != 0) {
         if (static_cast<int>(s.pending.size()) >= kMaxPendingChars) {
             // Silent swallow at cap.
