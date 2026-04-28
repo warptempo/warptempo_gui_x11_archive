@@ -67,14 +67,16 @@ private:
     int                render_channels_ = 0;
 
     // Three fixed-stride cache levels (strides 32, 1024, 32768). Populated
-    // either from the on-disk .wtpeaks v2 sidecar or by streaming over
-    // samples_ on cache miss.
+    // either from the on-disk `<basename>.peaks` v2 sidecar or by streaming
+    // over samples_ on cache miss.
     std::array<PyramidLevel, 3> levels_;
 };
 
 // Build a peak pyramid by streaming `wav_path` through libsndfile and write
-// the resulting `<wav_path>.wtpeaks` v2 sidecar atomically. Allocates only a
-// single 65536-frame chunk plus the int16 pyramid itself — no full samples
-// buffer. Returns true on success. On any error, logs a single stderr line
-// and returns false; the caller should ignore the return value.
+// the resulting `<basename>.peaks` v2 sidecar atomically (the audio file's
+// extension is replaced — for `song.wav` the sidecar is `song.peaks`).
+// Allocates only a single 65536-frame chunk plus the int16 pyramid itself —
+// no full samples buffer. Returns true on success. On any error, logs a
+// single stderr line and returns false; the caller should ignore the return
+// value.
 bool write_peaks_cache_for_wav(const std::string& wav_path);

@@ -229,6 +229,11 @@ bool GuiTransients::load(const std::string& path) {
 }
 
 bool GuiTransients::save(const std::string& path) const {
+    return save(path, markers_);
+}
+
+bool GuiTransients::save(const std::string& path,
+                         const std::vector<GuiTransient>& markers_) {
     // Mid-edit nudge gestures may transit through equal-frame collisions.
     // Drop duplicates silently here (keep the first occurrence) and emit
     // a one-line stderr notice so the user sees that the on-disk content

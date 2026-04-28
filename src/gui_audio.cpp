@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <sys/stat.h>
@@ -17,7 +18,7 @@
 
 namespace {
 
-// .wtpeaks v2 format -------------------------------------------------------
+// `.peaks` v2 format -------------------------------------------------------
 //
 // 32-byte preamble:
 //   off 0  | 8  | magic = "WTPEAKS\0"
@@ -65,7 +66,13 @@ inline float dequantize_i16(int16_t q) {
 }
 
 std::string cache_path_for(const std::string& source) {
-    return source + ".wtpeaks";
+    // Sibling of the audio file with the source's extension swapped to
+    // `.peaks`. For `song.wav` this is `song.peaks` (NOT `song.wav.peaks`
+    // and NOT `song.wav.wtpeaks` — both legacy forms are obsolete and any
+    // such files left on disk are disposable).
+    std::filesystem::path p(source);
+    p.replace_extension(".peaks");
+    return p.string();
 }
 
 bool stat_size_mtime(const std::string& path, int64_t& size, int64_t& mtime) {
@@ -313,9 +320,10 @@ bool try_load_cache(const std::string& source_path,
     return true;
 }
 
-// Write `levels` to <source_path>.wtpeaks using the .tmp + fsync + rename
-// atomic pattern. Logs a single stderr line on any failure and returns
-// false. Cache write failure is never fatal.
+// Write `levels` to <basename>.peaks (the audio file's extension is
+// swapped, see `cache_path_for`) using the .tmp + fsync + rename atomic
+// pattern. Logs a single stderr line on any failure and returns false.
+// Cache write failure is never fatal.
 bool write_cache_to_disk(const std::string& source_path,
                          int64_t total_frames,
                          int     render_channels,

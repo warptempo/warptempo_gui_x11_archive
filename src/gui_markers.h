@@ -64,6 +64,12 @@ public:
     // uses 0644 if the file is new. Returns true on success.
     bool save(const std::string& path) const;
 
+    // Static variant for callers that hold a raw GuiMarker vector (e.g. the
+    // render pipeline writing per-render sidecars). Same on-disk format as
+    // the instance method.
+    static bool save(const std::string& path,
+                     const std::vector<GuiMarker>& markers);
+
     const std::vector<GuiMarker>&       markers() const { return markers_; }
     const std::vector<GuiMarkerError>&  errors()  const { return errors_; }
 

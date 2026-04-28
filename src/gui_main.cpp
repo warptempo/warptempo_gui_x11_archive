@@ -54,6 +54,15 @@ constexpr GuiColor kFlagHighlightColor= {0.30, 0.28, 0.22};
 constexpr GuiColor kDirtyColor        = {0.90, 0.65, 0.35};
 constexpr double   kFlagFontSize      = 13.0;
 
+// Chunk W: render-view marker / flag color. Dark blue per the brief —
+// visually distinct from authoring yellow (kMarkerColor) so the read
+// -only state is unambiguous. No dim variant — label-cascade is
+// disabled in render-view. The selected variant is a brighter sky-tint
+// distinguishable from both the unselected dark blue, the yellow
+// playhead, and the waveform background.
+constexpr GuiColor kRenderViewMarkerColor         = {0.30, 0.45, 0.85};
+constexpr GuiColor kRenderViewMarkerSelectedColor = {0.55, 0.78, 1.00};
+
 // Transient-mode color set (chunk S.2.2). Coral palette so the second
 // editable layer is visually distinct from warp yellow and waveform blue.
 // Disabled / selected variants follow the same dimming / brightening
@@ -687,11 +696,26 @@ struct AppState {
     bool top_flag_editor_blink_last = false;
 
     // Render-queue state (chunk U). `queue_running` is true only inside the
-    // Ctrl+Alt+Shift+E walker. The Esc handler checks it to scope the
+    // Ctrl+Alt+R queue walker. The Esc handler checks it to scope the
     // cancel binding away from normal interaction. `queue_cancel_requested`
     // is set by Esc during a queue run and read between entries.
     bool queue_running           = false;
     bool queue_cancel_requested  = false;
+
+    // Chunk W: in-memory queue of pending renders. Ctrl+Alt+E pushes a
+    // snapshot of the current authoring state onto the back of this list;
+    // Ctrl+Alt+R consumes it, materializing one batch folder per execution
+    // with one rendered output per queued entry. The list is session-only:
+    // discarded on app close, never written to disk between sessions.
+    // Settings are not snapshotted per-entry — all entries render against
+    // the GUI's live `settings_passthrough` at execution time, mirroring
+    // the chunk-U convention.
+    struct QueuedRender {
+        std::string                source_audio_path;
+        std::vector<GuiMarker>     markers;
+        std::vector<GuiTransient>  transients;
+    };
+    std::vector<QueuedRender> queued_renders;
 
     // V.B iteration mode. Toggled by plain `i` in warp mode (no-op in
     // transient mode). Session-only; survives mode-switches but is lost
@@ -699,6 +723,47 @@ struct AppState {
     // persistent iteration popup is rendered above every owning
     // marker's flag rect.
     bool iteration_mode_enabled = false;
+
+    // Chunk W: render analysis mode. Plain `r` toggles between source-view
+    // (authoring) and render-view (read-only auditioning of rendered
+    // outputs from <source_parent>/renders/). All authoring state above
+    // is preserved untouched while render-view is active; this struct
+    // holds the parallel context that drives render-view's display.
+    bool render_view_enabled = false;
+    // Path to the last-displayed render's .wav, persisted across toggle
+    // off/on cycles within a session. Empty before the first entry; reset
+    // to whatever path was active when the previous toggle-off fired.
+    std::string last_render_view_path;
+    // One entry in the flat list of valid renders enumerated on toggle-in.
+    struct RenderViewEntry {
+        std::filesystem::path batch_folder;     // <source_parent>/renders/<i>_<tag>
+        std::string           basename;         // e.g. "01" (no extension)
+        std::filesystem::path wav_path;         // batch_folder / (basename + ".wav")
+    };
+    std::vector<RenderViewEntry> render_view_list;
+    int                          render_view_index = -1;     // -1 = unset
+    // The current render's loaded markers + transients, parsed from
+    // sibling `<basename>.renderwarpmarkers` /
+    // `<basename>.rendertransientmarkers`.
+    std::vector<GuiMarker>       render_view_markers;
+    std::vector<GuiTransient>    render_view_transients;
+    // Render-view marker selection (visual-only — never participates in
+    // the commit / undo paths). Cleared on Shift+Left/Right navigation
+    // and on render-view exit; not persisted across toggle cycles.
+    std::set<int>                render_view_selected_markers;
+    int                          render_view_last_selected_marker = -1;
+    // Source-frame mapping of the current render: F_begin..F_end (source
+    // sample-rate frames) is what the render's full audio covers. When the
+    // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
+    // no `e=` flag, F_end is the source's total_frames. Used by the render
+    // -view waveform mapping and the timestamp readout.
+    int64_t                      render_view_src_F_begin = 0;
+    int64_t                      render_view_src_F_end   = 0;
+    // Source audio's sample rate / total frames at the time render-view
+    // was entered. Cached so timestamp computation and trim resolution
+    // don't have to peek at the swapped-out source GuiAudio.
+    int                          render_view_src_sr      = 0;
+    int64_t                      render_view_src_total   = 0;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -1122,6 +1187,12 @@ int main(int argc, char** argv) {
 
     AppState     app;
     GuiAudio     audio;
+    // Chunk W: parked source audio. Populated only while
+    // app.render_view_enabled is true — std::move'd off `audio` on
+    // toggle-in and std::move'd back on toggle-out so the source
+    // doesn't have to be re-read from disk. Default-constructed
+    // (empty / total_frames() == 0) when render-view is off.
+    GuiAudio     source_audio_held;
     GuiPlayback  playback;
     GuiX11       gui;
     WaveformCache wf_cache;
@@ -1364,9 +1435,23 @@ int main(int argc, char** argv) {
                 static_cast<int64_t>(std::llround(spp * area.w));
             const int     sr         = audio.sample_rate();
 
-            const auto trim = compute_trim_samples(
-                app.markers.markers(), app.transients.markers(),
-                sr, audio.total_frames());
+            // In render-view the audio buffer is already render-domain
+            // (trim already baked in at render time, b=/e= flags stripped
+            // from the .renderwarpmarkers/.rendertransientmarkers
+            // sidecars). The
+            // source's authoring markers carry b=/e= in source-frame
+            // coordinates that don't map onto the rendered audio's
+            // timeline, so feeding them to compute_trim_samples here
+            // produces a patchy color split. Use the render-view markers
+            // instead, which collapse to [0, total_frames] and dim
+            // nothing.
+            const auto trim = app.render_view_enabled
+                ? compute_trim_samples(
+                      app.render_view_markers, app.render_view_transients,
+                      sr, audio.total_frames())
+                : compute_trim_samples(
+                      app.markers.markers(), app.transients.markers(),
+                      sr, audio.total_frames());
             const int64_t trim_begin = trim.first;
             const int64_t trim_end   = trim.second;
 
@@ -1465,7 +1550,20 @@ int main(int argc, char** argv) {
             // playhead. Cairo's outer clip confines painting to `exposed`.
             if (rects_intersect(exposed, area)) {
                 const auto m0 = clock::now();
-                if (app.active_mode == 'T') {
+                if (app.render_view_enabled) {
+                    // Render-view: dark blue base, sky-tint when selected.
+                    // The render's warpmarkers list is strict-monotonic on
+                    // time_seconds (engine-written), so render_markers'
+                    // usual ordering assumption holds. Selection is
+                    // visual-only — it does not flow into commit.
+                    render_markers(cr, area, app.render_view_markers,
+                                   vp_start, vp_end, sr,
+                                   kRenderViewMarkerColor,
+                                   kRenderViewMarkerColor,
+                                   kRenderViewMarkerSelectedColor,
+                                   app.render_view_selected_markers,
+                                   app.render_view_last_selected_marker);
+                } else if (app.active_mode == 'T') {
                     render_transient_markers(
                         cr, area, app.transients.markers(),
                         vp_start, vp_end, sr,
@@ -1505,7 +1603,70 @@ int main(int argc, char** argv) {
             // Flag annotations in the top strip.
             if (rects_intersect(exposed, top_strip)) {
                 const auto f0 = clock::now();
-                if (app.active_mode == 'T') {
+                if (app.render_view_enabled) {
+                    // Render-view: dark-blue flags, no editor overlay.
+                    // Selection is visual-only (sky-tint on selected,
+                    // dark-blue otherwise). Iteration popups are
+                    // suppressed by the iteration_mode_enabled toggle
+                    // being forced false on entry to render-view.
+                    render_flags(cr, top_strip, app.render_view_markers,
+                                 vp_start, vp_end, sr,
+                                 kRenderViewMarkerColor,
+                                 kRenderViewMarkerColor,
+                                 kRenderViewMarkerSelectedColor,
+                                 kFlagHighlightColor,
+                                 kFlagFontSize,
+                                 app.render_view_selected_markers,
+                                 app.render_view_last_selected_marker,
+                                 FlagEditorOverlay{});
+
+                    // V.A3b hover popup paint, render-view variant.
+                    // Mirrors the source-view branch below but reads
+                    // from app.render_view_markers and uses the cached
+                    // source sample rate (the render's audio sr is
+                    // typically equal but the brief specifies source-
+                    // axis presentation).
+                    if (app.hover_popup.visible) {
+                        const auto& mv = app.render_view_markers;
+                        const int hidx = app.hover_popup.marker_index;
+                        const bool eligible =
+                            (hidx >= 0 &&
+                             hidx < static_cast<int>(mv.size()) &&
+                             (mv[hidx].tempo_inherits ||
+                              !mv[hidx].label_ref.empty()) &&
+                             !app.hover_popup.cached_text.empty());
+                        if (eligible) {
+                            auto rects = compute_flag_hit_rects(
+                                cr, top_strip, mv,
+                                vp_start, vp_end, sr, kFlagFontSize);
+                            GuiRect anchor{0, 0, 0, 0};
+                            for (const auto& r : rects) {
+                                if (r.marker_index == hidx) {
+                                    anchor.x = static_cast<int>(
+                                        std::lround(r.x)) + 2;
+                                    anchor.y = static_cast<int>(
+                                        std::lround(r.y));
+                                    anchor.w = static_cast<int>(
+                                        std::lround(r.w));
+                                    anchor.h = static_cast<int>(
+                                        std::lround(r.h));
+                                    break;
+                                }
+                            }
+                            if (anchor.w > 0 && anchor.h > 0) {
+                                gui_text_display::State td;
+                                td.anchor   = anchor;
+                                td.content  = app.hover_popup.cached_text;
+                                td.visible  = true;
+                                td.color    = kRenderViewMarkerColor;
+                                td.position =
+                                    gui_text_display::Position::Top;
+                                gui_text_display::render(cr, td,
+                                                         kFlagFontSize);
+                            }
+                        }
+                    }
+                } else if (app.active_mode == 'T') {
                     render_transient_flags(
                         cr, top_strip, app.transients.markers(),
                         vp_start, vp_end, sr,
@@ -1725,10 +1886,24 @@ int main(int argc, char** argv) {
             // Timestamp in the bottom status strip.
             const GuiRect ts = timestamp_invalidate_rect(app.height);
             if (rects_intersect(exposed, ts)) {
-                const double seconds = (sr > 0)
-                    ? static_cast<double>(app.playhead_sample) /
-                      static_cast<double>(sr)
-                    : 0.0;
+                // In source-view, sr is the loaded file's sample rate and
+                // playhead_sample is in source-frames. In render-view the
+                // active `audio` is the render, so its sr is what the
+                // engine wrote out (typically same as source) — but the
+                // playhead is in render-frame coords. To display the
+                // timestamp in the source's time axis, offset by F_begin
+                // and divide by the cached source sr.
+                // Render-view timestamp is render-domain (zero at render
+                // sample 0). Source-time and render-time advance at
+                // different rates because of warping, so adding a
+                // source-side offset to a render-domain playhead doesn't
+                // correspond to anything meaningful — same arithmetic as
+                // source-view.
+                double seconds = 0.0;
+                if (sr > 0) {
+                    seconds = static_cast<double>(app.playhead_sample) /
+                              static_cast<double>(sr);
+                }
                 const int baseline_y = app.height - kTimestampBaselineFromBottom;
                 {
                     const auto s0 = clock::now();
@@ -1741,10 +1916,12 @@ int main(int argc, char** argv) {
 
                 // A/B tab letter between timestamp and dirty indicator.
                 // Same font/size/color as the timestamp; no background.
+                // Suppressed in render-view since the Tab key is gated out
+                // there and the letter would carry no meaning.
                 const double tw = measure_timestamp_width(cr, seconds);
                 double right_after_letter =
                     static_cast<double>(kTimestampPadX) + tw;
-                {
+                if (!app.render_view_enabled) {
                     const double letter_x =
                         static_cast<double>(kTimestampPadX) + tw +
                         kTabLetterGapPx;
@@ -1774,6 +1951,38 @@ int main(int argc, char** argv) {
                     const auto d1 = clock::now();
                     t_dirty_ms =
                         std::chrono::duration<double, std::milli>(d1 - d0).count();
+                }
+
+                // Chunk W: render-view filename. Right-aligned in the
+                // bottom strip so it doesn't conflict with the timestamp
+                // / tab letter / dirty indicator on the left. Format is
+                // `<batch_folder_name>/<basename>.wav` so the user can
+                // tell which batch the displayed render came from.
+                if (app.render_view_enabled &&
+                    app.render_view_index >= 0 &&
+                    app.render_view_index <
+                        static_cast<int>(app.render_view_list.size())) {
+                    const auto& e =
+                        app.render_view_list[app.render_view_index];
+                    const std::string label =
+                        e.batch_folder.filename().string() + "/" +
+                        e.basename + ".wav";
+                    cairo_save(cr);
+                    cairo_set_source_rgb(cr, kRenderViewMarkerColor.r,
+                                         kRenderViewMarkerColor.g,
+                                         kRenderViewMarkerColor.b);
+                    cairo_select_font_face(cr, "monospace",
+                                           CAIRO_FONT_SLANT_NORMAL,
+                                           CAIRO_FONT_WEIGHT_NORMAL);
+                    cairo_set_font_size(cr, 14.0);
+                    cairo_text_extents_t ext;
+                    cairo_text_extents(cr, label.c_str(), &ext);
+                    const double rx = static_cast<double>(app.width) -
+                                      static_cast<double>(kTimestampPadX) -
+                                      ext.x_advance;
+                    cairo_move_to(cr, rx, baseline_y);
+                    cairo_show_text(cr, label.c_str());
+                    cairo_restore(cr);
                 }
             }
         }
@@ -1917,9 +2126,19 @@ int main(int argc, char** argv) {
     // popups occupy that visual space, and stacking a transient hover
     // hint on top would just clutter the strip.
     auto popup_eligible_marker = [&](int idx) -> bool {
+        if (idx < 0) return false;
+        if (app.render_view_enabled) {
+            // In render-view, hover popups apply against the loaded
+            // render's warpmarkers regardless of the pre-toggle mode.
+            // Iteration-mode is forced off on toggle-in so its gate is
+            // implicitly satisfied here too.
+            const auto& mv = app.render_view_markers;
+            if (idx >= static_cast<int>(mv.size())) return false;
+            const auto& m = mv[idx];
+            return m.tempo_inherits || !m.label_ref.empty();
+        }
         if (app.active_mode != 'W') return false;
         if (app.iteration_mode_enabled) return false;
-        if (idx < 0) return false;
         const auto& mv = app.markers.markers();
         if (idx >= static_cast<int>(mv.size())) return false;
         const auto& m = mv[idx];
@@ -4271,7 +4490,8 @@ int main(int argc, char** argv) {
     };
 
     // Hit-test a marker line in the waveform area. Returns index or -1.
-    // Mode-aware: iterates the active list (warp markers or transients).
+    // Mode-aware: iterates the active list (render-view markers when
+    // render-view is on; otherwise warp markers or transients).
     auto hit_test_marker_line = [&](int mouse_x) -> int {
         const GuiRect area = waveform_area(app);
         const double spp = current_samples_per_pixel(app, audio);
@@ -4282,12 +4502,18 @@ int main(int argc, char** argv) {
         const int64_t visible = samples_visible(app, audio);
         int best_hit = -1;
         int best_dist = kMarkerHitHalfPx + 1;
-        const int n = (app.active_mode == 'T')
-            ? static_cast<int>(app.transients.markers().size())
-            : static_cast<int>(app.markers.markers().size());
+        const bool rv = app.render_view_enabled;
+        const int n = rv
+            ? static_cast<int>(app.render_view_markers.size())
+            : (app.active_mode == 'T')
+                ? static_cast<int>(app.transients.markers().size())
+                : static_cast<int>(app.markers.markers().size());
         for (int i = 0; i < n; ++i) {
             double ms;
-            if (app.active_mode == 'T') {
+            if (rv) {
+                ms = app.render_view_markers[i].time_seconds *
+                     static_cast<double>(sr);
+            } else if (app.active_mode == 'T') {
                 ms = static_cast<double>(
                     app.transients.markers()[i].effective_frame());
             } else {
@@ -4319,7 +4545,11 @@ int main(int argc, char** argv) {
         const int64_t vp_end = vp_start +
             static_cast<int64_t>(std::llround(spp * area.w));
         std::vector<FlagHitRect> rects;
-        if (app.active_mode == 'T') {
+        if (app.render_view_enabled) {
+            rects = compute_flag_hit_rects(
+                scratch_cr, top, app.render_view_markers,
+                vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
+        } else if (app.active_mode == 'T') {
             rects = compute_transient_flag_hit_rects(
                 scratch_cr, top, app.transients.markers(),
                 vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
@@ -4378,13 +4608,20 @@ int main(int argc, char** argv) {
     // transitions; the tick handler still drives the dwell-to-visible flip.
     recompute_hover_at_cursor = [&]() {
         if (app.last_mouse_x < 0 || app.last_mouse_y < 0) return;
+        // Dialog / drag / editor / queue still suppress hover in either
+        // view. Source-view also requires warp mode + iter mode off;
+        // render-view bypasses the mode checks because hover always
+        // applies against the loaded render's warpmarkers.
         if (app.dialog.active ||
             app.drag.active ||
             app.playhead_drag.active ||
-            app.active_mode != 'W' ||
-            app.iteration_mode_enabled ||
             gui_text_editor::is_active(app.top_flag_editor) ||
             app.queue_running) {
+            clear_hover_popup();
+            return;
+        }
+        if (!app.render_view_enabled &&
+            (app.active_mode != 'W' || app.iteration_mode_enabled)) {
             clear_hover_popup();
             return;
         }
@@ -4399,11 +4636,21 @@ int main(int argc, char** argv) {
             // delay-completion paint doesn't have to recompute it. Empty
             // when `hit` is not popup-eligible (the redraw branch then
             // skips paint and keeps the strip clean).
-            app.hover_popup.cached_text =
-                popup_eligible_marker(hit)
-                    ? compute_hover_popup_text(
-                          app.markers.markers(), hit, audio.sample_rate())
-                    : std::string();
+            if (app.render_view_enabled) {
+                app.hover_popup.cached_text =
+                    popup_eligible_marker(hit)
+                        ? compute_hover_popup_text(
+                              app.render_view_markers, hit,
+                              app.render_view_src_sr)
+                        : std::string();
+            } else {
+                app.hover_popup.cached_text =
+                    popup_eligible_marker(hit)
+                        ? compute_hover_popup_text(
+                              app.markers.markers(), hit,
+                              audio.sample_rate())
+                        : std::string();
+            }
         }
     };
 
@@ -4773,6 +5020,333 @@ int main(int argc, char** argv) {
         invalidate_dirty_and_timestamp();
     };
 
+    // -- Chunk W: render-view helpers ---------------------------------------
+
+    // Enumerate <source_parent>/renders/<i>_<tag>/<NN>.wav into a flat
+    // ordered list. Sort key is (batch_index ascending, basename_index
+    // ascending). Empty result when the renders folder doesn't exist or
+    // contains no valid entries.
+    auto enumerate_render_view_list =
+            [&]() -> std::vector<AppState::RenderViewEntry> {
+        std::vector<AppState::RenderViewEntry> out;
+        if (app.source_audio_path.empty()) return out;
+        std::filesystem::path src(app.source_audio_path);
+        std::filesystem::path src_parent = src.parent_path();
+        if (src_parent.empty()) src_parent = std::filesystem::path(".");
+        const std::filesystem::path renders_root = src_parent / "renders";
+        std::error_code ec;
+        if (!std::filesystem::is_directory(renders_root, ec)) return out;
+
+        auto leading_int = [](const std::string& s, size_t& end_out) -> int {
+            int v = 0;
+            size_t i = 0;
+            while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+                v = v * 10 + (s[i] - '0');
+                ++i;
+            }
+            end_out = i;
+            return v;
+        };
+
+        struct BatchSlot { int idx; std::filesystem::path path; };
+        std::vector<BatchSlot> batches;
+        for (const auto& de :
+             std::filesystem::directory_iterator(renders_root, ec)) {
+            if (!de.is_directory()) continue;
+            const std::string name = de.path().filename().string();
+            size_t end = 0;
+            const int v = leading_int(name, end);
+            if (end == 0 || end >= name.size() || name[end] != '_') continue;
+            batches.push_back({v, de.path()});
+        }
+        std::sort(batches.begin(), batches.end(),
+                  [](const BatchSlot& a, const BatchSlot& b) {
+                      return a.idx < b.idx;
+                  });
+
+        for (const auto& b : batches) {
+            struct WavSlot {
+                int idx;
+                std::filesystem::path path;
+                std::string basename;
+            };
+            std::vector<WavSlot> wavs;
+            for (const auto& fe :
+                 std::filesystem::directory_iterator(b.path, ec)) {
+                if (!fe.is_regular_file()) continue;
+                if (fe.path().extension() != ".wav") continue;
+                const std::string stem = fe.path().stem().string();
+                size_t end = 0;
+                const int v = leading_int(stem, end);
+                if (end != stem.size()) continue;
+                wavs.push_back({v, fe.path(), stem});
+            }
+            std::sort(wavs.begin(), wavs.end(),
+                      [](const WavSlot& a, const WavSlot& b) {
+                          return a.idx < b.idx;
+                      });
+            for (auto& w : wavs) {
+                AppState::RenderViewEntry e;
+                e.batch_folder = b.path;
+                e.basename     = std::move(w.basename);
+                e.wav_path     = std::move(w.path);
+                out.push_back(std::move(e));
+            }
+        }
+        return out;
+    };
+
+    // -- Chunk W Addendum 5: <basename>.rendersettings sidecar -------------
+    //
+    // Per-render zoom/viewport/playhead persistence. Captures the live
+    // render-view state at navigation/exit boundaries; applied on entry
+    // / arrival. Source-domain authoring is unaffected — these helpers
+    // run only against render-view AppState fields.
+
+    auto rendersettings_path =
+            [&](const AppState::RenderViewEntry& e) -> std::filesystem::path {
+        return e.batch_folder / (e.basename + ".rendersettings");
+    };
+
+    // Atomic save of the live render-view zoom/viewport/playhead. Same
+    // <path>.tmp + fsync + rename scheme as the warpmarkers writer.
+    // Failures are non-fatal — logged once and discarded.
+    auto write_rendersettings_for =
+            [&](const AppState::RenderViewEntry& e) {
+        const std::filesystem::path path = rendersettings_path(e);
+        char buf[256];
+        const int len = std::snprintf(buf, sizeof(buf),
+            "render_viewport_start=%lld\n"
+            "render_zoom=%d\n"
+            "render_playhead=%lld\n",
+            static_cast<long long>(app.viewport_start_sample),
+            app.zoom_level,
+            static_cast<long long>(app.playhead_sample));
+        if (len <= 0 || len >= static_cast<int>(sizeof(buf))) {
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: rendersettings format failed\n");
+            return;
+        }
+        const std::string tmp_path = path.string() + ".tmp";
+        int fd = ::open(tmp_path.c_str(),
+                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: failed to open %s: %s\n",
+                tmp_path.c_str(), std::strerror(errno));
+            return;
+        }
+        ssize_t off = 0;
+        while (off < len) {
+            const ssize_t n = ::write(fd, buf + off, len - off);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                ::close(fd);
+                ::unlink(tmp_path.c_str());
+                std::fprintf(stderr,
+                    "warptempo_gui: render-view: write %s failed: %s\n",
+                    tmp_path.c_str(), std::strerror(errno));
+                return;
+            }
+            off += n;
+        }
+        if (::fsync(fd) != 0 || ::close(fd) != 0) {
+            ::unlink(tmp_path.c_str());
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: fsync/close %s failed\n",
+                tmp_path.c_str());
+            return;
+        }
+        if (::rename(tmp_path.c_str(), path.string().c_str()) != 0) {
+            ::unlink(tmp_path.c_str());
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: rename %s failed: %s\n",
+                tmp_path.c_str(), std::strerror(errno));
+        }
+    };
+
+    // Tolerant parser. Missing / malformed file applies fit-file zoom
+    // and zeroed viewport/playhead. Apply order: zoom → viewport →
+    // playhead → clamp_viewport_start (zoom drives the spp used by
+    // clamp).
+    auto apply_rendersettings_for =
+            [&](const AppState::RenderViewEntry& e) {
+        int     z   = kFitFileLevel;
+        int64_t vp  = 0;
+        int64_t ph  = 0;
+        const std::filesystem::path path = rendersettings_path(e);
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
+            std::ifstream f(path);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.empty()) continue;
+                const auto eq = line.find('=');
+                if (eq == std::string::npos) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-view: malformed line in "
+                        "%s: %s\n", path.string().c_str(), line.c_str());
+                    continue;
+                }
+                const std::string key = line.substr(0, eq);
+                const std::string val = line.substr(eq + 1);
+                try {
+                    if (key == "render_zoom") {
+                        z = std::stoi(val);
+                    } else if (key == "render_viewport_start") {
+                        vp = static_cast<int64_t>(std::stoll(val));
+                    } else if (key == "render_playhead") {
+                        ph = static_cast<int64_t>(std::stoll(val));
+                    }
+                    // Unknown keys ignored.
+                } catch (...) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-view: bad value in "
+                        "%s: %s\n", path.string().c_str(), line.c_str());
+                }
+            }
+        }
+        // Sanitize zoom — accept only kFitFileLevel or 0..kNumZoomLevels-1.
+        if (z != kFitFileLevel && (z < 0 || z >= kNumZoomLevels)) {
+            z = kFitFileLevel;
+        }
+        app.zoom_level            = z;
+        app.viewport_start_sample = vp;
+        app.playhead_sample       = ph;
+        clamp_viewport_start(app, audio);
+    };
+
+    // Loads the render at app.render_view_list[index] into the active
+    // `audio`, parking the source audio on first entry. Parses sibling
+    // <basename>.warpmarkers and <basename>.transientmarkers into
+    // app.render_view_markers/transients and computes F_begin/F_end
+    // against the cached source sr/total. Stops playback before the
+    // swap and re-binds the playback device. Returns true on success;
+    // on failure logs to stderr and the prior state is preserved.
+    auto load_render_view_at = [&](int index) -> bool {
+        if (index < 0 ||
+            index >= static_cast<int>(app.render_view_list.size())) {
+            return false;
+        }
+        const auto& e = app.render_view_list[index];
+
+        GuiAudio next;
+        if (!next.load(e.wav_path.string(), {})) {
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: failed to load %s\n",
+                e.wav_path.string().c_str());
+            return false;
+        }
+
+        // Render-view consumes render-domain sidecars
+        // (.renderwarpmarkers / .rendertransientmarkers) so visible marker
+        // positions match the rendered audio's time axis. The source-domain
+        // pair (.warpmarkers / .transientmarkers) is what Ctrl+Alt+C commit
+        // reloads when promoting a render's markers into authoring memory.
+        std::vector<GuiMarker>     loaded_warp;
+        std::vector<GuiTransient>  loaded_trans;
+        {
+            const std::filesystem::path wmd =
+                e.batch_folder / (e.basename + ".renderwarpmarkers");
+            std::error_code ec;
+            if (std::filesystem::exists(wmd, ec)) {
+                GuiMarkers m;
+                m.load(wmd.string());
+                loaded_warp = m.markers();
+            } else {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-view: %s missing — markers will "
+                    "not be displayed for this render\n",
+                    wmd.string().c_str());
+            }
+        }
+        {
+            const std::filesystem::path tmd =
+                e.batch_folder / (e.basename + ".rendertransientmarkers");
+            std::error_code ec;
+            if (std::filesystem::exists(tmd, ec)) {
+                GuiTransients t;
+                t.load(tmd.string());
+                loaded_trans = t.markers();
+            }
+        }
+        playback.stop();
+        playback.shutdown();
+        app.is_playing      = false;
+        app.playback_cursor = 0;
+        clear_hover_popup();
+
+        // Snapshot the live authoring playhead/viewport/zoom into the
+        // active tab's slot before we overwrite `audio`. restore_source_audio
+        // reads it back on render-view exit so the user lands where they
+        // left the source view rather than at sample 0.
+        if (source_audio_held.total_frames() == 0) {
+            refresh_active_tab_from_app();
+            source_audio_held = std::move(audio);
+        }
+        audio = std::move(next);
+        app.audio_generation++;
+
+        const auto trim = compute_trim_samples(
+            loaded_warp, loaded_trans,
+            app.render_view_src_sr, app.render_view_src_total);
+        app.render_view_src_F_begin = trim.first;
+        app.render_view_src_F_end   = trim.second;
+
+        app.render_view_markers           = std::move(loaded_warp);
+        app.render_view_transients        = std::move(loaded_trans);
+        app.render_view_index             = index;
+        app.last_render_view_path         = e.wav_path.string();
+        app.render_view_selected_markers.clear();
+        app.render_view_last_selected_marker = -1;
+
+        // Apply this render's persisted zoom/viewport/playhead (or
+        // fit-file defaults when no .rendersettings sidecar exists).
+        // Order matters: apply_rendersettings_for sets zoom first
+        // (clamp depends on it) and runs clamp at the end.
+        apply_rendersettings_for(e);
+
+        if (!playback.init(audio.sample_rate(), audio.channels(),
+                           audio.samples_ptr(), audio.total_frames())) {
+            std::fprintf(stderr,
+                "warptempo_gui: playback disabled in render-view\n");
+        }
+        gui.invalidate_region(0, 0, app.width, app.height);
+        return true;
+    };
+
+    // Restores source audio from the parked source_audio_held. Inverse
+    // of the load_render_view_at entry path. No-op when
+    // source_audio_held is empty (nothing to restore).
+    auto restore_source_audio = [&]() {
+        if (source_audio_held.total_frames() == 0) return;
+        playback.stop();
+        playback.shutdown();
+        app.is_playing      = false;
+        app.playback_cursor = 0;
+        clear_hover_popup();
+
+        audio = std::move(source_audio_held);
+        source_audio_held = GuiAudio{};
+        app.audio_generation++;
+
+        // Read back the active tab's snapshot saved when render-view was
+        // first entered. The Tab key is gated out of render-view's input
+        // allowlist, so app.active_tab is the same letter the snapshot
+        // was written under.
+        const Tab& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+        app.viewport_start_sample = t.viewport_start_sample;
+        app.zoom_level            = t.zoom_level;
+        app.playhead_sample       = t.playhead_sample;
+        clamp_viewport_start(app, audio);
+
+        if (!playback.init(audio.sample_rate(), audio.channels(),
+                           audio.samples_ptr(), audio.total_frames())) {
+            std::fprintf(stderr, "warptempo_gui: playback disabled\n");
+        }
+        gui.invalidate_region(0, 0, app.width, app.height);
+    };
+
     gui.set_on_key([&](KeySym keysym, unsigned int mods) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
@@ -4862,6 +5436,41 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Chunk W: render-view input gate. While render-view is active
+        // only keys driving navigation / playback / exit / commit are
+        // honored; every authoring key is silently dropped so a stray
+        // press can't mutate state through a swapped-out view.
+        // Allowlist:
+        //   - r (no mods)            → toggle render-view off
+        //   - Shift+Left/Right       → previous/next render
+        //   - Ctrl+Alt+C             → commit displayed render's markers
+        //   - Space                  → playback toggle
+        //   - Left/Right (no mods)   → playhead-by-pixel scrub
+        //   - Home/End (no mods)     → playhead to trim begin/end
+        //   - Esc                    → top-level no-op (chunk Q)
+        if (app.render_view_enabled) {
+            const bool is_r =
+                (keysym == XK_r && !ctrl && !shift && !alt);
+            const bool is_nav =
+                ((keysym == XK_Left || keysym == XK_Right) &&
+                 shift && !ctrl && !alt);
+            const bool is_commit =
+                (ctrl && alt && !shift &&
+                 (keysym == XK_c || keysym == XK_C));
+            const bool is_playback = (keysym == XK_space);
+            const bool is_scrub =
+                ((keysym == XK_Left || keysym == XK_Right) &&
+                 !ctrl && !shift && !alt);
+            const bool is_jump =
+                ((keysym == XK_Home || keysym == XK_End) &&
+                 !ctrl && !shift && !alt);
+            const bool is_esc = (keysym == XK_Escape);
+            if (!(is_r || is_nav || is_commit || is_playback ||
+                  is_scrub || is_jump || is_esc)) {
+                return;
+            }
+        }
+
         // Esc during a render-all run requests cancellation between
         // entries. Only fires while the queue walker is active; outside
         // that window Esc retains its other meanings (drag-cancel, etc).
@@ -4899,198 +5508,166 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Ctrl+Alt+R: in-process render. Synchronous — blocks the UI until
-        // the pipeline finishes; all output goes to stderr (the GUI has no
-        // progress UI for it yet). Silent no-op when no audio is loaded.
-        if (ctrl && alt && !shift &&
-            (keysym == XK_r || keysym == XK_R)) {
-            if (!app.source_audio_path.empty()) {
-                clear_hover_popup();
-                RenderRequest req;
-                req.source_audio_path    = app.source_audio_path;
-                req.markers              = app.markers.markers();
-                req.settings_passthrough = app.settings_passthrough;
-                // Active transients in source-frame domain. Disabled
-                // entries are filtered; D entries surface their visible
-                // (displaced) position via effective_frame(). The list is
-                // already sorted by effective_frame() per the on-disk
-                // invariant, so no re-sort is needed.
-                for (const auto& m : app.transients.markers()) {
-                    if (m.disabled) continue;
-                    req.transient_frames.push_back(m.effective_frame());
-                }
-                do_render(req);
-            }
-            return;
-        }
-
-        // Ctrl+Alt+E: snapshot current authoring state into a per-source
-        // render-queue entry. Pure snapshot — no render runs here.
-        // Source-side authoring files (.warpmarkers / .transientmarkers /
-        // .settings) are untouched; the entry captures live in-memory state.
-        // Settings are not snapshotted in chunk U: render-all reads the
-        // GUI's live settings_passthrough at render time.
+        // Ctrl+Alt+E: snapshot current authoring state into the in-memory
+        // render queue. No disk writes; on-disk authoring files are untouched.
+        // Settings are not snapshotted per-entry — the queue walker uses
+        // the live settings_passthrough at execution time, mirroring the
+        // chunk-U convention. (Chunk W: snapshots moved from disk to memory.)
         if (ctrl && alt && !shift &&
             (keysym == XK_e || keysym == XK_E)) {
             if (app.source_audio_path.empty()) return;
-
-            std::filesystem::path src(app.source_audio_path);
-            std::filesystem::path src_parent = src.parent_path();
-            if (src_parent.empty()) src_parent = std::filesystem::path(".");
-            const std::filesystem::path queue_root = src_parent / "renders";
-
-            auto now = std::chrono::system_clock::now();
-            std::time_t tt = std::chrono::system_clock::to_time_t(now);
-            std::tm lt{};
-            // localtime is single-threaded-safe enough for the GUI thread;
-            // copy into our own tm so a later std::localtime call cannot
-            // stomp the buffer mid-format.
-            if (std::tm* p = std::localtime(&tt)) lt = *p;
-            char ts_buf[32];
-            std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%d_%H%M%S", &lt);
-            const std::string ts = ts_buf;
-
-            // Same-second collision: append _2, _3, ... up to _100. The
-            // 100 cap is paranoia; in practice two presses in the same
-            // second is the typical worst case.
-            std::filesystem::path entry_dir = queue_root / ts;
-            int suffix = 2;
-            while (std::filesystem::exists(entry_dir)) {
-                if (suffix > 100) {
-                    std::fprintf(stderr,
-                        "warptempo_gui: queue error: too many same-second "
-                        "entries under %s\n", queue_root.string().c_str());
-                    return;
-                }
-                entry_dir = queue_root / (ts + "_" + std::to_string(suffix));
-                ++suffix;
-            }
-
-            std::error_code ec;
-            std::filesystem::create_directories(entry_dir, ec);
-            if (ec) {
-                std::fprintf(stderr,
-                    "warptempo_gui: queue error: could not create '%s': %s\n",
-                    entry_dir.string().c_str(), ec.message().c_str());
-                return;
-            }
-
-            const std::string warp_path =
-                (entry_dir / "warpmarkers").string();
-            if (!app.markers.save(warp_path)) {
-                std::fprintf(stderr,
-                    "warptempo_gui: queue error: failed to write '%s'\n",
-                    warp_path.c_str());
-                return;
-            }
-            // Transients file is omitted entirely when the in-memory list
-            // is empty — load_render_request_from_dir treats absence as
-            // "no transients" without warning.
-            if (!app.transients.markers().empty()) {
-                const std::string tr_path =
-                    (entry_dir / "transientmarkers").string();
-                if (!app.transients.save(tr_path)) {
-                    std::fprintf(stderr,
-                        "warptempo_gui: queue error: failed to write '%s'\n",
-                        tr_path.c_str());
-                    return;
-                }
-            }
-
+            AppState::QueuedRender q;
+            q.source_audio_path = app.source_audio_path;
+            q.markers           = app.markers.markers();
+            q.transients        = app.transients.markers();
+            app.queued_renders.push_back(std::move(q));
             std::fprintf(stderr,
-                "warptempo_gui: queued render entry %s\n",
-                entry_dir.string().c_str());
+                "warptempo_gui: queued render (%zu in queue)\n",
+                app.queued_renders.size());
             return;
         }
 
-        // Ctrl+Alt+Shift+E: walk this source's renders/ directory and
-        // render every pending entry serially in oldest-first directory-
-        // name order. Esc between entries cancels the remainder; mid-
-        // engine Esc presses are queued and take effect after the
-        // current entry finishes (no mid-engine cancellation in chunk U).
+        // Ctrl+Alt+R: single render into the source directory using `title`
+        // from settings. Mirrors the pre-Chunk-W non-batch path inside
+        // do_render: empty batch_folder/batch_basename triggers the
+        // engine/limiter-prefix naming. Title-not-set is a hard error
+        // surfaced from do_render. Does not consult the in-memory queue and
+        // does not write any sidecars beyond the .peaks pyramid that
+        // do_render already deposits.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_r || keysym == XK_R)) {
+            if (app.source_audio_path.empty()) return;
+
+            RenderRequest req;
+            req.source_audio_path    = app.source_audio_path;
+            req.markers              = app.markers.markers();
+            req.transients           = app.transients.markers();
+            req.settings_passthrough = app.settings_passthrough;
+            for (const auto& m : app.transients.markers()) {
+                if (m.disabled) continue;
+                req.transient_frames.push_back(m.effective_frame());
+            }
+            // Empty batch_folder/basename selects the source-dir naming
+            // convention inside do_render.
+            do_render(req);
+            return;
+        }
+
+        // Ctrl+Alt+Shift+E: render the in-memory queue as one batch. Each
+        // queued entry produces a sibling .wav (+ .warpmarkers /
+        // .transientmarkers when non-empty / .peaks sidecars) inside a fresh
+        // batch folder `<source_parent>/renders/<index>_render_all_in_queue/`.
+        // The index is one greater than the highest pre-existing batch index
+        // in that renders folder (regardless of command tag). Filenames
+        // inside the batch are the entry position zero-padded to fit the
+        // queue size: 01..10 for 10 entries, 1..7 for 7, 001..100 for 100.
+        //
+        // Empty queue is a silent no-op (no implicit-batch fallback —
+        // single-shot rendering belongs on Ctrl+Alt+R now).
+        //
+        // Esc between entries drops the remainder. The current render
+        // cannot be interrupted (no mid-engine cancellation); its sidecars
+        // are written if it succeeds, then the loop exits and the rest of
+        // the queue is discarded. The batch folder is left as-is on disk —
+        // partial batches just contain fewer files than the queue had.
+        // The in-memory queue is cleared after execution whether all
+        // entries ran or Esc cut it short.
         if (ctrl && alt && shift &&
             (keysym == XK_e || keysym == XK_E)) {
             if (app.source_audio_path.empty()) return;
+            if (app.queued_renders.empty()) return;
+
+            std::vector<AppState::QueuedRender> entries =
+                std::move(app.queued_renders);
+            app.queued_renders.clear();
 
             std::filesystem::path src(app.source_audio_path);
             std::filesystem::path src_parent = src.parent_path();
             if (src_parent.empty()) src_parent = std::filesystem::path(".");
             const std::filesystem::path queue_root = src_parent / "renders";
 
+            // Resolve the next batch index: max+1 over directory entries
+            // matching `<digits>_<anything>`. Empty / missing renders/
+            // folder seeds index 1.
+            int next_index = 1;
             std::error_code ec;
-            if (!std::filesystem::is_directory(queue_root, ec)) {
-                std::fprintf(stderr,
-                    "warptempo_gui: render-all: no pending entries\n");
-                return;
-            }
-
-            // Pending = subdir contains warpmarkers but not output.wav.
-            // Bad entries (no warpmarkers) are warned and skipped — they
-            // remain on disk for manual cleanup.
-            std::vector<std::filesystem::path> pending;
-            for (const auto& de :
-                 std::filesystem::directory_iterator(queue_root, ec)) {
-                if (!de.is_directory()) continue;
-                const auto p = de.path();
-                const bool has_wm = std::filesystem::exists(p / "warpmarkers");
-                const bool has_out =
-                    std::filesystem::exists(p / "output.wav") ||
-                    std::filesystem::exists(p / "output.mid");
-                if (!has_wm) {
-                    std::fprintf(stderr,
-                        "warptempo_gui: render-all: skipping malformed "
-                        "entry (no warpmarkers): %s\n",
-                        p.string().c_str());
-                    continue;
+            if (std::filesystem::is_directory(queue_root, ec)) {
+                int max_idx = 0;
+                for (const auto& de :
+                     std::filesystem::directory_iterator(queue_root, ec)) {
+                    if (!de.is_directory()) continue;
+                    const std::string name = de.path().filename().string();
+                    int v = 0;
+                    size_t i = 0;
+                    while (i < name.size() &&
+                           name[i] >= '0' && name[i] <= '9') {
+                        v = v * 10 + (name[i] - '0');
+                        ++i;
+                    }
+                    if (i == 0 || i >= name.size() || name[i] != '_') continue;
+                    if (v > max_idx) max_idx = v;
                 }
-                if (has_out) continue;
-                pending.push_back(p);
+                next_index = max_idx + 1;
             }
-            // Directory-name lex sort == chronological order because the
-            // YYYY-MM-DD_HHMMSS prefix is fixed-width.
-            std::sort(pending.begin(), pending.end());
 
-            if (pending.empty()) {
+            const std::string command_tag = "render_all_in_queue";
+            const std::filesystem::path batch_folder =
+                queue_root /
+                (std::to_string(next_index) + "_" + command_tag);
+            std::filesystem::create_directories(batch_folder, ec);
+            if (ec) {
                 std::fprintf(stderr,
-                    "warptempo_gui: render-all: no pending entries\n");
+                    "warptempo_gui: render-all: could not create '%s': %s\n",
+                    batch_folder.string().c_str(), ec.message().c_str());
                 return;
             }
+
+            // Width-to-fit zero-padding for filename indices. pad_width is
+            // computed from the queue size and clamped to a sane upper
+            // bound so the snprintf below has a known-bounded output.
+            const int total = static_cast<int>(entries.size());
+            int pad_width = 1;
+            for (int n = total; n >= 10; n /= 10) ++pad_width;
+            if (pad_width > 9) pad_width = 9;
 
             app.queue_cancel_requested = false;
             app.queue_running          = true;
             clear_hover_popup();
-            const int total = static_cast<int>(pending.size());
             int rendered = 0;
             bool cancelled = false;
             for (int i = 0; i < total; ++i) {
-                const auto& entry = pending[i];
+                const auto& q = entries[i];
+                char num_buf[16];
+                std::snprintf(num_buf, sizeof(num_buf),
+                              "%0*d", pad_width, i + 1);
                 std::fprintf(stderr,
-                    "warptempo_gui: rendering entry %d of %d: %s\n",
-                    i + 1, total, entry.filename().string().c_str());
+                    "warptempo_gui: rendering entry %d of %d: %s/%s.wav\n",
+                    i + 1, total,
+                    batch_folder.filename().string().c_str(), num_buf);
 
                 RenderRequest req;
-                if (!load_render_request_from_dir(
-                        app.source_audio_path,
-                        entry.string(),
-                        app.settings_passthrough,
-                        req)) {
-                    // load_render_request_from_dir already logged. The
-                    // entry stays pending so a later run can retry it
-                    // after manual fixup.
-                    continue;
+                req.source_audio_path    = q.source_audio_path;
+                req.markers              = q.markers;
+                req.transients           = q.transients;
+                req.settings_passthrough = app.settings_passthrough;
+                for (const auto& m : q.transients) {
+                    if (m.disabled) continue;
+                    req.transient_frames.push_back(m.effective_frame());
                 }
-                do_render(req);
-                ++rendered;
+                req.batch_folder   = batch_folder.string();
+                req.batch_basename = num_buf;
+                if (do_render(req)) ++rendered;
 
                 // Surface any X events queued during the render (Esc
                 // presses, expose, etc.) so the cancel flag becomes
-                // visible to the next iteration.
+                // visible to the next iteration. Mid-engine Esc presses
+                // surface here on the next iteration's drain.
                 gui.drain_events();
                 if (app.queue_cancel_requested) {
                     const int remaining = total - (i + 1);
                     std::fprintf(stderr,
                         "warptempo_gui: render-all cancelled, %d entries "
-                        "remaining\n", remaining);
+                        "remaining (dropped from queue)\n", remaining);
                     cancelled = true;
                     break;
                 }
@@ -5104,9 +5681,116 @@ int main(int argc, char** argv) {
                     rendered, total);
             } else {
                 std::fprintf(stderr,
-                    "warptempo_gui: rendered %d of %d entries\n",
-                    rendered, total);
+                    "warptempo_gui: rendered %d of %d entries into %s\n",
+                    rendered, total,
+                    batch_folder.filename().string().c_str());
             }
+            return;
+        }
+
+        // Chunk W: Ctrl+Alt+C commits the displayed render's markers
+        // and transients into authoring memory. Single cross-file undo
+        // entry; both warp_dirty and transient_dirty are recomputed.
+        // After the commit succeeds: render-view exits, the parked
+        // source audio is restored, and <source_parent>/renders/ is
+        // recursively wiped — by definition the user has chosen one
+        // render's parameters as the new baseline, so the prior batch
+        // outputs are stale and shouldn't accumulate. Silent no-op
+        // outside render-view.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_c || keysym == XK_C)) {
+            if (!app.render_view_enabled) return;
+            if (app.render_view_index < 0) return;
+
+            // Addendum 3: app.render_view_markers / _transients are now
+            // render-domain (loaded from .renderwarpmarkers /
+            // .rendertransientmarkers for display). The commit promotes
+            // the render's *source-domain*
+            // markers into authoring memory, so reload them from the
+            // adjacent .warpmarkers / .transientmarkers sidecars at commit
+            // time. Failure to read the source-domain warpmarkers aborts —
+            // committing render-domain values into authoring would corrupt
+            // the source coordinate system.
+            const auto& cur_e =
+                app.render_view_list[app.render_view_index];
+            std::vector<GuiMarker>    src_warp;
+            std::vector<GuiTransient> src_trans;
+            {
+                const std::filesystem::path wm =
+                    cur_e.batch_folder / (cur_e.basename + ".warpmarkers");
+                GuiMarkers m;
+                if (!m.load(wm.string())) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-view: commit aborted, failed "
+                        "to load %s\n", wm.string().c_str());
+                    return;
+                }
+                src_warp = m.markers();
+            }
+            {
+                const std::filesystem::path tm = cur_e.batch_folder /
+                    (cur_e.basename + ".transientmarkers");
+                std::error_code ec;
+                if (std::filesystem::exists(tm, ec)) {
+                    GuiTransients t;
+                    if (t.load(tm.string())) {
+                        src_trans = t.markers();
+                    }
+                    // Load failure: treat as empty transients (the
+                    // load() call already logged its own diagnostics).
+                }
+            }
+
+            std::vector<GuiMarker>    warp_pre  = app.markers.markers();
+            std::vector<GuiTransient> trans_pre = app.transients.markers();
+            std::set<int>             hint_sel  = app.selected_markers;
+            const int                 hint_last = app.last_selected_marker;
+
+            app.markers.markers_mut()    = std::move(src_warp);
+            app.transients.markers_mut() = std::move(src_trans);
+            app.selected_markers.clear();
+            app.transient_selected_markers.clear();
+            app.last_selected_marker = -1;
+
+            push_undo_both(std::move(warp_pre), std::move(trans_pre),
+                           'W', OpKind::Other,
+                           std::move(hint_sel), hint_last);
+            recompute_dirty();
+
+            const std::filesystem::path src(app.source_audio_path);
+            std::filesystem::path src_parent = src.parent_path();
+            if (src_parent.empty()) src_parent = std::filesystem::path(".");
+            const std::filesystem::path renders_root =
+                src_parent / "renders";
+
+            restore_source_audio();
+            app.render_view_enabled = false;
+            app.render_view_list.clear();
+            app.render_view_markers.clear();
+            app.render_view_transients.clear();
+            app.render_view_selected_markers.clear();
+            app.render_view_last_selected_marker = -1;
+            app.render_view_index             = -1;
+            app.render_view_src_F_begin       = 0;
+            app.render_view_src_F_end         = 0;
+            app.last_render_view_path.clear();
+
+            std::error_code ec;
+            if (std::filesystem::is_directory(renders_root, ec)) {
+                std::filesystem::remove_all(renders_root, ec);
+                if (ec) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-view: failed to wipe "
+                        "%s: %s\n",
+                        renders_root.string().c_str(),
+                        ec.message().c_str());
+                }
+            }
+
+            std::fprintf(stderr,
+                "warptempo_gui: render-view: committed render and wiped "
+                "renders/\n");
+            gui.invalidate_region(0, 0, app.width, app.height);
             return;
         }
 
@@ -5183,6 +5867,73 @@ int main(int argc, char** argv) {
         if (keysym == XK_i && !ctrl && shift && !alt) {
             if (app.active_mode == 'W' && app.iteration_mode_enabled) {
                 bulk_clear_iter_values();
+            }
+            return;
+        }
+
+        // Chunk W: plain `r` toggles render analysis mode. Source audio
+        // must be loaded; otherwise silent no-op (nothing to base the
+        // renders folder lookup on). Toggle-on enumerates the renders
+        // folder and loads either the last-displayed render (if its
+        // path is still in the list) or the first entry; an empty
+        // enumeration aborts the toggle. Iteration mode is forcibly
+        // disabled on entry per the chunk W brief; the prior value is
+        // not restored on toggle-off — the user re-enables it
+        // explicitly if desired.
+        if (keysym == XK_r && !ctrl && !shift && !alt) {
+            if (app.source_audio_path.empty()) return;
+            if (app.loading) return;
+            if (!app.render_view_enabled) {
+                std::vector<AppState::RenderViewEntry> list =
+                    enumerate_render_view_list();
+                if (list.empty()) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-view: no renders found "
+                        "under %s/renders/\n",
+                        std::filesystem::path(app.source_audio_path)
+                            .parent_path().string().c_str());
+                    return;
+                }
+                int target = 0;
+                if (!app.last_render_view_path.empty()) {
+                    for (size_t i = 0; i < list.size(); ++i) {
+                        if (list[i].wav_path.string() ==
+                            app.last_render_view_path) {
+                            target = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
+                app.render_view_src_sr    = audio.sample_rate();
+                app.render_view_src_total = audio.total_frames();
+                app.render_view_list      = std::move(list);
+                app.iteration_mode_enabled = false;
+                app.render_view_enabled    = true;
+                if (!load_render_view_at(target)) {
+                    app.render_view_enabled = false;
+                    app.render_view_list.clear();
+                }
+            } else {
+                // Capture the just-viewed render's zoom/viewport/playhead
+                // before restoring source-audio state. Not done on the
+                // Ctrl+Alt+C commit path — the renders folder is wiped
+                // immediately after commit, so the write would be lost.
+                if (app.render_view_index >= 0 &&
+                    app.render_view_index <
+                        static_cast<int>(app.render_view_list.size())) {
+                    write_rendersettings_for(
+                        app.render_view_list[app.render_view_index]);
+                }
+                restore_source_audio();
+                app.render_view_enabled = false;
+                app.render_view_list.clear();
+                app.render_view_markers.clear();
+                app.render_view_transients.clear();
+                app.render_view_selected_markers.clear();
+                app.render_view_last_selected_marker = -1;
+                app.render_view_index             = -1;
+                app.render_view_src_F_begin       = 0;
+                app.render_view_src_F_end         = 0;
             }
             return;
         }
@@ -5282,6 +6033,35 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Chunk W: Shift+Left / Shift+Right navigates the render-view
+        // list with wraparound. Active only when render_view_enabled is
+        // true; in source-view these chords fall through to the normal
+        // playhead-by-pixel handler in the switch below. Wraparound
+        // mirrors the brief: Shift+Right past the end loops to index 0,
+        // Shift+Left before index 0 loops to the last entry.
+        if (app.render_view_enabled && shift && !ctrl && !alt &&
+            (keysym == XK_Left || keysym == XK_Right)) {
+            const int n = static_cast<int>(app.render_view_list.size());
+            if (n <= 0) return;
+            int next = app.render_view_index;
+            if (keysym == XK_Left)  next = (next - 1 + n) % n;
+            else                    next = (next + 1) % n;
+            // Capture the outgoing render's live zoom/viewport/playhead
+            // before swapping. Selection is cleared on every navigation
+            // (the marker index space changes between renders, so prior
+            // indices have no meaning in the new list).
+            if (app.render_view_index >= 0 &&
+                app.render_view_index <
+                    static_cast<int>(app.render_view_list.size())) {
+                write_rendersettings_for(
+                    app.render_view_list[app.render_view_index]);
+            }
+            app.render_view_selected_markers.clear();
+            app.render_view_last_selected_marker = -1;
+            load_render_view_at(next);
+            return;
+        }
+
         // Ctrl+Left / Ctrl+Right: nudge selected markers by one pixel.
         if (ctrl && !shift && keysym == XK_Left) {
             if (app.active_mode == 'T') nudge_selected_transients(-1);
@@ -5294,28 +6074,35 @@ int main(int argc, char** argv) {
             return;
         }
 
-        switch (keysym) {
-        case XK_Escape: /* top-level Escape is a no-op (chunk Q) */ break;
-        case XK_Left:   stop_playback_if_playing();
-                        move_playhead_pixels(-1);         break;
-        case XK_Right:  stop_playback_if_playing();
-                        move_playhead_pixels(+1);         break;
-        case XK_Up:     zoom_in();                        break;
-        case XK_Down:   zoom_out();                       break;
-        case XK_f:      app.follow_mode = !app.follow_mode; break;
-        case XK_c:      center_viewport_on_playhead();    break;
-        case XK_Home:   stop_playback_if_playing();
-                        move_playhead_to(trim_begin_sample()); break;
-        case XK_End:    stop_playback_if_playing();
-                        move_playhead_to(trim_end_sample() - 1); break;
-        case XK_b:      if (app.active_mode == 'T') toggle_transient_begin_time();
-                        else                        toggle_begin_time();
-                        break;
-        case XK_e:      if (app.active_mode == 'T') toggle_transient_end_time();
-                        else                        toggle_end_time();
-                        break;
-        // TODO: growing binding set will want an in-GUI help overlay.
-        default: break;
+        // Bare-key dispatch. Every modifier-gated handler above this point
+        // returns on match, so by the time we reach here, any modifier being
+        // held means the chord had no binding and should be a silent no-op
+        // — never fall through into a bare binding (e.g. Ctrl+Shift+Alt+E
+        // must not toggle end-time via XK_e).
+        if (!ctrl && !shift && !alt) {
+            switch (keysym) {
+            case XK_Escape: /* top-level Escape is a no-op (chunk Q) */ break;
+            case XK_Left:   stop_playback_if_playing();
+                            move_playhead_pixels(-1);         break;
+            case XK_Right:  stop_playback_if_playing();
+                            move_playhead_pixels(+1);         break;
+            case XK_Up:     zoom_in();                        break;
+            case XK_Down:   zoom_out();                       break;
+            case XK_f:      app.follow_mode = !app.follow_mode; break;
+            case XK_c:      center_viewport_on_playhead();    break;
+            case XK_Home:   stop_playback_if_playing();
+                            move_playhead_to(trim_begin_sample()); break;
+            case XK_End:    stop_playback_if_playing();
+                            move_playhead_to(trim_end_sample() - 1); break;
+            case XK_b:      if (app.active_mode == 'T') toggle_transient_begin_time();
+                            else                        toggle_begin_time();
+                            break;
+            case XK_e:      if (app.active_mode == 'T') toggle_transient_end_time();
+                            else                        toggle_end_time();
+                            break;
+            // TODO: growing binding set will want an in-GUI help overlay.
+            default: break;
+            }
         }
     });
 
@@ -5370,6 +6157,95 @@ int main(int argc, char** argv) {
         // Defensive: a second press during a drag is ignored (left button
         // should still be held down for a drag to exist).
         if (app.drag.active) return;
+
+        // Chunk W: render-view mouse gate. Left-click on a marker line
+        // (in the waveform area) or a flag rect (in the top strip)
+        // toggles selection and jumps the playhead to the marker;
+        // left-click elsewhere in the waveform area positions the
+        // playhead (with playback stop) and clears the selection unless
+        // Shift is held. Wheel zoom and Alt/Ctrl+Alt+wheel scroll are
+        // pure viewport ops and pass through; Ctrl+wheel marker-nudge
+        // is gated out (mutates markers). Drag-create and top-strip
+        // playhead movement are silent no-ops so the read-only
+        // invariant on marker state is preserved. Hover-popup motion
+        // still runs in the motion handler against render_view_markers.
+        if (app.render_view_enabled) {
+            if (button == 4 || button == 5) {
+                if (!inside_waveform && !inside_top) return;
+                if (ctrl && !alt) return; // marker nudge — disallowed
+                if (ctrl && alt) {
+                    const int64_t step = std::max<int64_t>(
+                        1, samples_visible(app, audio) / 50);
+                    scroll_viewport(button == 4 ? -step : +step);
+                } else if (alt) {
+                    const int64_t step = std::max<int64_t>(
+                        1, samples_visible(app, audio) / 10);
+                    scroll_viewport(button == 4 ? -step : +step);
+                } else {
+                    if (button == 4) zoom_out();
+                    else             zoom_in();
+                }
+                return;
+            }
+            if (button != 1) return;
+            int hit = -1;
+            if (inside_waveform)  hit = hit_test_marker_line(x);
+            else if (inside_top)  hit = hit_test_flag(x, y);
+            else                  return;
+            const int n =
+                static_cast<int>(app.render_view_markers.size());
+            if (hit >= 0 && hit < n) {
+                if (shift) {
+                    auto it = app.render_view_selected_markers.find(hit);
+                    if (it == app.render_view_selected_markers.end()) {
+                        app.render_view_selected_markers.insert(hit);
+                        app.render_view_last_selected_marker = hit;
+                    } else {
+                        app.render_view_selected_markers.erase(it);
+                        if (app.render_view_last_selected_marker == hit) {
+                            app.render_view_last_selected_marker =
+                                app.render_view_selected_markers.empty()
+                                ? -1
+                                : *app.render_view_selected_markers.rbegin();
+                        }
+                    }
+                } else {
+                    app.render_view_selected_markers.clear();
+                    app.render_view_selected_markers.insert(hit);
+                    app.render_view_last_selected_marker = hit;
+                }
+                gui.invalidate_region(0, 0, app.width, app.height);
+                const int sr = audio.sample_rate();
+                const int64_t sample = static_cast<int64_t>(std::llround(
+                    app.render_view_markers[hit].time_seconds *
+                    static_cast<double>(sr)));
+                move_playhead_to(sample);
+                return;
+            }
+            // Empty-space click in the waveform area: clear selection
+            // (unless Shift) and move the playhead. Empty-space click
+            // in the top strip is a silent no-op (no playhead drag in
+            // render-view).
+            if (inside_waveform) {
+                if (!shift &&
+                    (!app.render_view_selected_markers.empty() ||
+                     app.render_view_last_selected_marker != -1)) {
+                    app.render_view_selected_markers.clear();
+                    app.render_view_last_selected_marker = -1;
+                    gui.invalidate_region(0, 0, app.width, app.height);
+                }
+                stop_playback_if_playing();
+                const double spp = current_samples_per_pixel(app, audio);
+                int rel = x - area.x;
+                if (rel < 0) rel = 0;
+                if (rel >= area.w) rel = area.w - 1;
+                const int64_t sample =
+                    app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(rel * spp));
+                move_playhead_to(sample);
+            }
+            return;
+        }
 
         if (button == 1) {
             // Any button-1 press on the waveform / top strip stops
@@ -5632,6 +6508,30 @@ int main(int argc, char** argv) {
             clear_hover_popup();
             return;
         }
+        // Chunk W: render-view motion handler. Drags / selections were
+        // already filtered out at button-press; the only motion-driven
+        // work here is hover popup detection against render_view_markers.
+        // Mirrors the on_motion warp-mode hover branch below: same dwell
+        // timer, same precompute-at-entry. The popup paints in the
+        // render-view branch of the redraw lambda (V.A3b math reads from
+        // app.render_view_markers via popup_eligible_marker).
+        if (app.render_view_enabled) {
+            const int hit = hit_test_flag(mouse_x, mouse_y);
+            if (hit != app.hover_popup.marker_index) {
+                if (app.hover_popup.visible) invalidate_top_strip();
+                app.hover_popup.marker_index = hit;
+                app.hover_popup.visible      = false;
+                app.hover_popup.entry_time   =
+                    std::chrono::steady_clock::now();
+                app.hover_popup.cached_text =
+                    popup_eligible_marker(hit)
+                        ? compute_hover_popup_text(
+                              app.render_view_markers, hit,
+                              app.render_view_src_sr)
+                        : std::string();
+            }
+            return;
+        }
         if (app.playhead_drag.active) {
             clear_hover_popup();
             // Left button must still be held; if not, the release was lost —
@@ -5818,15 +6718,18 @@ int main(int argc, char** argv) {
         // are parsed so the initial playhead has the final trim-begin.
         app.playback_speed = 1.0f;
 
-        // Companion files: discover paths, create .warpmarkers if missing.
-        // .settings is GUI-owned now — not pre-created on load; first save
-        // materializes it.
+        // Companion files: discover paths, create <basename>.warpmarkers if
+        // missing. `.settings` is GUI-owned now — not pre-created on load;
+        // first save materializes it. Companion file convention is
+        // <source_dir>/<source_basename>.<ext> (sibling, basename-prefixed),
+        // not the legacy hidden `./.warpmarkers` form.
         std::filesystem::path apath(path);
         std::filesystem::path parent = apath.parent_path();
         if (parent.empty()) parent = std::filesystem::path(".");
-        const std::filesystem::path wm_path  = parent / ".warpmarkers";
-        const std::filesystem::path tm_path  = parent / ".transientmarkers";
-        const std::filesystem::path set_path = parent / ".settings";
+        const std::string stem = apath.stem().string();
+        const std::filesystem::path wm_path  = parent / (stem + ".warpmarkers");
+        const std::filesystem::path tm_path  = parent / (stem + ".transientmarkers");
+        const std::filesystem::path set_path = parent / (stem + ".settings");
         app.warpmarkers_path      = wm_path.string();
         app.transientmarkers_path = tm_path.string();
         app.settings_path         = set_path.string();

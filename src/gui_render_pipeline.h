@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui_markers.h"
+#include "gui_transients.h"
 
 #include <cstdint>
 #include <string>
@@ -22,31 +23,35 @@ struct RenderRequest {
     // entries filtered out and effective_frame() applied per entry.
     std::vector<int64_t>   transient_frames;
 
-    // When non-empty, do_render writes its final WAV (or .mid) into this
-    // directory under the literal name "output.wav" (or "output.mid"),
-    // bypassing the title/engine/limiter-prefix naming used for source-
-    // directory renders. Used by the render-all queue walker; empty for
-    // the immediate Ctrl+Alt+R path. The directory must already exist;
-    // do_render does not create it.
-    std::string output_dir_override;
+    // Full transient store snapshot. Only consumed when batch_folder is set
+    // — written verbatim as `<batch_folder>/<batch_basename>.transientmarkers`
+    // alongside the rendered .wav so render-view can later display the
+    // transients this render was produced from. When empty, no
+    // .transientmarkers sidecar is written. The single-transient sidecar
+    // path used by the source-directory render branch (Ctrl+Alt+R) does not
+    // read this field.
+    std::vector<GuiTransient> transients;
+
+    // Batch render output. When `batch_folder` is non-empty, do_render
+    // writes its final output to `<batch_folder>/<batch_basename>.wav` (or
+    // `.mid` for midi) and, on success, deposits the per-render
+    // `<batch_basename>.warpmarkers`, `<batch_basename>.transientmarkers`
+    // (when transients is non-empty), and `<batch_basename>.peaks` sidecars
+    // in the same folder. The folder must already exist; do_render does
+    // not create it. When `batch_folder` is empty, the source-directory
+    // title/engine/limiter-prefix naming is used (unchanged from the
+    // immediate Ctrl+Alt+R path) and no sidecars are written.
+    std::string batch_folder;
+    std::string batch_basename;
 };
 
-// Build a RenderRequest from a queue-entry directory: loads warpmarkers
-// (required) and transientmarkers (optional) from `entry_dir`. The source
-// path and live in-memory settings come from the caller — entries do not
-// snapshot settings. Returns false if warpmarkers is missing or fails to
-// parse; logs to stderr.
-bool load_render_request_from_dir(
-    const std::string& source_audio_path,
-    const std::string& entry_dir,
-    const std::vector<std::pair<std::string, std::string>>&
-        live_settings_passthrough,
-    RenderRequest& out);
-
 // Synchronous render. Blocks the caller until the pipeline finishes (or
-// errors out). All progress / error reporting goes to stderr; this function
-// has no return value because the UI doesn't react to render outcomes.
-void do_render(const RenderRequest& req);
+// errors out). All progress / error reporting goes to stderr. Returns true
+// iff the full pipeline ran to completion (including the rename-into-place
+// of the staged output); returns false on every early-return failure path.
+// The Ctrl+Alt+R queue walker uses the return to count actual successes;
+// other callers may ignore it.
+bool do_render(const RenderRequest& req);
 
 // Standalone transient detection entry point. Builds the same timemap +
 // settings the render path uses, then runs the engine's detection-only pass

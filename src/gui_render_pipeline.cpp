@@ -7,6 +7,7 @@
 #include "timemap.h"
 
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits.h>
+#include <set>
 #include <sstream>
 #include <string>
 #include <sys/types.h>
@@ -249,14 +251,14 @@ std::vector<MarkerForRender> resolve_markers_for_render(
 
 }  // namespace
 
-void do_render(const RenderRequest& req) {
-    if (req.source_audio_path.empty()) return;
+bool do_render(const RenderRequest& req) {
+    if (req.source_audio_path.empty()) return false;
 
     // --- Read settings. ---
     std::string title = settings_get(req.settings_passthrough, "title");
     if (title.empty()) {
         std::fprintf(stderr, "warptempo_gui: render error: title not set in settings\n");
-        return;
+        return false;
     }
 
     std::string engine = settings_get(req.settings_passthrough, "engine");
@@ -268,12 +270,12 @@ void do_render(const RenderRequest& req) {
     if (engine == "none") {
         std::fprintf(stderr,
             "warptempo_gui: render error: engine 'none' is no longer supported\n");
-        return;
+        return false;
     }
     if (!is_supported_engine) {
         std::fprintf(stderr,
             "warptempo_gui: render error: unknown engine '%s'\n", engine.c_str());
-        return;
+        return false;
     }
 
     const double scale            = parse_double(
@@ -295,7 +297,7 @@ void do_render(const RenderRequest& req) {
         std::fprintf(stderr,
             "warptempo_gui: render error: could not open source '%s'\n",
             req.source_audio_path.c_str());
-        return;
+        return false;
     }
     const long sample_rate  = src_info.samplerate;
     const long total_frames = static_cast<long>(src_info.frames);
@@ -311,19 +313,22 @@ void do_render(const RenderRequest& req) {
     TimemapBuildResult tmres;
     if (!build_timemaps(tmin, tmres)) {
         std::fprintf(stderr, "warptempo_gui: render error: timemap build failed\n");
-        return;
+        return false;
     }
 
     // --- Compute output path. ---
     const bool midi_engine = (engine == "midi");
+    const bool batch_render = !req.batch_folder.empty();
     std::string final_output_path;
-    if (!req.output_dir_override.empty()) {
-        // Queue-entry render: literal output.wav / output.mid in the entry
-        // directory. The engine/limiter-prefix naming does not apply — entry
-        // metadata lives in the directory's snapshotted markers files.
+    if (batch_render) {
+        // Batch render: <batch_folder>/<batch_basename>.{wav,mid}. Sidecars
+        // (.warpmarkers / .transientmarkers / .peaks) are written after the
+        // wav rename succeeds — see the post-render block below. The
+        // engine/limiter-prefix naming does not apply.
+        const std::string ext = midi_engine ? ".mid" : ".wav";
         final_output_path =
-            (std::filesystem::path(req.output_dir_override) /
-             (midi_engine ? "output.mid" : "output.wav")).string();
+            (std::filesystem::path(req.batch_folder) /
+             (req.batch_basename + ext)).string();
     } else {
         std::filesystem::path src(req.source_audio_path);
         std::filesystem::path dir = src.parent_path();
@@ -372,7 +377,7 @@ void do_render(const RenderRequest& req) {
         if (!write_trimmed_wav(req.source_audio_path, tmp_trimmed_wav,
                                tmres.trim_begin_frame, tmres.trim_end_frame)) {
             cleanup_all();
-            return;
+            return false;
         }
         engine_input_path = tmp_trimmed_wav;
     }
@@ -410,18 +415,18 @@ void do_render(const RenderRequest& req) {
         if (!run_warptempo_engine(ep)) {
             std::fprintf(stderr, "warptempo_gui: render error: engine failed\n");
             cleanup_all();
-            return;
+            return false;
         }
         if (tmres.trimmed) {
             if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
                 cleanup_all();
-                return;
+                return false;
             }
         }
     } else if (engine == "rubberband") {
         if (!write_standard_timemap(tmp_tm, tmres.standard, /*drop_zero_zero=*/true)) {
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_subprocess("rubberband", {
                 "-t", "1",
@@ -432,16 +437,16 @@ void do_render(const RenderRequest& req) {
                 tmp_engine_wav
             })) {
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
-            return;
+            return false;
         }
     } else if (engine == "bungee") {
         if (!write_standard_timemap(tmp_tm, tmres.standard, /*drop_zero_zero=*/false)) {
             cleanup_all();
-            return;
+            return false;
         }
         std::string adapter = adapter_base + "/bungee/build/bungee_adapter";
         if (!std::filesystem::exists(adapter)) {
@@ -449,20 +454,20 @@ void do_render(const RenderRequest& req) {
                 "warptempo_gui: render error: adapter not found '%s'\n",
                 adapter.c_str());
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_subprocess(adapter, {engine_input_path, tmp_tm, tmp_engine_wav})) {
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
-            return;
+            return false;
         }
     } else if (engine == "stretch") {
         if (!write_standard_timemap(tmp_tm, tmres.standard, /*drop_zero_zero=*/false)) {
             cleanup_all();
-            return;
+            return false;
         }
         std::string adapter = adapter_base + "/stretch/build/stretch_adapter";
         if (!std::filesystem::exists(adapter)) {
@@ -470,20 +475,20 @@ void do_render(const RenderRequest& req) {
                 "warptempo_gui: render error: adapter not found '%s'\n",
                 adapter.c_str());
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_subprocess(adapter, {engine_input_path, tmp_tm, tmp_engine_wav})) {
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
-            return;
+            return false;
         }
     } else if (engine == "soundtouch") {
         if (!write_standard_timemap(tmp_tm, tmres.standard, /*drop_zero_zero=*/false)) {
             cleanup_all();
-            return;
+            return false;
         }
         std::string adapter = adapter_base + "/soundtouch/build/soundtouch_adapter";
         if (!std::filesystem::exists(adapter)) {
@@ -491,20 +496,20 @@ void do_render(const RenderRequest& req) {
                 "warptempo_gui: render error: adapter not found '%s'\n",
                 adapter.c_str());
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_subprocess(adapter, {engine_input_path, tmp_engine_wav, tmp_tm})) {
             cleanup_all();
-            return;
+            return false;
         }
         if (!run_ffmpeg_alimiter(tmp_engine_wav, staging_output_path, ceiling_dbfs)) {
             cleanup_all();
-            return;
+            return false;
         }
     } else if (engine == "midi") {
         if (!write_midi_tempomap(tmp_tm_midi, tmres.midi)) {
             cleanup_all();
-            return;
+            return false;
         }
         std::string adapter = adapter_base + "/midi/build/midi_adapter";
         if (!std::filesystem::exists(adapter)) {
@@ -512,7 +517,7 @@ void do_render(const RenderRequest& req) {
                 "warptempo_gui: render error: adapter not found '%s'\n",
                 adapter.c_str());
             cleanup_all();
-            return;
+            return false;
         }
         std::ostringstream bbs;
         bbs << static_cast<double>(sample_rate) * 0.002;
@@ -523,7 +528,7 @@ void do_render(const RenderRequest& req) {
                 "30000"
             })) {
             cleanup_all();
-            return;
+            return false;
         }
     }
 
@@ -538,7 +543,7 @@ void do_render(const RenderRequest& req) {
             staging_output_path.c_str(), final_output_path.c_str(),
             ec.message().c_str());
         cleanup_all();
-        return;
+        return false;
     }
 
     // Deposit a peak-pyramid sidecar next to the rendered WAV. Fire-and-forget;
@@ -547,9 +552,178 @@ void do_render(const RenderRequest& req) {
         write_peaks_cache_for_wav(final_output_path);
     }
 
+    // Batch render: capture the per-render marker + transient sidecars now
+    // that the wav rename has succeeded. These are the markers and
+    // transients THIS render was produced from, not snapshots of the
+    // current source authoring state — render-view loads them later to
+    // display alongside the rendered audio. Sidecar write failures are
+    // logged but never abort: the wav itself is the primary artifact.
+    if (batch_render) {
+        const std::filesystem::path bf(req.batch_folder);
+        const std::string wm_path =
+            (bf / (req.batch_basename + ".warpmarkers")).string();
+        if (!GuiMarkers::save(wm_path, req.markers)) {
+            std::fprintf(stderr,
+                "warptempo_gui: render warning: failed to write '%s'\n",
+                wm_path.c_str());
+        }
+        if (!req.transients.empty()) {
+            const std::string tm_path =
+                (bf / (req.batch_basename + ".transientmarkers")).string();
+            if (!GuiTransients::save(tm_path, req.transients)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render warning: failed to write '%s'\n",
+                    tm_path.c_str());
+            }
+        }
+
+        // Render-domain sidecars (.renderwarpmarkers / .rendertransientmarkers).
+        // Render-view loads these instead of the source-domain pair so
+        // visible marker positions match the rendered audio's time axis.
+        // The source-domain pair above stays authoritative for
+        // Ctrl+Alt+C commit and Ctrl+S authoring saves; the render-domain
+        // pair is display-only and never read back into authoring memory.
+        if (!tmres.standard.empty() && sample_rate > 0) {
+            const auto& seg = tmres.standard;
+            const int64_t trim_begin =
+                static_cast<int64_t>(tmres.trim_begin_frame);
+            const int64_t trim_end = tmres.trimmed
+                ? static_cast<int64_t>(tmres.trim_end_frame)
+                : static_cast<int64_t>(total_frames);
+            const double sr_d = static_cast<double>(sample_rate);
+
+            // Markers: lockstep walk between req.markers and tmres.standard.
+            // Each surviving marker (post resolve filter + post trim filter)
+            // pairs with the next-in-order surviving segment. seg.tgt_frame
+            // is already post-shift (render-domain) so the render-time is
+            // tgt_frame / sr directly.
+            std::set<std::string> disabled_label_defs;
+            for (const auto& m : req.markers) {
+                if (!m.label_def.empty() && m.disabled) {
+                    disabled_label_defs.insert(m.label_def);
+                }
+            }
+            auto is_cascade_disabled_ref = [&](const GuiMarker& m) {
+                return !m.disabled && !m.label_ref.empty() &&
+                       disabled_label_defs.count(m.label_ref) > 0;
+            };
+
+            size_t seg_idx = 0;
+            std::vector<GuiMarker> warped_markers;
+            warped_markers.reserve(req.markers.size());
+            for (const auto& g : req.markers) {
+                const bool eff_disabled =
+                    g.disabled || is_cascade_disabled_ref(g);
+                const bool has_trim_flag = g.is_begin_time || g.is_end_time;
+
+                // resolve_markers_for_render filter.
+                if (eff_disabled && !has_trim_flag) continue;
+
+                // Trim-range filter (inclusive both ends — matches the
+                // post-pass at timemap.cpp line 209).
+                const int64_t sf_abs = static_cast<int64_t>(
+                    std::llround(g.time_seconds * sr_d));
+                if (sf_abs < trim_begin || sf_abs > trim_end) continue;
+
+                if (seg_idx >= seg.size()) break;
+                const auto& s = seg[seg_idx];
+                ++seg_idx;
+
+                // Disabled-with-trim-flag survives the resolve filter but
+                // is not display-eligible in render-view (locked design).
+                if (eff_disabled) continue;
+
+                GuiMarker w     = g;
+                w.time_seconds  = static_cast<double>(s.tgt_frame) / sr_d;
+                w.is_begin_time = false;
+                w.is_end_time   = false;
+                warped_markers.push_back(std::move(w));
+            }
+            const std::string wmd_path =
+                (bf / (req.batch_basename + ".renderwarpmarkers")).string();
+            if (!GuiMarkers::save(wmd_path, warped_markers)) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render warning: failed to write '%s'\n",
+                    wmd_path.c_str());
+            }
+
+            // Transients: not 1:1 with segments. Linear interpolate each
+            // transient's effective_frame() in tmres.standard. Drop
+            // out-of-trim and disabled. Stripping displacement is
+            // intentional — the user-visible position lands in src_frame.
+            if (!req.transients.empty()) {
+                auto interp_render_frame =
+                    [&](int64_t sf_abs, int64_t& out_frame) -> bool {
+                    if (sf_abs < trim_begin || sf_abs > trim_end) return false;
+                    const int64_t sf_rel = sf_abs - trim_begin;
+                    if (seg.empty()) return false;
+                    if (sf_rel <= static_cast<int64_t>(seg.front().src_frame)) {
+                        out_frame = static_cast<int64_t>(seg.front().tgt_frame);
+                        return true;
+                    }
+                    if (sf_rel >= static_cast<int64_t>(seg.back().src_frame)) {
+                        out_frame = static_cast<int64_t>(seg.back().tgt_frame);
+                        return true;
+                    }
+                    size_t lo = 0, hi = seg.size() - 1;
+                    while (lo + 1 < hi) {
+                        const size_t mid = lo + (hi - lo) / 2;
+                        if (static_cast<int64_t>(seg[mid].src_frame) <= sf_rel)
+                            lo = mid;
+                        else
+                            hi = mid;
+                    }
+                    const int64_t lo_src = static_cast<int64_t>(seg[lo].src_frame);
+                    const int64_t hi_src = static_cast<int64_t>(seg[lo + 1].src_frame);
+                    const int64_t lo_tgt = static_cast<int64_t>(seg[lo].tgt_frame);
+                    const int64_t hi_tgt = static_cast<int64_t>(seg[lo + 1].tgt_frame);
+                    if (hi_src == lo_src) {
+                        out_frame = lo_tgt;
+                    } else {
+                        const double frac =
+                            static_cast<double>(sf_rel - lo_src) /
+                            static_cast<double>(hi_src - lo_src);
+                        out_frame = lo_tgt + static_cast<int64_t>(
+                            std::llround(frac * (hi_tgt - lo_tgt)));
+                    }
+                    return true;
+                };
+
+                std::vector<GuiTransient> warped_transients;
+                warped_transients.reserve(req.transients.size());
+                for (const auto& t : req.transients) {
+                    if (t.disabled) continue;
+                    int64_t render_frame = 0;
+                    if (!interp_render_frame(t.effective_frame(),
+                                             render_frame)) {
+                        continue;
+                    }
+                    GuiTransient w;
+                    w.src_frame        = render_frame;
+                    w.is_inserted      = t.is_inserted;
+                    w.disabled         = false;
+                    w.is_begin_time    = false;
+                    w.is_end_time      = false;
+                    w.has_displacement = false;
+                    w.displaced_frame  = 0;
+                    warped_transients.push_back(std::move(w));
+                }
+                const std::string tmd_path =
+                    (bf / (req.batch_basename + ".rendertransientmarkers"))
+                    .string();
+                if (!GuiTransients::save(tmd_path, warped_transients)) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render warning: failed to write '%s'\n",
+                        tmd_path.c_str());
+                }
+            }
+        }
+    }
+
     cleanup_all();
     std::fprintf(stderr, "warptempo_gui: render complete: %s\n",
                  final_output_path.c_str());
+    return true;
 }
 
 bool do_detection(const DetectionRequest& req,
@@ -616,51 +790,3 @@ bool do_detection(const DetectionRequest& req,
     return run_warptempo_detection(dp, out_src_frames);
 }
 
-bool load_render_request_from_dir(
-    const std::string& source_audio_path,
-    const std::string& entry_dir,
-    const std::vector<std::pair<std::string, std::string>>&
-        live_settings_passthrough,
-    RenderRequest& out) {
-
-    const std::string warp_path =
-        (std::filesystem::path(entry_dir) / "warpmarkers").string();
-    const std::string transient_path =
-        (std::filesystem::path(entry_dir) / "transientmarkers").string();
-
-    GuiMarkers wm;
-    if (!wm.load(warp_path)) {
-        std::fprintf(stderr,
-            "warptempo_gui: queue entry %s: warpmarkers parse failed\n",
-            entry_dir.c_str());
-        return false;
-    }
-
-    out.source_audio_path = source_audio_path;
-    out.markers           = wm.markers();
-    // NOTE: settings are not snapshotted per-entry in chunk U. All entries
-    // render against the GUI's live in-memory passthrough. If a settings
-    // editor is added later, this convention will need to be revisited.
-    out.settings_passthrough = live_settings_passthrough;
-    out.transient_frames.clear();
-    out.output_dir_override = entry_dir;
-
-    if (std::filesystem::exists(transient_path)) {
-        GuiTransients gt;
-        if (!gt.load(transient_path)) {
-            std::fprintf(stderr,
-                "warptempo_gui: queue entry %s: transientmarkers parse "
-                "failed; rendering with empty transient list\n",
-                entry_dir.c_str());
-        } else {
-            // Mirrors the Ctrl+Alt+R handler's resolution logic exactly:
-            // filter disabled, then push effective_frame() per entry.
-            for (const auto& m : gt.markers()) {
-                if (m.disabled) continue;
-                out.transient_frames.push_back(m.effective_frame());
-            }
-        }
-    }
-
-    return true;
-}

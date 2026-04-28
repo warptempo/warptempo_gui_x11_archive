@@ -731,6 +731,11 @@ bool GuiMarkers::load(const std::string& path) {
 }
 
 bool GuiMarkers::save(const std::string& path) const {
+    return save(path, markers_);
+}
+
+bool GuiMarkers::save(const std::string& path,
+                      const std::vector<GuiMarker>& markers_) {
     std::ostringstream out;
     for (const auto& m : markers_) {
         // Canonical new format, no whitespace anywhere on the line:

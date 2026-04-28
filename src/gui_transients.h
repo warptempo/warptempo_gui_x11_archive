@@ -58,6 +58,12 @@ public:
     // duplicate states, so we don't error in the GUI for them.
     bool save(const std::string& path) const;
 
+    // Static variant for callers that hold a raw GuiTransient vector (e.g.
+    // the render pipeline writing per-render sidecars). Same on-disk format
+    // and dedup behavior as the instance method.
+    static bool save(const std::string& path,
+                     const std::vector<GuiTransient>& markers);
+
     // Best-effort unlink. Returns true on success or if the file didn't
     // already exist; false on any other error. Used by the empty-list save
     // path so an emptied transient list removes the on-disk sibling file.
