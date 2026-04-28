@@ -6,6 +6,7 @@
 #include "gui_transients.h"
 #include "timemap.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -390,6 +391,10 @@ bool do_render(const RenderRequest& req) {
     const std::string adapter_base = gui_dir + "/../adapters";
 
     // --- Engine dispatch. ---
+    // Populated by the warptempo path for use in render-domain transient
+    // sidecar generation downstream. Other engines leave these defaults.
+    std::vector<int64_t> engine_frame_map;
+    int engine_R_s = 0;
     if (engine == "warptempo") {
         EngineParams ep;
         ep.source_audio_path = engine_input_path;
@@ -412,7 +417,7 @@ bool do_render(const RenderRequest& req) {
         ep.output_24bit_pcm       = !tmres.trimmed && user_limiter_en;
         ep.transient_frames       = req.transient_frames;
 
-        if (!run_warptempo_engine(ep)) {
+        if (!run_warptempo_engine(ep, &engine_frame_map, &engine_R_s)) {
             std::fprintf(stderr, "warptempo_gui: render error: engine failed\n");
             cleanup_all();
             return false;
@@ -647,57 +652,35 @@ bool do_render(const RenderRequest& req) {
                     wmd_path.c_str());
             }
 
-            // Transients: not 1:1 with segments. Linear interpolate each
-            // transient's effective_frame() in tmres.standard. Drop
-            // out-of-trim and disabled. Stripping displacement is
+            // Transients: locate each transient's effective_frame() in the
+            // engine's frame_map via binary search and emit at synth_frame *
+            // R_s — same placement convention the engine uses internally.
+            // Drop out-of-trim and disabled. Stripping displacement is
             // intentional — the user-visible position lands in src_frame.
             if (!req.transients.empty()) {
-                auto interp_render_frame =
-                    [&](int64_t sf_abs, int64_t& out_frame) -> bool {
-                    if (sf_abs < trim_begin || sf_abs > trim_end) return false;
-                    const int64_t sf_rel = sf_abs - trim_begin;
-                    if (seg.empty()) return false;
-                    if (sf_rel <= static_cast<int64_t>(seg.front().src_frame)) {
-                        out_frame = static_cast<int64_t>(seg.front().tgt_frame);
-                        return true;
-                    }
-                    if (sf_rel >= static_cast<int64_t>(seg.back().src_frame)) {
-                        out_frame = static_cast<int64_t>(seg.back().tgt_frame);
-                        return true;
-                    }
-                    size_t lo = 0, hi = seg.size() - 1;
-                    while (lo + 1 < hi) {
-                        const size_t mid = lo + (hi - lo) / 2;
-                        if (static_cast<int64_t>(seg[mid].src_frame) <= sf_rel)
-                            lo = mid;
-                        else
-                            hi = mid;
-                    }
-                    const int64_t lo_src = static_cast<int64_t>(seg[lo].src_frame);
-                    const int64_t hi_src = static_cast<int64_t>(seg[lo + 1].src_frame);
-                    const int64_t lo_tgt = static_cast<int64_t>(seg[lo].tgt_frame);
-                    const int64_t hi_tgt = static_cast<int64_t>(seg[lo + 1].tgt_frame);
-                    if (hi_src == lo_src) {
-                        out_frame = lo_tgt;
-                    } else {
-                        const double frac =
-                            static_cast<double>(sf_rel - lo_src) /
-                            static_cast<double>(hi_src - lo_src);
-                        out_frame = lo_tgt + static_cast<int64_t>(
-                            std::llround(frac * (hi_tgt - lo_tgt)));
-                    }
-                    return true;
-                };
-
                 std::vector<GuiTransient> warped_transients;
                 warped_transients.reserve(req.transients.size());
                 for (const auto& t : req.transients) {
                     if (t.disabled) continue;
-                    int64_t render_frame = 0;
-                    if (!interp_render_frame(t.effective_frame(),
-                                             render_frame)) {
-                        continue;
+                    const int64_t sf_abs = t.effective_frame();
+                    if (sf_abs < trim_begin || sf_abs > trim_end) continue;
+                    if (engine_frame_map.empty()) continue;
+                    const int64_t sf_rel = sf_abs - trim_begin;
+                    auto it = std::upper_bound(engine_frame_map.begin(),
+                                               engine_frame_map.end(),
+                                               sf_rel);
+                    size_t m;
+                    if (it == engine_frame_map.begin()) {
+                        m = 0;
+                    } else if (it == engine_frame_map.end()) {
+                        m = engine_frame_map.size() - 1;
+                    } else {
+                        --it;
+                        m = static_cast<size_t>(it - engine_frame_map.begin());
                     }
+                    const int64_t render_frame =
+                        static_cast<int64_t>(m) *
+                        static_cast<int64_t>(engine_R_s);
                     GuiTransient w;
                     w.src_frame        = render_frame;
                     w.is_inserted      = t.is_inserted;

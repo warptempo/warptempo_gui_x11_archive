@@ -54,7 +54,9 @@ bool validate_timemap_monotonic(const std::vector<TimeMapSegment>& tm) {
 
 } // namespace
 
-bool run_warptempo_engine(const EngineParams& p) {
+bool run_warptempo_engine(const EngineParams& p,
+                          std::vector<int64_t>* out_frame_map,
+                          int* out_R_s) {
     AudioSTFT audio_stft;
 
     audio_stft.N = p.N;
@@ -201,6 +203,9 @@ bool run_warptempo_engine(const EngineParams& p) {
     }
 
     std::cout << "[Success] " << audio_stft.output_audio_file << "\n";
+
+    if (out_frame_map) *out_frame_map = audio_stft.frame_map;
+    if (out_R_s)       *out_R_s       = audio_stft.R_s;
 
     audio_stft.cleanup();
     return true;

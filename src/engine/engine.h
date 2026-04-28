@@ -41,7 +41,9 @@ struct EngineParams {
 
 // Returns true on success, false on failure. Failure reasons are logged to
 // stderr by the engine itself (unchanged text from the standalone binary).
-bool run_warptempo_engine(const EngineParams& p);
+bool run_warptempo_engine(const EngineParams& p,
+                          std::vector<int64_t>* out_frame_map = nullptr,
+                          int* out_R_s = nullptr);
 
 // Standalone detection entry point. Runs only the transient detection pass
 // (no phase vocoder, no limiter, no synthesis). On success, populates

@@ -63,15 +63,17 @@ constexpr double   kFlagFontSize      = 13.0;
 constexpr GuiColor kRenderViewMarkerColor         = {0.30, 0.45, 0.85};
 constexpr GuiColor kRenderViewMarkerSelectedColor = {0.55, 0.78, 1.00};
 
-// Transient-mode color set (chunk S.2.2). Coral palette so the second
-// editable layer is visually distinct from warp yellow and waveform blue.
-// Disabled / selected variants follow the same dimming / brightening
-// ratios used by the warp set above.
-constexpr GuiColor kTransientColor          = {1.00, 0.42, 0.42};
-constexpr GuiColor kTransientDimColor       = {0.50, 0.21, 0.21};
-constexpr GuiColor kTransientSelectedColor  = {1.00, 0.55, 0.45};
-constexpr GuiColor kTransientHighlightColor = {0.45, 0.20, 0.20};
-constexpr GuiColor kTransientPlayheadColor  = {1.00, 0.42, 0.42};
+// Transient-mode color set. Magenta palette — hue-distant from warp
+// yellow, render-view dark blue, waveform blue, and the editor's
+// parse-failure red. kTransientPlayheadColor aliases kPlayheadColor so
+// the authoring playhead is mode-invariant; render-view's playhead is
+// the only context where the playhead color differs (dark blue, set
+// inline at the playhead-render call site).
+constexpr GuiColor kTransientColor          = {0.85, 0.45, 0.95};
+constexpr GuiColor kTransientDimColor       = {0.42, 0.22, 0.47};
+constexpr GuiColor kTransientSelectedColor  = {0.95, 0.65, 1.00};
+constexpr GuiColor kTransientHighlightColor = {0.40, 0.20, 0.45};
+constexpr GuiColor kTransientPlayheadColor  = kPlayheadColor;
 
 // Unsaved-work dialog palette: panel = the waveform-dim tone; button =
 // the flag-highlight tone; focus = the playhead/selected yellow. Text
@@ -1597,8 +1599,10 @@ int main(int argc, char** argv) {
             if (rects_intersect(exposed, area) ||
                 rects_intersect(exposed, top_strip)) {
                 const auto p0 = clock::now();
-                const GuiColor ph_color = (app.active_mode == 'T')
-                    ? kTransientPlayheadColor : kPlayheadColor;
+                const GuiColor ph_color = app.render_view_enabled
+                    ? kRenderViewMarkerColor
+                    : (app.active_mode == 'T'
+                        ? kTransientPlayheadColor : kPlayheadColor);
                 render_playhead(cr, area, px_x, ph_color);
                 const auto p1 = clock::now();
                 t_playhead_ms =
