@@ -1204,6 +1204,11 @@ int main(int argc, char** argv) {
 
     auto trim_range = [&]() -> std::pair<int64_t, int64_t> {
         if (audio.total_frames() <= 0) return {0, 0};
+        if (app.render_view_enabled) {
+            return compute_trim_samples(
+                app.render_view_markers, app.render_view_transients,
+                audio.sample_rate(), audio.total_frames());
+        }
         return compute_trim_samples(
             app.markers.markers(), app.transients.markers(),
             audio.sample_rate(), audio.total_frames());
