@@ -35,11 +35,11 @@ struct TrimRange {
 // Brief H palette: bases shared across the renderer module and
 // gui_main.cpp. kPlayhead is the foreground reference and must never be
 // passed to dim() — preserve that invariant in subsequent phases.
-inline constexpr GuiColor kBackground = {0.10, 0.10, 0.12};
-inline constexpr GuiColor kWaveform   = {0.55, 0.75, 0.90};
-inline constexpr GuiColor kMarker     = {0.30, 0.28, 0.22};
-inline constexpr GuiColor kPlayhead   = {0.95, 0.85, 0.35};
-inline constexpr GuiColor kAccent     = {0.75, 0.20, 0.18};
+inline constexpr GuiColor kBackground = {0.14, 0.15, 0.15};
+inline constexpr GuiColor kWaveform   = {0.75, 0.80, 0.81};
+inline constexpr GuiColor kMarker     = {0.24, 0.68, 0.91};
+inline constexpr GuiColor kPlayhead   = {0.10, 0.74, 0.61};
+inline constexpr GuiColor kAccent     = {0.93, 0.08, 0.08};
 inline constexpr GuiColor kText       = {0.99, 0.99, 0.99};
 
 // Half-blend toward background. The single derivation function for
@@ -112,31 +112,25 @@ void render_timestamp(cairo_t* cr,
 // Draws vertical 1-pixel lines across `waveform_area` for each marker whose
 // resolved sample falls inside [viewport_start_sample, viewport_end_sample).
 // Effective disabled state is computed inline from the marker list (a label
-// reference inherits the disabled flag of its defining marker). Markers whose
-// indices appear in `selected_set` paint in `selected_color`; if such a
-// marker is also effectively disabled, the selected color is dimmed.
-// `last_selected` is unused by this renderer (flag-only visual) but kept in
-// the signature for symmetry with render_flags.
+// reference inherits the disabled flag of its defining marker). Disabled
+// markers are skipped entirely; selection has no effect on stems under the
+// brief H palette rules.
 void render_markers(cairo_t* cr,
                     GuiRect waveform_area,
                     const std::vector<GuiMarker>& markers,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
-                    GuiColor enabled_color,
-                    GuiColor disabled_color,
-                    GuiColor selected_color,
                     const std::set<int>& selected_set,
-                    int last_selected,
                     const TrimRange& trim);
 
 // Editor overlay used by V.A1's top-flag editor. When `marker_index >= 0`
 // and matches a flag the renderer is about to draw, that flag's text is
-// replaced with `pending` and the background paints either highlight or
-// `red_color` depending on `is_red`. A 1px-wide cursor is drawn at the
-// x-position corresponding to `cursor_pos` (byte index into `pending`).
-// `cursor_visible` toggles the bar on/off for blink. Pass marker_index =
-// -1 to disable the overlay (normal rendering).
+// replaced with `pending` and the background paints either kMarker (normal)
+// or kAccent (when `is_red` indicates parse failure). A 1px-wide cursor is
+// drawn at the x-position corresponding to `cursor_pos` (byte index into
+// `pending`). `cursor_visible` toggles the bar on/off for blink. Pass
+// marker_index = -1 to disable the overlay (normal rendering).
 //
 // V.B Addendum 2: `iter_editor_target` carries the marker index whose
 // iteration popup (drawn above the flag strip) currently owns the
@@ -151,7 +145,6 @@ struct FlagEditorOverlay {
     int         cursor_pos         = 0;
     bool        is_red             = false;
     bool        cursor_visible     = false;
-    GuiColor    red_color          = {0.75, 0.20, 0.18};
 };
 
 // Draws flag annotations in `top_strip_area` above visible markers. Iterates
@@ -174,24 +167,17 @@ struct FlagEditorOverlay {
 // selection fill is suppressed so the iter popup above it owns the
 // highlight exclusively.
 //
-// `enabled_color`, `disabled_color`, `selected_color`, `highlight_color`,
-// and `last_selected` are unused under the new palette and remain in the
-// signature only until the phase 6 cleanup. Disabled markers render
-// identically to enabled markers in the top strip; the only disabled
-// signal lives in the marker stem (handled by `render_markers`).
+// Disabled markers render identically to enabled markers in the top strip;
+// the only disabled signal lives in the marker stem (handled by
+// `render_markers`).
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
                   const std::vector<GuiMarker>& markers,
                   long long viewport_start_sample,
                   long long viewport_end_sample,
                   int sample_rate,
-                  GuiColor enabled_color,
-                  GuiColor disabled_color,
-                  GuiColor selected_color,
-                  GuiColor highlight_color,
                   double font_size,
                   const std::set<int>& selected_set,
-                  int last_selected,
                   const TrimRange& trim,
                   const FlagEditorOverlay& editor = {});
 
@@ -218,11 +204,7 @@ void render_transient_markers(cairo_t* cr,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
-                              GuiColor enabled_color,
-                              GuiColor disabled_color,
-                              GuiColor selected_color,
                               const std::set<int>& selected_set,
-                              int last_selected,
                               const TrimRange& trim);
 
 // Flag text for transients is `[b=|e=]<status>` where status is `I`
@@ -232,23 +214,15 @@ void render_transient_markers(cairo_t* cr,
 //   1. Not selected: text in `kText`, no background fill.
 //   2. Selected: background fill in `kMarker`, text in `kText`.
 // Markers whose effective_frame lies outside `trim` wrap every color in
-// `dim()` uniformly. As with `render_flags`, `enabled_color`,
-// `disabled_color`, `selected_color`, `highlight_color`, and
-// `last_selected` are unused under the new palette and remain in the
-// signature only until the phase 6 cleanup.
+// `dim()` uniformly.
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
                             const std::vector<GuiTransient>& transients,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
-                            GuiColor enabled_color,
-                            GuiColor disabled_color,
-                            GuiColor selected_color,
-                            GuiColor highlight_color,
                             double font_size,
                             const std::set<int>& selected_set,
-                            int last_selected,
                             const TrimRange& trim);
 
 std::vector<FlagHitRect> compute_transient_flag_hit_rects(
@@ -275,10 +249,6 @@ double resolve_inherited_tempo(const std::vector<GuiMarker>& markers, int index)
 // inherited source, or "" if none.
 std::string resolve_inherited_tempo_scale(
     const std::vector<GuiMarker>& markers, int index);
-
-// Draws the dirty-state indicator (a small filled circle) at (cx, cy).
-void render_dirty_indicator(cairo_t* cr, double cx, double cy,
-                            GuiColor color);
 
 // Returns the pixel width of the baseline-style monospace timestamp at the
 // size used by render_timestamp. Needed so callers can position adjacent UI.

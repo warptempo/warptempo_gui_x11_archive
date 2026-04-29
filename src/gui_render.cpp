@@ -305,15 +305,8 @@ void render_markers(cairo_t* cr,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
-                    GuiColor enabled_color,
-                    GuiColor disabled_color,
-                    GuiColor selected_color,
                     const std::set<int>& selected_set,
-                    int /*last_selected*/,
                     const TrimRange& trim) {
-    (void)enabled_color;
-    (void)disabled_color;
-    (void)selected_color;
     (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
@@ -423,20 +416,10 @@ void render_flags(cairo_t* cr,
                   long long viewport_start_sample,
                   long long viewport_end_sample,
                   int sample_rate,
-                  GuiColor enabled_color,
-                  GuiColor disabled_color,
-                  GuiColor selected_color,
-                  GuiColor highlight_color,
                   double font_size,
                   const std::set<int>& selected_set,
-                  int last_selected,
                   const TrimRange& trim,
                   const FlagEditorOverlay& editor) {
-    (void)enabled_color;
-    (void)disabled_color;
-    (void)selected_color;
-    (void)highlight_color;
-    (void)last_selected;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -644,15 +627,8 @@ void render_transient_markers(cairo_t* cr,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
-                              GuiColor enabled_color,
-                              GuiColor disabled_color,
-                              GuiColor selected_color,
                               const std::set<int>& selected_set,
-                              int /*last_selected*/,
                               const TrimRange& trim) {
-    (void)enabled_color;
-    (void)disabled_color;
-    (void)selected_color;
     (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
@@ -704,19 +680,9 @@ void render_transient_flags(cairo_t* cr,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
-                            GuiColor enabled_color,
-                            GuiColor disabled_color,
-                            GuiColor selected_color,
-                            GuiColor highlight_color,
                             double font_size,
                             const std::set<int>& selected_set,
-                            int last_selected,
                             const TrimRange& trim) {
-    (void)enabled_color;
-    (void)disabled_color;
-    (void)selected_color;
-    (void)highlight_color;
-    (void)last_selected;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -801,15 +767,6 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
 
     cairo_restore(cr);
     return out;
-}
-
-void render_dirty_indicator(cairo_t* cr, double cx, double cy,
-                            GuiColor color) {
-    cairo_save(cr);
-    cairo_set_source_rgb(cr, color.r, color.g, color.b);
-    cairo_arc(cr, cx, cy, 3.0, 0.0, 6.283185307179586);
-    cairo_fill(cr);
-    cairo_restore(cr);
 }
 
 double measure_timestamp_width(cairo_t* cr, double seconds) {

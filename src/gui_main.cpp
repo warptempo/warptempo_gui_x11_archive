@@ -43,46 +43,7 @@ constexpr int      kProgressBarHeight = 4;
 constexpr double   kTopStripRatio     = 0.10;
 constexpr double   kBottomStripRatio  = 0.10;
 constexpr int      kChannelGapPx      = 2;
-constexpr GuiColor kWaveformColor     = {0.55, 0.75, 0.90};
-constexpr GuiColor kWaveformDimColor  = {0.30, 0.38, 0.45};
-constexpr GuiColor kPlayheadColor     = {0.95, 0.85, 0.35};
-constexpr GuiColor kTimestampColor    = {0.80, 0.80, 0.82};
-constexpr GuiColor kMarkerColor       = {0.85, 0.82, 0.78};
-constexpr GuiColor kMarkerDimColor    = {0.45, 0.42, 0.40};
-constexpr GuiColor kSelectedColor     = kPlayheadColor;
-constexpr GuiColor kFlagHighlightColor= {0.30, 0.28, 0.22};
-constexpr GuiColor kDirtyColor        = {0.90, 0.65, 0.35};
 constexpr double   kFlagFontSize      = 13.0;
-
-// Chunk W: render-view marker / flag color. Dark blue per the brief —
-// visually distinct from authoring yellow (kMarkerColor) so the read
-// -only state is unambiguous. No dim variant — label-cascade is
-// disabled in render-view. The selected variant is a brighter sky-tint
-// distinguishable from both the unselected dark blue, the yellow
-// playhead, and the waveform background.
-constexpr GuiColor kRenderViewMarkerColor         = {0.30, 0.45, 0.85};
-constexpr GuiColor kRenderViewMarkerSelectedColor = {0.55, 0.78, 1.00};
-
-// Transient-mode color set. Magenta palette — hue-distant from warp
-// yellow, render-view dark blue, waveform blue, and the editor's
-// parse-failure red. kTransientPlayheadColor aliases kPlayheadColor so
-// the authoring playhead is mode-invariant; render-view's playhead is
-// the only context where the playhead color differs (dark blue, set
-// inline at the playhead-render call site).
-constexpr GuiColor kTransientColor          = {0.85, 0.45, 0.95};
-constexpr GuiColor kTransientDimColor       = {0.42, 0.22, 0.47};
-constexpr GuiColor kTransientSelectedColor  = {0.95, 0.65, 1.00};
-constexpr GuiColor kTransientHighlightColor = {0.40, 0.20, 0.45};
-constexpr GuiColor kTransientPlayheadColor  = kPlayheadColor;
-
-// Unsaved-work dialog palette: panel = the waveform-dim tone; button =
-// the flag-highlight tone; focus = the playhead/selected yellow. Text
-// reuses the marker text color so it stays legible on both panel and
-// button backgrounds.
-constexpr GuiColor kDialogTextColor   = kMarkerColor;
-constexpr GuiColor kDialogPanelColor  = kWaveformDimColor;
-constexpr GuiColor kDialogButtonColor = kFlagHighlightColor;
-constexpr GuiColor kDialogFocusColor  = {0.55, 0.45, 0.20};
 
 // Half-width in pixels of the selection-hit window when clicking on a marker.
 constexpr int kMarkerHitHalfPx = 3;
@@ -1575,28 +1536,18 @@ int main(int argc, char** argv) {
                     // visual-only — it does not flow into commit.
                     render_markers(cr, area, app.render_view_markers,
                                    vp_start, vp_end, sr,
-                                   kRenderViewMarkerColor,
-                                   kRenderViewMarkerColor,
-                                   kRenderViewMarkerSelectedColor,
                                    app.render_view_selected_markers,
-                                   app.render_view_last_selected_marker,
                                    trim_struct);
                 } else if (app.active_mode == 'T') {
                     render_transient_markers(
                         cr, area, app.transients.markers(),
                         vp_start, vp_end, sr,
-                        kTransientColor, kTransientDimColor,
-                        kTransientSelectedColor,
                         app.selected_markers,
-                        app.last_selected_marker,
                         trim_struct);
                 } else {
                     render_markers(cr, area, app.markers.markers(),
                                    vp_start, vp_end, sr,
-                                   kMarkerColor, kMarkerDimColor,
-                                   kSelectedColor,
                                    app.selected_markers,
-                                   app.last_selected_marker,
                                    trim_struct);
                 }
                 const auto m1 = clock::now();
@@ -1629,13 +1580,8 @@ int main(int argc, char** argv) {
                     // being forced false on entry to render-view.
                     render_flags(cr, top_strip, app.render_view_markers,
                                  vp_start, vp_end, sr,
-                                 kRenderViewMarkerColor,
-                                 kRenderViewMarkerColor,
-                                 kRenderViewMarkerSelectedColor,
-                                 kFlagHighlightColor,
                                  kFlagFontSize,
                                  app.render_view_selected_markers,
-                                 app.render_view_last_selected_marker,
                                  trim_struct,
                                  FlagEditorOverlay{});
 
@@ -1694,11 +1640,8 @@ int main(int argc, char** argv) {
                     render_transient_flags(
                         cr, top_strip, app.transients.markers(),
                         vp_start, vp_end, sr,
-                        kTransientColor, kTransientDimColor,
-                        kTransientSelectedColor, kTransientHighlightColor,
                         kFlagFontSize,
                         app.selected_markers,
-                        app.last_selected_marker,
                         trim_struct);
                 } else {
                     FlagEditorOverlay overlay;
@@ -1726,11 +1669,8 @@ int main(int argc, char** argv) {
                     }
                     render_flags(cr, top_strip, app.markers.markers(),
                                  vp_start, vp_end, sr,
-                                 kMarkerColor, kMarkerDimColor,
-                                 kSelectedColor, kFlagHighlightColor,
                                  kFlagFontSize,
                                  app.selected_markers,
-                                 app.last_selected_marker,
                                  trim_struct,
                                  overlay);
 
