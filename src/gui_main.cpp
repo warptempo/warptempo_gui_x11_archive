@@ -1603,11 +1603,7 @@ int main(int argc, char** argv) {
             if (rects_intersect(exposed, area) ||
                 rects_intersect(exposed, top_strip)) {
                 const auto p0 = clock::now();
-                const GuiColor ph_color = app.render_view_enabled
-                    ? kRenderViewMarkerColor
-                    : (app.active_mode == 'T'
-                        ? kTransientPlayheadColor : kPlayheadColor);
-                render_playhead(cr, area, px_x, ph_color);
+                render_playhead(cr, area, px_x, kPlayhead);
                 const auto p1 = clock::now();
                 t_playhead_ms =
                     std::chrono::duration<double, std::milli>(p1 - p0).count();
@@ -1925,7 +1921,7 @@ int main(int argc, char** argv) {
                 {
                     const auto s0 = clock::now();
                     render_timestamp(cr, kTimestampPadX, baseline_y,
-                                     seconds, kTimestampColor);
+                                     seconds, kText);
                     const auto s1 = clock::now();
                     t_ts_ms =
                         std::chrono::duration<double, std::milli>(s1 - s0).count();
@@ -1944,8 +1940,7 @@ int main(int argc, char** argv) {
                         kTabLetterGapPx;
                     const char letter_buf[2] = { app.active_tab, '\0' };
                     cairo_save(cr);
-                    cairo_set_source_rgb(cr, kTimestampColor.r,
-                                         kTimestampColor.g, kTimestampColor.b);
+                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
@@ -1960,11 +1955,16 @@ int main(int argc, char** argv) {
 
                 if (app.dirty) {
                     const auto d0 = clock::now();
-                    const double cx = right_after_letter +
-                                      kTabLetterGapPx + 3.0;
-                    const double cy =
-                        static_cast<double>(baseline_y) - 5.0;
-                    render_dirty_indicator(cr, cx, cy, kDirtyColor);
+                    const double cx = right_after_letter + kTabLetterGapPx;
+                    cairo_save(cr);
+                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
+                    cairo_select_font_face(cr, "monospace",
+                                           CAIRO_FONT_SLANT_NORMAL,
+                                           CAIRO_FONT_WEIGHT_NORMAL);
+                    cairo_set_font_size(cr, 14.0);
+                    cairo_move_to(cr, cx, baseline_y);
+                    cairo_show_text(cr, "*");
+                    cairo_restore(cr);
                     const auto d1 = clock::now();
                     t_dirty_ms =
                         std::chrono::duration<double, std::milli>(d1 - d0).count();
@@ -1985,9 +1985,7 @@ int main(int argc, char** argv) {
                         e.batch_folder.filename().string() + "/" +
                         e.basename + ".wav";
                     cairo_save(cr);
-                    cairo_set_source_rgb(cr, kRenderViewMarkerColor.r,
-                                         kRenderViewMarkerColor.g,
-                                         kRenderViewMarkerColor.b);
+                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
