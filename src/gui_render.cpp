@@ -432,7 +432,11 @@ void render_flags(cairo_t* cr,
                   int last_selected,
                   const TrimRange& trim,
                   const FlagEditorOverlay& editor) {
-    (void)trim;
+    (void)enabled_color;
+    (void)disabled_color;
+    (void)selected_color;
+    (void)highlight_color;
+    (void)last_selected;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -444,10 +448,8 @@ void render_flags(cairo_t* cr,
     cairo_set_font_size(cr, font_size);
 
     const double hl_pad = 2.0;
+    const double sr_d   = static_cast<double>(sample_rate);
 
-    // Canonical measurement: covers the longest valid payload glyphs so
-    // every flag's background rectangle uses the same y/height regardless
-    // of the flag's own text extents.
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
@@ -456,39 +458,29 @@ void render_flags(cairo_t* cr,
                           sample_rate,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
-            const bool is_selected = selected_set.count(i) > 0;
-            // Suppress the last-selected highlight on the flag whose iter
-            // popup currently owns the editor: the highlight must be
-            // exclusive to the focused rect, not shared by both rects of
-            // the same marker.
+            // V.B Addendum 2: when the iter popup above this flag owns
+            // the editor, suppress the flag's selection fill so the
+            // focused element (the iter popup) is the only one filled.
             const bool is_iter_focus = (i == editor.iter_editor_target);
-            const bool is_last     =
-                (i == last_selected) && is_selected && !is_iter_focus;
-            const bool dis         = effective_disabled(markers, i);
-            const bool is_editing  = (i == editor.marker_index);
+            const bool is_selected   =
+                !is_iter_focus && selected_set.count(i) > 0;
+            const bool is_editing    = (i == editor.marker_index);
+            const bool is_parse_fail = is_editing && editor.is_red;
 
-            // Pick what to draw: editing rect uses `pending` and may go
-            // wider than the original flag (no width cap — overlap is
-            // accepted per V.A1).
+            const int64_t source_pos =
+                static_cast<int64_t>(markers[i].time_seconds * sr_d);
+            const bool out_of_trim = marker_out_of_trim(source_pos, trim);
+
             std::string draw_text = is_editing ? editor.pending : text;
             cairo_text_extents_t draw_ext = ext;
             if (is_editing) {
                 cairo_text_extents(cr, draw_text.c_str(), &draw_ext);
             }
 
-            // Background rect: editor → highlight or red; otherwise the
-            // last-selected flag gets the highlight color.
-            const bool draw_bg = is_editing || is_last;
-            if (draw_bg) {
-                if (is_editing && editor.is_red) {
-                    cairo_set_source_rgb(cr,
-                                         editor.red_color.r,
-                                         editor.red_color.g,
-                                         editor.red_color.b);
-                } else {
-                    cairo_set_source_rgb(cr, highlight_color.r,
-                                         highlight_color.g, highlight_color.b);
-                }
+            if (is_selected) {
+                GuiColor fill = is_parse_fail ? kAccent : kMarker;
+                if (out_of_trim) fill = dim(fill);
+                cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
                 cairo_rectangle(cr,
                                 text_left,
                                 baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
@@ -497,17 +489,12 @@ void render_flags(cairo_t* cr,
                 cairo_fill(cr);
             }
 
-            GuiColor c = is_selected ? selected_color
-                                     : (dis ? disabled_color : enabled_color);
-            if (is_selected && dis) {
-                c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
-            }
-            cairo_set_source_rgb(cr, c.r, c.g, c.b);
+            const GuiColor txt = out_of_trim ? dim(kText) : kText;
+            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
             cairo_move_to(cr, text_left + hl_pad, baseline_y);
             cairo_show_text(cr, draw_text.c_str());
 
             if (is_editing && editor.cursor_visible) {
-                // Cursor: 1px vertical bar at byte offset `cursor_pos`.
                 double cursor_x_offset = 0.0;
                 if (editor.cursor_pos > 0) {
                     cairo_text_extents_t pext;
@@ -519,7 +506,7 @@ void render_flags(cairo_t* cr,
                 }
                 const double cur_x =
                     text_left + hl_pad + cursor_x_offset;
-                cairo_set_source_rgb(cr, c.r, c.g, c.b);
+                cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
                 cairo_set_line_width(cr, 1.0);
                 cairo_move_to(cr, std::round(cur_x) + 0.5,
                               baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx);
@@ -725,7 +712,11 @@ void render_transient_flags(cairo_t* cr,
                             const std::set<int>& selected_set,
                             int last_selected,
                             const TrimRange& trim) {
-    (void)trim;
+    (void)enabled_color;
+    (void)disabled_color;
+    (void)selected_color;
+    (void)highlight_color;
+    (void)last_selected;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -747,12 +738,12 @@ void render_transient_flags(cairo_t* cr,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
             const bool is_selected = selected_set.count(i) > 0;
-            const bool is_last     = (i == last_selected) && is_selected;
-            const bool dis         = transients[i].disabled;
+            const bool out_of_trim =
+                marker_out_of_trim(transients[i].effective_frame(), trim);
 
-            if (is_last) {
-                cairo_set_source_rgb(cr, highlight_color.r,
-                                     highlight_color.g, highlight_color.b);
+            if (is_selected) {
+                const GuiColor fill = out_of_trim ? dim(kMarker) : kMarker;
+                cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
                 cairo_rectangle(cr,
                                 text_left,
                                 baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
@@ -761,12 +752,8 @@ void render_transient_flags(cairo_t* cr,
                 cairo_fill(cr);
             }
 
-            GuiColor c = is_selected ? selected_color
-                                     : (dis ? disabled_color : enabled_color);
-            if (is_selected && dis) {
-                c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
-            }
-            cairo_set_source_rgb(cr, c.r, c.g, c.b);
+            const GuiColor txt = out_of_trim ? dim(kText) : kText;
+            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
             cairo_move_to(cr, text_left + hl_pad, baseline_y);
             cairo_show_text(cr, text.c_str());
             if constexpr (kDebugPerf) perf_counters::flag_drawn++;

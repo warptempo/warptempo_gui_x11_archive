@@ -1668,11 +1668,16 @@ int main(int argc, char** argv) {
                                 }
                             }
                             if (anchor.w > 0 && anchor.h > 0) {
+                                const int64_t pos = static_cast<int64_t>(
+                                    mv[hidx].time_seconds *
+                                    static_cast<double>(sr));
+                                const bool oot =
+                                    marker_out_of_trim(pos, trim_struct);
                                 gui_text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = app.hover_popup.cached_text;
                                 td.visible  = true;
-                                td.color    = kRenderViewMarkerColor;
+                                td.color    = oot ? dim(kText) : kText;
                                 td.position =
                                     gui_text_display::Position::Top;
                                 gui_text_display::render(cr, td,
@@ -1760,11 +1765,16 @@ int main(int argc, char** argv) {
                                 }
                             }
                             if (anchor.w > 0 && anchor.h > 0) {
+                                const int64_t pos = static_cast<int64_t>(
+                                    mv[hidx].time_seconds *
+                                    static_cast<double>(sr));
+                                const bool oot =
+                                    marker_out_of_trim(pos, trim_struct);
                                 gui_text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = app.hover_popup.cached_text;
                                 td.visible  = true;
-                                td.color    = kMarkerColor;
+                                td.color    = oot ? dim(kText) : kText;
                                 td.position =
                                     gui_text_display::Position::Top;
                                 gui_text_display::render(cr, td,
@@ -1801,13 +1811,18 @@ int main(int argc, char** argv) {
                                 h.flag_rect.w,
                                 h.flag_rect.h
                             };
+                            const int64_t pos = static_cast<int64_t>(
+                                mv[h.marker_index].time_seconds *
+                                static_cast<double>(sr));
+                            const bool oot =
+                                marker_out_of_trim(pos, trim_struct);
                             if (editor_on_iter &&
                                 app.top_flag_editor.target == h.marker_index) {
-                                // Editor overlay: paint a background swatch
-                                // (red on parse failure, otherwise the
-                                // standard flag highlight) under the popup,
-                                // render the editor's pending text in place
-                                // of the formatted iter text, then a cursor.
+                                // Editor branch: state 2/3 of the three-state
+                                // model. Background fills with kAccent on
+                                // parse failure, otherwise kMarker; text and
+                                // (blink-gated) cursor in kText. Out-of-trim
+                                // wraps every color in dim() uniformly.
                                 const std::string& pending =
                                     app.top_flag_editor.pending;
                                 cairo_save(cr);
@@ -1820,50 +1835,34 @@ int main(int argc, char** argv) {
                                 cairo_text_extents_t uext;
                                 cairo_text_extents(cr, "[+0.00,+0.00]", &uext);
                                 const double hl_pad = 2.0;
-                                // Edit field tracks the pending text width
-                                // plus the rendered popup's horizontal pad,
-                                // so trailing whitespace doesn't appear at
-                                // the right edge during edit.
                                 const double bg_w =
                                     pext.x_advance + 2.0 * hl_pad;
-                                // Place the bg rect to mirror render_flags:
-                                // top-left = (anchor.x - hl_pad,
-                                //             anchor.y - gap - flag.h).
                                 const double bg_x =
                                     static_cast<double>(anchor.x) - hl_pad;
                                 const double bg_y =
                                     static_cast<double>(h.hit_rect.y);
                                 const double bg_h =
                                     static_cast<double>(h.hit_rect.h);
-                                const GuiColor bg_col =
-                                    app.top_flag_editor.red
-                                        ? GuiColor{0.75, 0.20, 0.18}
-                                        : kFlagHighlightColor;
+                                GuiColor bg_col = app.top_flag_editor.red
+                                    ? kAccent : kMarker;
+                                if (oot) bg_col = dim(bg_col);
                                 cairo_set_source_rgb(cr,
                                     bg_col.r, bg_col.g, bg_col.b);
                                 cairo_rectangle(cr, bg_x, bg_y, bg_w, bg_h);
                                 cairo_fill(cr);
 
-                                // Render pending text at the popup baseline.
-                                // The kVPadExtraPx subtraction matches the
-                                // popup's own top/bottom inner padding so
-                                // the visible gap between the iter popup's
-                                // bottom edge and the flag rect's top edge
-                                // stays at kIterPopupVerticalGapPx after
-                                // both rects grew by the addendum's +1px.
                                 const double baseline_y =
                                     static_cast<double>(anchor.y)
                                   - kIterPopupVerticalGapPx
                                   - kIterPopupVPadExtraPx
                                   - (uext.height + uext.y_bearing);
+                                const GuiColor txt = oot ? dim(kText) : kText;
                                 cairo_set_source_rgb(cr,
-                                    kMarkerColor.r, kMarkerColor.g,
-                                    kMarkerColor.b);
+                                    txt.r, txt.g, txt.b);
                                 cairo_move_to(cr,
                                     static_cast<double>(anchor.x), baseline_y);
                                 cairo_show_text(cr, pending.c_str());
 
-                                // 1-px cursor at the cursor_pos byte offset.
                                 if (gui_text_editor::cursor_visible_now(
                                         app.top_flag_editor)) {
                                     std::string left = pending.substr(
@@ -1874,6 +1873,8 @@ int main(int argc, char** argv) {
                                     const double cx =
                                         static_cast<double>(anchor.x) +
                                         lext.x_advance;
+                                    cairo_set_source_rgb(cr,
+                                        txt.r, txt.g, txt.b);
                                     cairo_set_line_width(cr, 1.0);
                                     cairo_move_to(cr, cx, bg_y);
                                     cairo_line_to(cr, cx, bg_y + bg_h);
@@ -1885,7 +1886,7 @@ int main(int argc, char** argv) {
                                 td.anchor   = anchor;
                                 td.content  = h.text;
                                 td.visible  = true;
-                                td.color    = kMarkerColor;
+                                td.color    = oot ? dim(kText) : kText;
                                 td.position =
                                     gui_text_display::Position::Top;
                                 gui_text_display::render(cr, td,

@@ -159,10 +159,26 @@ struct FlagEditorOverlay {
 // with the previously-rendered flag's right edge (+ small pad). Flag text
 // is the canonical post-pipe payload: owned tempo `1.28`, owned+scale
 // `1.28*1.2345`, owned+def `1.28:a.01`, owned+scale+def `1.28*1.2345:a.01`,
-// inherit `pass`, label reference `a.01`. Flags whose indices appear in
-// `selected_set` paint text in `selected_color`; only the `last_selected`
-// flag (if rendered and in the set) gets the background highlight
-// rectangle in `highlight_color`.
+// inherit `pass`, label reference `a.01`.
+//
+// Brief H three-state model: each flag renders in one of three states.
+//   1. Not selected: text in `kText`, no background fill.
+//   2. Selected, editor not engaged: background fill in `kMarker`, text
+//      in `kText`. No cursor.
+//   3. Selected, editor engaged: state 2 plus a 1-px blinking cursor.
+// Parse-fail variant of state 2/3: fill is `kAccent` instead of `kMarker`.
+// Markers whose source-frame position lies outside `trim` wrap every
+// color in `dim()` uniformly — no element of the flag escapes the dim.
+//
+// V.B Addendum 2: when `editor.iter_editor_target == i`, that flag's
+// selection fill is suppressed so the iter popup above it owns the
+// highlight exclusively.
+//
+// `enabled_color`, `disabled_color`, `selected_color`, `highlight_color`,
+// and `last_selected` are unused under the new palette and remain in the
+// signature only until the phase 6 cleanup. Disabled markers render
+// identically to enabled markers in the top strip; the only disabled
+// signal lives in the marker stem (handled by `render_markers`).
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
                   const std::vector<GuiMarker>& markers,
@@ -211,6 +227,15 @@ void render_transient_markers(cairo_t* cr,
 
 // Flag text for transients is `[b=|e=]<status>` where status is `I`
 // (inserted), `D` (detected), or `D*` (detected with user displacement).
+//
+// Brief H two-state model (no flag editor exists for transients):
+//   1. Not selected: text in `kText`, no background fill.
+//   2. Selected: background fill in `kMarker`, text in `kText`.
+// Markers whose effective_frame lies outside `trim` wrap every color in
+// `dim()` uniformly. As with `render_flags`, `enabled_color`,
+// `disabled_color`, `selected_color`, `highlight_color`, and
+// `last_selected` are unused under the new palette and remain in the
+// signature only until the phase 6 cleanup.
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
                             const std::vector<GuiTransient>& transients,
