@@ -992,8 +992,8 @@ GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x) {
 }
 
 GuiRect timestamp_invalidate_rect(int window_height, int window_width,
-                                  bool prompt_active) {
-    if (prompt_active) {
+                                  bool wide_strip) {
+    if (wide_strip) {
         return GuiRect{0, window_height - kTimestampRegionH,
                        window_width, kTimestampRegionH};
     }
@@ -1235,9 +1235,13 @@ int main(int argc, char** argv) {
         gui.invalidate_region(0, y0, app.width, y1 - y0);
     };
 
+    auto bottom_strip_wide = [&]() -> bool {
+        return app.prompt.active || !app.queue_progress_text.empty();
+    };
+
     auto invalidate_timestamp_area = [&]() {
         const GuiRect t = timestamp_invalidate_rect(
-            app.height, app.width, app.prompt.active);
+            app.height, app.width, bottom_strip_wide());
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
@@ -1927,7 +1931,7 @@ int main(int argc, char** argv) {
             // -view filename). The prompt is modal — while active, it
             // owns the strip and the regular elements are not visible.
             const GuiRect ts = timestamp_invalidate_rect(
-                app.height, app.width, app.prompt.active);
+                app.height, app.width, bottom_strip_wide());
             if (rects_intersect(exposed, ts)) {
                 const int baseline_y = app.height - kTimestampBaselineFromBottom;
                 if (app.prompt.active) {
@@ -2270,7 +2274,7 @@ int main(int argc, char** argv) {
 
     auto invalidate_dirty_and_timestamp = [&]() {
         const GuiRect t = timestamp_invalidate_rect(
-            app.height, app.width, app.prompt.active);
+            app.height, app.width, bottom_strip_wide());
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
