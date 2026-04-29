@@ -1221,6 +1221,13 @@ int main(int argc, char** argv) {
             if (r_old.w > 0) gui.invalidate_region(r_old.x, r_old.y, r_old.w, r_old.h);
             if (r_new.w > 0) gui.invalidate_region(r_new.x, r_new.y, r_new.w, r_new.h);
         }
+        // Brief E: playhead motion may flip a flag's outline on or off when
+        // the playhead column matches a marker column. The flag rect can
+        // extend well to the right of the playhead's 17-px invalidate band,
+        // so the top strip must be invalidated separately to repaint the
+        // affected flag(s) cleanly.
+        const GuiRect ts = top_strip_area(app);
+        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
     };
 
     // V.A3b Addendum 3: forward-declared so the viewport-mutator lambdas
@@ -1552,6 +1559,11 @@ int main(int argc, char** argv) {
                     std::chrono::duration<double, std::milli>(m1 - m0).count();
             }
 
+            // Brief E: precompute the playhead's pixel column so flag
+            // renderers can light the outline of the marker the playhead
+            // sits on. Same value is reused by render_playhead below.
+            const double px_x = playhead_pixel_x(app, audio);
+
             // Flag annotations in the top strip.
             if (rects_intersect(exposed, top_strip)) {
                 const auto f0 = clock::now();
@@ -1566,6 +1578,7 @@ int main(int argc, char** argv) {
                                  kFlagFontSize,
                                  app.render_view_selected_markers,
                                  trim_struct,
+                                 px_x,
                                  FlagEditorOverlay{});
 
                     // V.A3b hover popup paint, render-view variant.
@@ -1626,7 +1639,8 @@ int main(int argc, char** argv) {
                         vp_start, vp_end, sr,
                         kFlagFontSize,
                         app.selected_markers,
-                        trim_struct);
+                        trim_struct,
+                        px_x);
                 } else {
                     FlagEditorOverlay overlay;
                     // Only the V.A1 FlagPayload kind paints into the flag
@@ -1656,6 +1670,7 @@ int main(int argc, char** argv) {
                                  kFlagFontSize,
                                  app.selected_markers,
                                  trim_struct,
+                                 px_x,
                                  overlay);
 
                     // V.A3b hover popup. Drawn on top of the flag strip,
@@ -1847,7 +1862,6 @@ int main(int argc, char** argv) {
             // strip, so render whenever either the waveform or top strip is
             // exposed; otherwise a flag-strip-only repaint would erase the
             // triangle.
-            const double px_x = playhead_pixel_x(app, audio);
             if (rects_intersect(exposed, area) ||
                 rects_intersect(exposed, top_strip)) {
                 const auto p0 = clock::now();

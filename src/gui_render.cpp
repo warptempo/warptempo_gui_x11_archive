@@ -439,6 +439,7 @@ void render_flags(cairo_t* cr,
                   double font_size,
                   const std::set<int>& selected_set,
                   const TrimRange& trim,
+                  double playhead_pixel_x,
                   const FlagEditorOverlay& editor) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
@@ -474,13 +475,18 @@ void render_flags(cairo_t* cr,
                 static_cast<int64_t>(markers[i].time_seconds * sr_d);
             const bool out_of_trim = marker_out_of_trim(source_pos, trim);
 
+            const int marker_col_px = static_cast<int>(std::round(text_left));
+            const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
+            const bool is_playhead_on =
+                playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
+
             std::string draw_text = is_editing ? editor.pending : text;
             cairo_text_extents_t draw_ext = ext;
             if (is_editing) {
                 cairo_text_extents(cr, draw_text.c_str(), &draw_ext);
             }
 
-            if (is_selected) {
+            if (is_selected || is_playhead_on) {
                 GuiColor stroke_col = is_parse_fail ? kAccent : kMarker;
                 if (out_of_trim) stroke_col = dim(stroke_col);
                 cairo_set_source_rgb(cr,
@@ -720,7 +726,8 @@ void render_transient_flags(cairo_t* cr,
                             int sample_rate,
                             double font_size,
                             const std::set<int>& selected_set,
-                            const TrimRange& trim) {
+                            const TrimRange& trim,
+                            double playhead_pixel_x) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -745,7 +752,12 @@ void render_transient_flags(cairo_t* cr,
             const bool out_of_trim =
                 marker_out_of_trim(transients[i].effective_frame(), trim);
 
-            if (is_selected) {
+            const int marker_col_px = static_cast<int>(std::round(text_left));
+            const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
+            const bool is_playhead_on =
+                playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
+
+            if (is_selected || is_playhead_on) {
                 const GuiColor stroke_col =
                     out_of_trim ? dim(kMarker) : kMarker;
                 cairo_set_source_rgb(cr,

@@ -200,6 +200,7 @@ void render_flags(cairo_t* cr,
                   double font_size,
                   const std::set<int>& selected_set,
                   const TrimRange& trim,
+                  double playhead_pixel_x,
                   const FlagEditorOverlay& editor = {});
 
 // Same greedy-pack and elision logic as render_flags, without drawing —
@@ -243,7 +244,8 @@ void render_transient_flags(cairo_t* cr,
                             int sample_rate,
                             double font_size,
                             const std::set<int>& selected_set,
-                            const TrimRange& trim);
+                            const TrimRange& trim,
+                            double playhead_pixel_x);
 
 std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_t* cr,
