@@ -1552,21 +1552,6 @@ int main(int argc, char** argv) {
                     std::chrono::duration<double, std::milli>(m1 - m0).count();
             }
 
-            // Playhead on top of the waveform, within the waveform area.
-            // The playhead's triangle indicator lives in the top strip so
-            // we must also render when only the top strip is exposed,
-            // otherwise a flag-strip-only repaint would erase the triangle.
-            const double px_x = playhead_pixel_x(app, audio);
-            if (rects_intersect(exposed, area) ||
-                rects_intersect(exposed, top_strip)) {
-                const auto p0 = clock::now();
-                render_playhead(cr, area, px_x, kPlayhead,
-                                gui.playhead_triangle_surface());
-                const auto p1 = clock::now();
-                t_playhead_ms =
-                    std::chrono::duration<double, std::milli>(p1 - p0).count();
-            }
-
             // Flag annotations in the top strip.
             if (rects_intersect(exposed, top_strip)) {
                 const auto f0 = clock::now();
@@ -1850,6 +1835,24 @@ int main(int argc, char** argv) {
                 const auto f1 = clock::now();
                 t_flags_ms =
                     std::chrono::duration<double, std::milli>(f1 - f0).count();
+            }
+
+            // Playhead drawn last so its stem and triangle paint over any
+            // marker connector pixels they share a column with — the brief
+            // mandates the playhead never be occluded by marker stems or
+            // flag annotations. The triangle indicator lives in the top
+            // strip, so render whenever either the waveform or top strip is
+            // exposed; otherwise a flag-strip-only repaint would erase the
+            // triangle.
+            const double px_x = playhead_pixel_x(app, audio);
+            if (rects_intersect(exposed, area) ||
+                rects_intersect(exposed, top_strip)) {
+                const auto p0 = clock::now();
+                render_playhead(cr, area, px_x, kPlayhead,
+                                gui.playhead_triangle_surface());
+                const auto p1 = clock::now();
+                t_playhead_ms =
+                    std::chrono::duration<double, std::milli>(p1 - p0).count();
             }
 
             // Bottom strip: either the prompt overlay (when active) or

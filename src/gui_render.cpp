@@ -28,7 +28,10 @@ constexpr double kVPadExtraPx = 1.0;
 // solidly inside the top-strip clip in every code path. The 12px figure also
 // matches the playhead's downward triangle height, leaving room for a future
 // stem connector between flag bottom and marker stem.
-constexpr double kFlagBottomLiftPx = 11.0;
+// Coupled with kMarkerConnectorRows below: if the flag lift changes, the
+// connector length should track it.
+constexpr double kFlagBottomLiftPx     = 11.0;
+constexpr double kMarkerConnectorRows  = 11.0;
 
 namespace {
 
@@ -325,7 +328,8 @@ void render_markers(cairo_t* cr,
     if (samples_per_pixel <= 0.0) return;
 
     const double sr = static_cast<double>(sample_rate);
-    const double y0 = static_cast<double>(waveform_area.y);
+    const double y_conn_top =
+        static_cast<double>(waveform_area.y) - kMarkerConnectorRows;
     const double y1 = static_cast<double>(waveform_area.y + waveform_area.h);
 
     cairo_save(cr);
@@ -350,7 +354,7 @@ void render_markers(cairo_t* cr,
                 (ms - static_cast<double>(viewport_start_sample))
                     / samples_per_pixel;
             const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
-            cairo_move_to(cr, x_px, y0);
+            cairo_move_to(cr, x_px, y_conn_top);
             cairo_line_to(cr, x_px, y1);
         }
         cairo_stroke(cr);
@@ -677,7 +681,8 @@ void render_transient_markers(cairo_t* cr,
     const double samples_per_pixel = span / static_cast<double>(waveform_area.w);
     if (samples_per_pixel <= 0.0) return;
 
-    const double y0 = static_cast<double>(waveform_area.y);
+    const double y_conn_top =
+        static_cast<double>(waveform_area.y) - kMarkerConnectorRows;
     const double y1 = static_cast<double>(waveform_area.y + waveform_area.h);
 
     cairo_save(cr);
@@ -703,7 +708,7 @@ void render_transient_markers(cairo_t* cr,
                 (ms - static_cast<double>(viewport_start_sample))
                     / samples_per_pixel;
             const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
-            cairo_move_to(cr, x_px, y0);
+            cairo_move_to(cr, x_px, y_conn_top);
             cairo_line_to(cr, x_px, y1);
         }
         cairo_stroke(cr);
