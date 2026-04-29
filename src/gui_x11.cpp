@@ -531,8 +531,14 @@ void GuiX11::run() {
 
 void GuiX11::drain_events() {
     if (!dpy_) return;
-    // XPending implicitly flushes the output buffer, so any invalidate_region
-    // calls made just before this become visible to the server here.
+    // Force a round-trip so any synthesized Expose events sent via
+    // invalidate_region (which uses XSendEvent and only XFlush) have
+    // come back into our input queue and are visible to XPending.
+    // Without this, drain_events called immediately after a series of
+    // invalidate_region calls can return without dispatching the
+    // synthesized expose, leaving the corresponding paints deferred
+    // until some later natural event arrival.
+    XSync(dpy_, False);
     while (XPending(dpy_) > 0) {
         XEvent ev;
         XNextEvent(dpy_, &ev);

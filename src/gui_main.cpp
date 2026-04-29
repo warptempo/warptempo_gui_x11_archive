@@ -668,6 +668,14 @@ struct AppState {
     bool queue_running           = false;
     bool queue_cancel_requested  = false;
 
+    // Non-interactive bottom-strip status text. Set by long-running
+    // operations (currently only the multi-render queue runner) so the
+    // user has visual feedback while no other UI is updating. Empty
+    // means "no status — render the timestamp normally." Mutually
+    // exclusive with prompt.active in practice (the queue runner can't
+    // fire while a prompt is up).
+    std::string queue_progress_text;
+
     // Chunk W: in-memory queue of pending renders. Ctrl+Alt+E pushes a
     // snapshot of the current authoring state onto the back of this list;
     // Ctrl+Alt+R consumes it, materializing one batch folder per execution
@@ -1943,6 +1951,16 @@ int main(int argc, char** argv) {
                         cairo_text_extents(cr, label.c_str(), &lext);
                         cursor_x += lext.x_advance + label_gap;
                     }
+                    cairo_restore(cr);
+                } else if (!app.queue_progress_text.empty()) {
+                    cairo_save(cr);
+                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
+                    cairo_select_font_face(cr, "monospace",
+                                           CAIRO_FONT_SLANT_NORMAL,
+                                           CAIRO_FONT_WEIGHT_NORMAL);
+                    cairo_set_font_size(cr, 14.0);
+                    cairo_move_to(cr, kTimestampPadX, baseline_y);
+                    cairo_show_text(cr, app.queue_progress_text.c_str());
                     cairo_restore(cr);
                 } else {
                     // In source-view, sr is the loaded file's sample rate
@@ -5522,6 +5540,90 @@ int main(int argc, char** argv) {
         gui.invalidate_region(0, 0, app.width, app.height);
     };
 
+    // Shared wheel handler covering source-view and render-view. Ctrl+Alt =
+    // fine-pan (2% of viewport), Alt = coarse-pan (10%), plain = zoom.
+    // Ctrl+wheel nudges selected markers in source-view; render-view is
+    // read-only so it passes allow_nudge=false and Ctrl+wheel becomes a
+    // silent no-op there.
+    auto handle_wheel = [&](unsigned int button,
+                            bool ctrl, bool alt,
+                            bool inside_waveform, bool inside_top,
+                            bool allow_nudge) {
+        if (!inside_waveform && !inside_top) return;
+        if (ctrl && alt) {
+            const int64_t step = std::max<int64_t>(
+                1, samples_visible(app, audio) / 50);
+            scroll_viewport(button == 4 ? -step : +step);
+            return;
+        }
+        if (ctrl) {
+            if (allow_nudge) {
+                nudge_selected_markers(button == 4 ? -1 : +1);
+            }
+            return;
+        }
+        if (alt) {
+            const int64_t step = std::max<int64_t>(
+                1, samples_visible(app, audio) / 10);
+            scroll_viewport(button == 4 ? -step : +step);
+            return;
+        }
+        if (button == 4) zoom_out();
+        else             zoom_in();
+    };
+
+    // Multi-render queue runner. Owns the queue_running / cancel-flag
+    // bookkeeping and per-entry progress display; the caller owns batch
+    // folder creation, RenderRequest construction, and the post-summary
+    // log. Returns rendered count and whether Esc cut the run short.
+    struct RenderBatchResult {
+        int  rendered  = 0;
+        bool cancelled = false;
+    };
+    auto run_render_batch =
+        [&](const std::vector<RenderRequest>& reqs,
+            const std::string& batch_label) -> RenderBatchResult {
+        RenderBatchResult result;
+        if (reqs.empty()) return result;
+
+        const int total = static_cast<int>(reqs.size());
+
+        app.queue_cancel_requested = false;
+        app.queue_running          = true;
+        clear_hover_popup();
+
+        for (int i = 0; i < total; ++i) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                          "%s: rendering %d of %d...",
+                          batch_label.c_str(), i + 1, total);
+            app.queue_progress_text = buf;
+            invalidate_dirty_and_timestamp();
+            // First drain surfaces the progress-text paint before the
+            // engine starts; otherwise the new "rendering K of N" only
+            // appears after the entry completes.
+            gui.drain_events();
+
+            if (do_render(reqs[i])) ++result.rendered;
+
+            // Second drain surfaces X events queued during the render —
+            // Esc presses, expose events. The cancel flag becomes
+            // visible to the next iteration through this drain.
+            gui.drain_events();
+            if (app.queue_cancel_requested) {
+                result.cancelled = true;
+                break;
+            }
+        }
+
+        app.queue_running          = false;
+        app.queue_cancel_requested = false;
+        app.queue_progress_text.clear();
+        invalidate_dirty_and_timestamp();
+
+        return result;
+    };
+
     gui.set_on_key([&](KeySym keysym, unsigned int mods) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
@@ -5802,11 +5904,8 @@ int main(int argc, char** argv) {
             for (int n = total; n >= 10; n /= 10) ++pad_width;
             if (pad_width > 9) pad_width = 9;
 
-            app.queue_cancel_requested = false;
-            app.queue_running          = true;
-            clear_hover_popup();
-            int rendered = 0;
-            bool cancelled = false;
+            std::vector<RenderRequest> reqs;
+            reqs.reserve(total);
             for (int i = 0; i < total; ++i) {
                 const auto& q = entries[i];
                 char num_buf[16];
@@ -5828,33 +5927,18 @@ int main(int argc, char** argv) {
                 }
                 req.batch_folder   = batch_folder.string();
                 req.batch_basename = num_buf;
-                if (do_render(req)) ++rendered;
-
-                // Surface any X events queued during the render (Esc
-                // presses, expose, etc.) so the cancel flag becomes
-                // visible to the next iteration. Mid-engine Esc presses
-                // surface here on the next iteration's drain.
-                gui.drain_events();
-                if (app.queue_cancel_requested) {
-                    const int remaining = total - (i + 1);
-                    std::fprintf(stderr,
-                        "warptempo_gui: render-all cancelled, %d entries "
-                        "remaining (dropped from queue)\n", remaining);
-                    cancelled = true;
-                    break;
-                }
+                reqs.push_back(std::move(req));
             }
-            app.queue_running          = false;
-            app.queue_cancel_requested = false;
 
-            if (cancelled) {
+            const auto result = run_render_batch(reqs, "render queue");
+            if (result.cancelled) {
                 std::fprintf(stderr,
                     "warptempo_gui: rendered %d of %d entries (cancelled)\n",
-                    rendered, total);
+                    result.rendered, total);
             } else {
                 std::fprintf(stderr,
                     "warptempo_gui: rendered %d of %d entries into %s\n",
-                    rendered, total,
+                    result.rendered, total,
                     batch_folder.filename().string().c_str());
             }
             return;
@@ -6384,20 +6468,9 @@ int main(int argc, char** argv) {
         // still runs in the motion handler against render_view_markers.
         if (app.render_view_enabled) {
             if (button == 4 || button == 5) {
-                if (!inside_waveform && !inside_top) return;
-                if (ctrl && !alt) return; // marker nudge — disallowed
-                if (ctrl && alt) {
-                    const int64_t step = std::max<int64_t>(
-                        1, samples_visible(app, audio) / 50);
-                    scroll_viewport(button == 4 ? -step : +step);
-                } else if (alt) {
-                    const int64_t step = std::max<int64_t>(
-                        1, samples_visible(app, audio) / 10);
-                    scroll_viewport(button == 4 ? -step : +step);
-                } else {
-                    if (button == 4) zoom_out();
-                    else             zoom_in();
-                }
+                handle_wheel(button, ctrl, alt,
+                             inside_waveform, inside_top,
+                             /*allow_nudge=*/false);
                 return;
             }
             if (button != 1) return;
@@ -6692,33 +6765,9 @@ int main(int argc, char** argv) {
                 }
             }
         } else if (button == 4 || button == 5) {
-            // Wheel is accepted in the waveform area and the top strip
-            // (V.A3b: users hover the strip for the popup, so Alt+wheel
-            // viewport-scroll and friends still need to fire there).
-            // Wheel in window margins outside both areas is ignored.
-            if (!inside_waveform && !inside_top) return;
-            if (ctrl && alt) {
-                // Ctrl+Alt+wheel fine-pan: 2% of visible viewport per tick.
-                const int64_t step = std::max<int64_t>(
-                    1, samples_visible(app, audio) / 50);
-                scroll_viewport(button == 4 ? -step : +step);
-                return;
-            }
-            if (ctrl) {
-                // Ctrl+wheel nudges selected markers by 1 source pixel.
-                // Up (button 4) = earlier, Down (button 5) = later, to
-                // match the Ctrl+Left / Ctrl+Right convention.
-                nudge_selected_markers(button == 4 ? -1 : +1);
-                return;
-            }
-            if (alt) {
-                const int64_t step = std::max<int64_t>(
-                    1, samples_visible(app, audio) / 10);
-                scroll_viewport(button == 4 ? -step : +step);
-            } else {
-                if (button == 4) zoom_out();
-                else             zoom_in();
-            }
+            handle_wheel(button, ctrl, alt,
+                         inside_waveform, inside_top,
+                         /*allow_nudge=*/true);
         }
     });
 
