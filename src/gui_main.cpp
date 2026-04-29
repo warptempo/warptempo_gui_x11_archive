@@ -705,6 +705,22 @@ struct AppState {
         std::filesystem::path batch_folder;     // <source_parent>/renders/<i>_<tag>
         std::string           basename;         // e.g. "01" (no extension)
         std::filesystem::path wav_path;         // batch_folder / (basename + ".wav")
+
+        // Brief F Section 4: per-entry persisted selection across
+        // render-view exit/enter and batch-nav. The four selection fields
+        // are valid only when the wav still has the same (size, mtime)
+        // as when stashed; mismatch on reload drops them silently.
+        std::set<int> persisted_selected_warp;
+        int           persisted_last_warp        = -1;
+        std::set<int> persisted_selected_trans;
+        int           persisted_last_trans       = -1;
+        // Sub-view restored alongside the selection. Persisted only when
+        // stat tuple matches; default 'W' otherwise.
+        char          persisted_sub_mode         = 'W';
+        // Stat-tuple key for selection validity. Captured when stashed,
+        // compared against the current file's stat on re-load.
+        uintmax_t     persisted_size             = 0;
+        int64_t       persisted_mtime            = 0;
     };
     std::vector<RenderViewEntry> render_view_list;
     int                          render_view_index = -1;     // -1 = unset
@@ -714,10 +730,21 @@ struct AppState {
     std::vector<GuiMarker>       render_view_markers;
     std::vector<GuiTransient>    render_view_transients;
     // Render-view marker selection (visual-only — never participates in
-    // the commit / undo paths). Cleared on Shift+Left/Right navigation
-    // and on render-view exit; not persisted across toggle cycles.
+    // the commit / undo paths). Stashed onto the active RenderViewEntry
+    // on render-view exit / batch-nav and restored from the destination
+    // entry on entry / batch-nav, gated by stat tuple.
     std::set<int>                render_view_selected_markers;
     int                          render_view_last_selected_marker = -1;
+    // Brief F Section 3: parallel selection set for the transient
+    // sub-view. Concurrent with the warp pair; the visible sub-view's
+    // pair drives input handling per render_view_sub_mode below.
+    std::set<int>                render_view_selected_transients;
+    int                          render_view_last_selected_transient = -1;
+    // Brief F Section 3: render-view-only sub-view flag. 'W' = the
+    // rendered warp markers list, 'T' = the rendered transient markers
+    // list. Reset to 'W' on render-view entry unless restored from the
+    // entry's persisted_sub_mode (Section 4). Plain `t` flips it.
+    char                         render_view_sub_mode = 'W';
     // Source-frame mapping of the current render: F_begin..F_end (source
     // sample-rate frames) is what the render's full audio covers. When the
     // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
@@ -1541,9 +1568,19 @@ int main(int argc, char** argv) {
                     // time_seconds (engine-written), so render_markers'
                     // usual ordering assumption holds. Selection is
                     // visual-only — it does not flow into commit.
-                    render_markers(cr, area, app.render_view_markers,
-                                   vp_start, vp_end, sr,
-                                   trim_struct);
+                    // Brief F Section 3: when sub-mode is 'T', paint the
+                    // render's transient list using the transient renderer
+                    // (matches source-view's transient appearance).
+                    if (app.render_view_sub_mode == 'T') {
+                        render_transient_markers(
+                            cr, area, app.render_view_transients,
+                            vp_start, vp_end, sr,
+                            trim_struct);
+                    } else {
+                        render_markers(cr, area, app.render_view_markers,
+                                       vp_start, vp_end, sr,
+                                       trim_struct);
+                    }
                 } else if (app.active_mode == 'T') {
                     render_transient_markers(
                         cr, area, app.transients.markers(),
@@ -1573,6 +1610,10 @@ int main(int argc, char** argv) {
                     // dark-blue otherwise). Iteration popups are
                     // suppressed by the iteration_mode_enabled toggle
                     // being forced false on entry to render-view.
+                    // Brief F Section 3: in transient sub-view there are
+                    // no flags and no popup-eligible markers — skip both
+                    // paints entirely.
+                    if (app.render_view_sub_mode != 'T') {
                     render_flags(cr, top_strip, app.render_view_markers,
                                  vp_start, vp_end, sr,
                                  kFlagFontSize,
@@ -1633,6 +1674,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    } // end if (sub_mode != 'T') — Brief F Section 3
                 } else if (app.active_mode == 'T') {
                     render_transient_flags(
                         cr, top_strip, app.transients.markers(),
@@ -4508,14 +4550,24 @@ int main(int argc, char** argv) {
         int best_hit = -1;
         int best_dist = kMarkerHitHalfPx + 1;
         const bool rv = app.render_view_enabled;
-        const int n = rv
-            ? static_cast<int>(app.render_view_markers.size())
-            : (app.active_mode == 'T')
-                ? static_cast<int>(app.transients.markers().size())
-                : static_cast<int>(app.markers.markers().size());
+        // Brief F Section 3: in render-view, the visible sub-view's
+        // list drives hit-testing. 'T' reads transient frames via
+        // effective_frame() (matching source-view's transient branch).
+        const bool rv_trans = rv && app.render_view_sub_mode == 'T';
+        const int n =
+            rv_trans
+                ? static_cast<int>(app.render_view_transients.size())
+                : rv
+                    ? static_cast<int>(app.render_view_markers.size())
+                    : (app.active_mode == 'T')
+                        ? static_cast<int>(app.transients.markers().size())
+                        : static_cast<int>(app.markers.markers().size());
         for (int i = 0; i < n; ++i) {
             double ms;
-            if (rv) {
+            if (rv_trans) {
+                ms = static_cast<double>(
+                    app.render_view_transients[i].effective_frame());
+            } else if (rv) {
                 ms = app.render_view_markers[i].time_seconds *
                      static_cast<double>(sr);
             } else if (app.active_mode == 'T') {
@@ -4540,6 +4592,13 @@ int main(int argc, char** argv) {
     // Hit-test a flag rectangle in the top strip. Returns marker index or -1.
     // Mode-aware: dispatches to the warp- or transient-flag pack.
     auto hit_test_flag = [&](int mouse_x, int mouse_y) -> int {
+        // Brief F Section 3: render-view's transient sub-view paints no
+        // flags; short-circuit to no-hit so click and hover paths see a
+        // bare top strip.
+        if (app.render_view_enabled &&
+            app.render_view_sub_mode == 'T') {
+            return -1;
+        }
         const GuiRect area = waveform_area(app);
         const GuiRect top  = top_strip_area(app);
         cairo_surface_t* scratch_s = cairo_image_surface_create(
@@ -5221,6 +5280,43 @@ int main(int argc, char** argv) {
         clamp_viewport_start(app, audio);
     };
 
+    // Brief F Section 4: capture (size, mtime_seconds) for a wav path.
+    // Errors → (0, 0), interpreted as "no valid stat tuple" by callers
+    // (forces a mismatch on compare). Uses stat() directly because
+    // C++17's std::filesystem::file_time_type isn't portably
+    // convertible to system_clock; stat's st_mtime is seconds-since-
+    // epoch, which is what the persisted field stores.
+    auto wav_stat_tuple =
+        [&](const std::filesystem::path& p) -> std::pair<uintmax_t, int64_t> {
+        struct stat st{};
+        if (::stat(p.c_str(), &st) != 0) return {0, 0};
+        return {static_cast<uintmax_t>(st.st_size),
+                static_cast<int64_t>(st.st_mtime)};
+    };
+
+    // Brief F Section 4: stash the live render-view selection (warp +
+    // transient pairs) and sub-mode onto the active RenderViewEntry,
+    // along with the wav's current stat tuple. No-op when no entry is
+    // active. Called from the render-view exit path and from the
+    // batch-nav path (Shift+Left/Right) before the destination is
+    // loaded.
+    auto stash_render_view_selection_to_active_entry = [&]() {
+        if (app.render_view_index < 0 ||
+            app.render_view_index >=
+                static_cast<int>(app.render_view_list.size())) {
+            return;
+        }
+        auto& e = app.render_view_list[app.render_view_index];
+        e.persisted_selected_warp  = app.render_view_selected_markers;
+        e.persisted_last_warp      = app.render_view_last_selected_marker;
+        e.persisted_selected_trans = app.render_view_selected_transients;
+        e.persisted_last_trans     = app.render_view_last_selected_transient;
+        e.persisted_sub_mode       = app.render_view_sub_mode;
+        const auto stat = wav_stat_tuple(e.wav_path);
+        e.persisted_size  = stat.first;
+        e.persisted_mtime = stat.second;
+    };
+
     // Loads the render at app.render_view_list[index] into the active
     // `audio`, parking the source audio on first entry. Parses sibling
     // <basename>.warpmarkers and <basename>.transientmarkers into
@@ -5228,7 +5324,15 @@ int main(int argc, char** argv) {
     // against the cached source sr/total. Stops playback before the
     // swap and re-binds the playback device. Returns true on success;
     // on failure logs to stderr and the prior state is preserved.
-    auto load_render_view_at = [&](int index) -> bool {
+    //
+    // Brief F Section 4: when the destination entry's persisted stat
+    // tuple matches the wav's current stat, restores the persisted
+    // selection (and, when restore_sub_mode is true, the persisted
+    // sub-view). Mismatch leaves the live selection empty. Batch-nav
+    // passes restore_sub_mode=false so the user's chosen sub-view
+    // carries forward across navigation.
+    auto load_render_view_at = [&](int index,
+                                   bool restore_sub_mode = true) -> bool {
         if (index < 0 ||
             index >= static_cast<int>(app.render_view_list.size())) {
             return false;
@@ -5302,8 +5406,74 @@ int main(int argc, char** argv) {
         app.render_view_transients        = std::move(loaded_trans);
         app.render_view_index             = index;
         app.last_render_view_path         = e.wav_path.string();
-        app.render_view_selected_markers.clear();
-        app.render_view_last_selected_marker = -1;
+
+        // Brief F Section 4: stat-tuple-gated selection restore. A
+        // matching persisted tuple (non-zero, equal to current) means
+        // the wav hasn't changed since stash; replay the persisted
+        // selection. Mismatch (or never-stashed defaults) drops to
+        // empty selection — the destination entry has no remembered
+        // session for this file.
+        const auto cur_stat = wav_stat_tuple(e.wav_path);
+        const bool stat_match =
+            cur_stat.first  != 0 &&
+            cur_stat.second != 0 &&
+            cur_stat.first  == e.persisted_size &&
+            cur_stat.second == e.persisted_mtime;
+        if (stat_match) {
+            app.render_view_selected_markers     = e.persisted_selected_warp;
+            app.render_view_last_selected_marker = e.persisted_last_warp;
+            app.render_view_selected_transients  = e.persisted_selected_trans;
+            app.render_view_last_selected_transient =
+                e.persisted_last_trans;
+            // Prune stale indices in case marker counts changed despite
+            // the stat tuple matching by coincidence.
+            const int n_warp =
+                static_cast<int>(app.render_view_markers.size());
+            const int n_trans =
+                static_cast<int>(app.render_view_transients.size());
+            for (auto it = app.render_view_selected_markers.begin();
+                 it != app.render_view_selected_markers.end();) {
+                if (*it < 0 || *it >= n_warp) {
+                    it = app.render_view_selected_markers.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = app.render_view_selected_transients.begin();
+                 it != app.render_view_selected_transients.end();) {
+                if (*it < 0 || *it >= n_trans) {
+                    it = app.render_view_selected_transients.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            if (app.render_view_last_selected_marker < 0 ||
+                app.render_view_last_selected_marker >= n_warp ||
+                !app.render_view_selected_markers.count(
+                    app.render_view_last_selected_marker)) {
+                app.render_view_last_selected_marker =
+                    app.render_view_selected_markers.empty()
+                        ? -1
+                        : *app.render_view_selected_markers.rbegin();
+            }
+            if (app.render_view_last_selected_transient < 0 ||
+                app.render_view_last_selected_transient >= n_trans ||
+                !app.render_view_selected_transients.count(
+                    app.render_view_last_selected_transient)) {
+                app.render_view_last_selected_transient =
+                    app.render_view_selected_transients.empty()
+                        ? -1
+                        : *app.render_view_selected_transients.rbegin();
+            }
+            if (restore_sub_mode) {
+                app.render_view_sub_mode = e.persisted_sub_mode;
+            }
+        } else {
+            app.render_view_selected_markers.clear();
+            app.render_view_last_selected_marker    = -1;
+            app.render_view_selected_transients.clear();
+            app.render_view_last_selected_transient = -1;
+        }
 
         // Apply this render's persisted zoom/viewport/playhead (or
         // fit-file defaults when no .rendersettings sidecar exists).
@@ -5441,6 +5611,8 @@ int main(int argc, char** argv) {
         //   - Left/Right (no mods)   → playhead-by-pixel scrub
         //   - Home/End (no mods)     → playhead to trim begin/end
         //   - Esc                    → top-level no-op (chunk Q)
+        //   - t (no mods)            → toggle warp/transient sub-view (Brief F)
+        //   - Ctrl+Q / Ctrl+W        → close-prompt routing (Brief F)
         if (app.render_view_enabled) {
             const bool is_r =
                 (keysym == XK_r && !ctrl && !shift && !alt);
@@ -5458,8 +5630,15 @@ int main(int argc, char** argv) {
                 ((keysym == XK_Home || keysym == XK_End) &&
                  !ctrl && !shift && !alt);
             const bool is_esc = (keysym == XK_Escape);
+            const bool is_sub_view_toggle =
+                (keysym == XK_t && !ctrl && !shift && !alt);
+            const bool is_ctrl_q =
+                (ctrl && !shift && !alt && keysym == XK_q);
+            const bool is_ctrl_w =
+                (ctrl && !shift && !alt && keysym == XK_w);
             if (!(is_r || is_nav || is_commit || is_playback ||
-                  is_scrub || is_jump || is_esc)) {
+                  is_scrub || is_jump || is_esc ||
+                  is_sub_view_toggle || is_ctrl_q || is_ctrl_w)) {
                 return;
             }
         }
@@ -5762,7 +5941,10 @@ int main(int argc, char** argv) {
             app.render_view_markers.clear();
             app.render_view_transients.clear();
             app.render_view_selected_markers.clear();
-            app.render_view_last_selected_marker = -1;
+            app.render_view_last_selected_marker    = -1;
+            app.render_view_selected_transients.clear();
+            app.render_view_last_selected_transient = -1;
+            app.render_view_sub_mode          = 'W';
             app.render_view_index             = -1;
             app.render_view_src_F_begin       = 0;
             app.render_view_src_F_end         = 0;
@@ -5835,6 +6017,20 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Brief F Section 3: in render-view, plain `t` toggles between
+        // the warp and transient sub-views. Selection sets are NOT
+        // cleared on toggle — each sub-view's selection persists. Falls
+        // through to source-view's handler below when render-view is off.
+        if (app.render_view_enabled && keysym == XK_t &&
+            !ctrl && !shift && !alt) {
+            app.render_view_sub_mode =
+                (app.render_view_sub_mode == 'W') ? 'T' : 'W';
+            stop_playback_if_playing();
+            clear_hover_popup();
+            gui.invalidate_region(0, 0, app.width, app.height);
+            return;
+        }
+
         // `t` (no modifiers) toggles transient mode.
         if (keysym == XK_t && !ctrl && !shift && !alt) {
             toggle_active_mode();
@@ -5887,6 +6083,32 @@ int main(int argc, char** argv) {
                             .parent_path().string().c_str());
                     return;
                 }
+                // Brief F Section 4: migrate persisted selection from
+                // the prior render-view session (still on the old
+                // app.render_view_list) into the freshly enumerated
+                // list, keyed by wav_path. Entries that disappeared
+                // since last session simply lose their persisted state;
+                // newly added entries start with default-empty
+                // persistence (no match → load_render_view_at clears).
+                if (!app.render_view_list.empty()) {
+                    std::map<std::string,
+                        AppState::RenderViewEntry*> prior;
+                    for (auto& pe : app.render_view_list) {
+                        prior[pe.wav_path.string()] = &pe;
+                    }
+                    for (auto& ne : list) {
+                        auto it = prior.find(ne.wav_path.string());
+                        if (it == prior.end()) continue;
+                        const auto& src = *it->second;
+                        ne.persisted_selected_warp  = src.persisted_selected_warp;
+                        ne.persisted_last_warp      = src.persisted_last_warp;
+                        ne.persisted_selected_trans = src.persisted_selected_trans;
+                        ne.persisted_last_trans     = src.persisted_last_trans;
+                        ne.persisted_sub_mode       = src.persisted_sub_mode;
+                        ne.persisted_size           = src.persisted_size;
+                        ne.persisted_mtime          = src.persisted_mtime;
+                    }
+                }
                 int target = 0;
                 if (!app.last_render_view_path.empty()) {
                     for (size_t i = 0; i < list.size(); ++i) {
@@ -5902,7 +6124,12 @@ int main(int argc, char** argv) {
                 app.render_view_list      = std::move(list);
                 app.iteration_mode_enabled = false;
                 app.render_view_enabled    = true;
-                if (!load_render_view_at(target)) {
+                // Brief F Section 3 / 4: enter with sub-mode 'W' as the
+                // default; load_render_view_at may overwrite via the
+                // destination entry's persisted_sub_mode when the stat
+                // tuple still matches.
+                app.render_view_sub_mode  = 'W';
+                if (!load_render_view_at(target, /*restore_sub_mode=*/true)) {
                     app.render_view_enabled = false;
                     app.render_view_list.clear();
                 }
@@ -5917,13 +6144,22 @@ int main(int argc, char** argv) {
                     write_rendersettings_for(
                         app.render_view_list[app.render_view_index]);
                 }
+                // Brief F Section 4: stash the live selection + sub-mode
+                // onto the active entry so the next toggle-on can
+                // restore it (gated by the wav's stat tuple still
+                // matching). render_view_list is intentionally NOT
+                // cleared here — re-entry migrates its persisted_*
+                // fields into the freshly enumerated list.
+                stash_render_view_selection_to_active_entry();
                 restore_source_audio();
                 app.render_view_enabled = false;
-                app.render_view_list.clear();
                 app.render_view_markers.clear();
                 app.render_view_transients.clear();
                 app.render_view_selected_markers.clear();
                 app.render_view_last_selected_marker = -1;
+                app.render_view_selected_transients.clear();
+                app.render_view_last_selected_transient = -1;
+                app.render_view_sub_mode          = 'W';
                 app.render_view_index             = -1;
                 app.render_view_src_F_begin       = 0;
                 app.render_view_src_F_end         = 0;
@@ -6040,18 +6276,22 @@ int main(int argc, char** argv) {
             if (keysym == XK_Left)  next = (next - 1 + n) % n;
             else                    next = (next + 1) % n;
             // Capture the outgoing render's live zoom/viewport/playhead
-            // before swapping. Selection is cleared on every navigation
-            // (the marker index space changes between renders, so prior
-            // indices have no meaning in the new list).
+            // before swapping.
             if (app.render_view_index >= 0 &&
                 app.render_view_index <
                     static_cast<int>(app.render_view_list.size())) {
                 write_rendersettings_for(
                     app.render_view_list[app.render_view_index]);
             }
-            app.render_view_selected_markers.clear();
-            app.render_view_last_selected_marker = -1;
-            load_render_view_at(next);
+            // Brief F Section 4: stash the outgoing entry's selection
+            // and sub-mode so re-navigating back later (in the same
+            // session) restores them. load_render_view_at then loads
+            // the destination's own persisted state if its stat tuple
+            // still matches; otherwise leaves selection empty. Pass
+            // restore_sub_mode=false so the user's chosen sub-view
+            // carries forward across batch nav.
+            stash_render_view_selection_to_active_entry();
+            load_render_view_at(next, /*restore_sub_mode=*/false);
             return;
         }
 
@@ -6161,50 +6401,73 @@ int main(int argc, char** argv) {
                 return;
             }
             if (button != 1) return;
+            // Brief F Section 3: in transient sub-view, top-strip clicks
+            // are silent no-ops (transients have no flag rects). Bail
+            // before hit-testing so we don't attempt selection bookkeeping
+            // on a non-existent flag pack.
+            if (app.render_view_sub_mode == 'T' && inside_top) return;
             int hit = -1;
             if (inside_waveform)  hit = hit_test_marker_line(x);
             else if (inside_top)  hit = hit_test_flag(x, y);
             else                  return;
-            const int n =
-                static_cast<int>(app.render_view_markers.size());
+            // Brief F Section 3: route selection through the sub-view's
+            // own pair (warp set + last, or transient set + last).
+            const bool sub_t = (app.render_view_sub_mode == 'T');
+            std::set<int>& sel = sub_t
+                ? app.render_view_selected_transients
+                : app.render_view_selected_markers;
+            int& last_sel = sub_t
+                ? app.render_view_last_selected_transient
+                : app.render_view_last_selected_marker;
+            const int n = sub_t
+                ? static_cast<int>(app.render_view_transients.size())
+                : static_cast<int>(app.render_view_markers.size());
             if (hit >= 0 && hit < n) {
                 if (shift) {
-                    auto it = app.render_view_selected_markers.find(hit);
-                    if (it == app.render_view_selected_markers.end()) {
-                        app.render_view_selected_markers.insert(hit);
-                        app.render_view_last_selected_marker = hit;
+                    auto it = sel.find(hit);
+                    if (it == sel.end()) {
+                        sel.insert(hit);
+                        last_sel = hit;
                     } else {
-                        app.render_view_selected_markers.erase(it);
-                        if (app.render_view_last_selected_marker == hit) {
-                            app.render_view_last_selected_marker =
-                                app.render_view_selected_markers.empty()
+                        sel.erase(it);
+                        if (last_sel == hit) {
+                            last_sel = sel.empty()
                                 ? -1
-                                : *app.render_view_selected_markers.rbegin();
+                                : *sel.rbegin();
                         }
                     }
                 } else {
-                    app.render_view_selected_markers.clear();
-                    app.render_view_selected_markers.insert(hit);
-                    app.render_view_last_selected_marker = hit;
+                    sel.clear();
+                    sel.insert(hit);
+                    last_sel = hit;
                 }
                 gui.invalidate_region(0, 0, app.width, app.height);
                 const int sr = audio.sample_rate();
-                const int64_t sample = static_cast<int64_t>(std::llround(
-                    app.render_view_markers[hit].time_seconds *
-                    static_cast<double>(sr)));
+                int64_t sample;
+                if (sub_t) {
+                    sample = app.render_view_transients[hit].effective_frame();
+                } else {
+                    sample = static_cast<int64_t>(std::llround(
+                        app.render_view_markers[hit].time_seconds *
+                        static_cast<double>(sr)));
+                }
                 move_playhead_to(sample);
+                // Brief F Section 2: any waveform-area press starts a
+                // playhead-drag gesture. Top-strip flag-click does not.
+                if (inside_waveform) {
+                    app.playhead_drag.active = true;
+                }
                 return;
             }
-            // Empty-space click in the waveform area: clear selection
-            // (unless Shift) and move the playhead. Empty-space click
-            // in the top strip is a silent no-op (no playhead drag in
-            // render-view).
+            // Empty-space click in the waveform area: clear the active
+            // sub-view's selection (unless Shift) and move the playhead.
+            // Brief F Section 2: also start a playhead-drag gesture so
+            // the motion handler's snap logic kicks in.
             if (inside_waveform) {
                 if (!shift &&
-                    (!app.render_view_selected_markers.empty() ||
-                     app.render_view_last_selected_marker != -1)) {
-                    app.render_view_selected_markers.clear();
-                    app.render_view_last_selected_marker = -1;
+                    (!sel.empty() || last_sel != -1)) {
+                    sel.clear();
+                    last_sel = -1;
                     gui.invalidate_region(0, 0, app.width, app.height);
                 }
                 stop_playback_if_playing();
@@ -6216,6 +6479,7 @@ int main(int argc, char** argv) {
                     app.viewport_start_sample +
                     static_cast<int64_t>(std::llround(rel * spp));
                 move_playhead_to(sample);
+                app.playhead_drag.active = true;
             }
             return;
         }
@@ -6458,10 +6722,90 @@ int main(int argc, char** argv) {
         }
     });
 
-    gui.set_on_button_release([&](unsigned int button, int, int, unsigned int) {
+    gui.set_on_button_release([&](unsigned int button, int, int,
+                                  unsigned int mods) {
         if (app.prompt.active) return;
         if (button != 1) return;
         if (app.playhead_drag.active) {
+            // Brief F Section 1: if the playhead snapped onto a marker
+            // during the drag, commit selection on release. Plain release
+            // sets the snapped marker as the single selection; Shift
+            // release adds it to the existing set without removing
+            // anything. Off-marker release leaves selection alone.
+            const bool shift = (mods & ShiftMask) != 0;
+            const int  sr    = audio.sample_rate();
+            int snapped = -1;
+            if (sr > 0) {
+                const int64_t ph = app.playhead_sample;
+                if (app.render_view_enabled) {
+                    if (app.render_view_sub_mode == 'T') {
+                        const auto& mv = app.render_view_transients;
+                        for (size_t i = 0; i < mv.size(); ++i) {
+                            if (mv[i].effective_frame() == ph) {
+                                snapped = static_cast<int>(i);
+                                break;
+                            }
+                        }
+                    } else {
+                        const auto& mv = app.render_view_markers;
+                        for (size_t i = 0; i < mv.size(); ++i) {
+                            const int64_t s = static_cast<int64_t>(
+                                std::llround(mv[i].time_seconds *
+                                             static_cast<double>(sr)));
+                            if (s == ph) {
+                                snapped = static_cast<int>(i);
+                                break;
+                            }
+                        }
+                    }
+                } else if (app.active_mode == 'T') {
+                    const auto& mv = app.transients.markers();
+                    for (size_t i = 0; i < mv.size(); ++i) {
+                        if (mv[i].effective_frame() == ph) {
+                            snapped = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                } else {
+                    const auto& mv = app.markers.markers();
+                    for (size_t i = 0; i < mv.size(); ++i) {
+                        const int64_t s = static_cast<int64_t>(
+                            std::llround(mv[i].time_seconds *
+                                         static_cast<double>(sr)));
+                        if (s == ph) {
+                            snapped = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (snapped >= 0) {
+                if (app.render_view_enabled) {
+                    const bool sub_t = (app.render_view_sub_mode == 'T');
+                    std::set<int>& sel = sub_t
+                        ? app.render_view_selected_transients
+                        : app.render_view_selected_markers;
+                    int& last_sel = sub_t
+                        ? app.render_view_last_selected_transient
+                        : app.render_view_last_selected_marker;
+                    if (shift) {
+                        sel.insert(snapped);
+                        last_sel = snapped;
+                    } else {
+                        sel.clear();
+                        sel.insert(snapped);
+                        last_sel = snapped;
+                    }
+                    gui.invalidate_region(0, 0, app.width, app.height);
+                } else if (shift) {
+                    app.selected_markers.insert(snapped);
+                    app.last_selected_marker = snapped;
+                    invalidate_marker_column(snapped);
+                    invalidate_top_strip();
+                } else {
+                    set_single_selection(snapped);
+                }
+            }
             app.playhead_drag = PlayheadDragState{};
             return;
         }
@@ -6481,14 +6825,47 @@ int main(int argc, char** argv) {
             clear_hover_popup();
             return;
         }
-        // Chunk W: render-view motion handler. Drags / selections were
-        // already filtered out at button-press; the only motion-driven
-        // work here is hover popup detection against render_view_markers.
-        // Mirrors the on_motion warp-mode hover branch below: same dwell
-        // timer, same precompute-at-entry. The popup paints in the
-        // render-view branch of the redraw lambda (V.A3b math reads from
-        // app.render_view_markers via popup_eligible_marker).
+        // Chunk W: render-view motion handler. Brief F Section 2 adds
+        // playhead-drag snap support: when a drag is in flight, snap the
+        // playhead to the visible sub-view's markers (3px epsilon),
+        // matching source-view's gesture. Otherwise run hover popup
+        // detection against render_view_markers (suppressed in transient
+        // sub-view because hit_test_flag short-circuits to -1).
         if (app.render_view_enabled) {
+            if (app.playhead_drag.active) {
+                clear_hover_popup();
+                if ((mods & Button1Mask) == 0) {
+                    app.playhead_drag = PlayheadDragState{};
+                    return;
+                }
+                const int sr = audio.sample_rate();
+                if (sr <= 0) return;
+                const GuiRect area = waveform_area(app);
+                const double spp = current_samples_per_pixel(app, audio);
+                if (spp <= 0.0) return;
+                const int hit = hit_test_marker_line(mouse_x);
+                int64_t new_playhead;
+                if (hit >= 0) {
+                    if (app.render_view_sub_mode == 'T') {
+                        new_playhead =
+                            app.render_view_transients[hit].effective_frame();
+                    } else {
+                        new_playhead = static_cast<int64_t>(std::llround(
+                            app.render_view_markers[hit].time_seconds *
+                            static_cast<double>(sr)));
+                    }
+                } else {
+                    int rel = mouse_x - area.x;
+                    if (rel < 0) rel = 0;
+                    if (rel >= area.w) rel = area.w - 1;
+                    new_playhead = app.viewport_start_sample +
+                        static_cast<int64_t>(std::llround(rel * spp));
+                }
+                if (new_playhead != app.playhead_sample) {
+                    move_playhead_to(new_playhead);
+                }
+                return;
+            }
             const int hit = hit_test_flag(mouse_x, mouse_y);
             if (hit != app.hover_popup.marker_index) {
                 if (app.hover_popup.visible) invalidate_top_strip();
