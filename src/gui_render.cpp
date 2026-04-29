@@ -21,6 +21,15 @@ namespace perf_counters {
 // rects grow by 2*kVPadExtraPx in height, with kVPadExtraPx on each side.
 constexpr double kVPadExtraPx = 1.0;
 
+// Brief J: lift the flag rect's bottom edge above the strip-boundary row by
+// this many pixels. The boundary row (top_strip_area.y + top_strip_area.h)
+// coincides with the waveform area's first row and paints unreliably outside
+// narrow playhead-column invalidates. Lifting by 12px places the bottom edge
+// solidly inside the top-strip clip in every code path. The 12px figure also
+// matches the playhead's downward triangle height, leaving room for a future
+// stem connector between flag bottom and marker stem.
+constexpr double kFlagBottomLiftPx = 13.0;
+
 namespace {
 
 // True if the marker at `idx` should render as disabled. Per chunk U
@@ -259,7 +268,7 @@ void render_playhead(cairo_t* cr,
     const double tip_x  = area.x + col;
     const double tip_y  = area.y;
     const double base_y = area.y - 12.0;
-    const double half_w = 6.0;
+    const double half_w = 6.5;
     cairo_move_to(cr, tip_x - half_w, base_y);
     cairo_line_to(cr, tip_x + half_w, base_y);
     cairo_line_to(cr, tip_x,          tip_y);
@@ -383,6 +392,7 @@ void iterate_visible_flags(cairo_t* cr,
     const double hl_pad_helper = 2.0;
     const double baseline_y =
         static_cast<double>(top_strip_area.y + top_strip_area.h)
+      - kFlagBottomLiftPx
       - base_ext.y_bearing
       - base_ext.height
       - hl_pad_helper
@@ -612,6 +622,7 @@ void iterate_visible_transient_flags(
     const double hl_pad_helper = 2.0;
     const double baseline_y =
         static_cast<double>(top_strip_area.y + top_strip_area.h)
+      - kFlagBottomLiftPx
       - base_ext.y_bearing
       - base_ext.height
       - hl_pad_helper
