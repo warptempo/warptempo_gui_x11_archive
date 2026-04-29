@@ -372,8 +372,21 @@ void iterate_visible_flags(cairo_t* cr,
     if (samples_per_pixel <= 0.0) return;
 
     const double sr           = static_cast<double>(sample_rate);
+    // Place the rect's bottom edge exactly at the strip bottom (which is
+    // the waveform area top, since the strips are contiguous). Solving the
+    // rect formula (rect_bottom = baseline_y + y_bearing + height + hl_pad
+    // + kVPadExtraPx) for baseline_y, using a representative monospace
+    // measurement so the result tracks font metrics rather than a magic
+    // constant.
+    cairo_text_extents_t base_ext;
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &base_ext);
+    const double hl_pad_helper = 2.0;
     const double baseline_y =
-        static_cast<double>(top_strip_area.y + top_strip_area.h) - 13.0;
+        static_cast<double>(top_strip_area.y + top_strip_area.h)
+      - base_ext.y_bearing
+      - base_ext.height
+      - hl_pad_helper
+      - kVPadExtraPx;
     const double pad          = 4.0;
 
     double rightmost_right_edge = -1e18;
@@ -459,15 +472,23 @@ void render_flags(cairo_t* cr,
             }
 
             if (is_selected) {
-                GuiColor fill = is_parse_fail ? kAccent : kMarker;
-                if (out_of_trim) fill = dim(fill);
-                cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
-                cairo_rectangle(cr,
-                                text_left,
-                                baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
-                                hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad,
-                                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx);
-                cairo_fill(cr);
+                GuiColor stroke_col = is_parse_fail ? kAccent : kMarker;
+                if (out_of_trim) stroke_col = dim(stroke_col);
+                cairo_set_source_rgb(cr,
+                    stroke_col.r, stroke_col.g, stroke_col.b);
+                const double rx = std::round(text_left) + 0.5;
+                const double ry = std::round(
+                    baseline_y + uniform_ext.y_bearing
+                  - hl_pad - kVPadExtraPx) + 0.5;
+                const int rw = static_cast<int>(std::round(
+                    hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad));
+                const int rh = static_cast<int>(std::round(
+                    uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
+                cairo_set_line_width(cr, 1.0);
+                cairo_rectangle(cr, rx, ry,
+                                static_cast<double>(rw),
+                                static_cast<double>(rh));
+                cairo_stroke(cr);
             }
 
             const GuiColor txt = out_of_trim ? dim(kText) : kText;
@@ -583,8 +604,18 @@ void iterate_visible_transient_flags(
 
     const double sr           = static_cast<double>(sample_rate);
     (void)sr;
+    // Mirror iterate_visible_flags: place the rect bottom at the strip
+    // bottom by deriving baseline_y from a representative monospace
+    // measurement.
+    cairo_text_extents_t base_ext;
+    cairo_text_extents(cr, "1.23*1.2345:a.aa", &base_ext);
+    const double hl_pad_helper = 2.0;
     const double baseline_y =
-        static_cast<double>(top_strip_area.y + top_strip_area.h) - 13.0;
+        static_cast<double>(top_strip_area.y + top_strip_area.h)
+      - base_ext.y_bearing
+      - base_ext.height
+      - hl_pad_helper
+      - kVPadExtraPx;
     const double pad          = 4.0;
 
     double rightmost_right_edge = -1e18;
@@ -704,14 +735,23 @@ void render_transient_flags(cairo_t* cr,
                 marker_out_of_trim(transients[i].effective_frame(), trim);
 
             if (is_selected) {
-                const GuiColor fill = out_of_trim ? dim(kMarker) : kMarker;
-                cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
-                cairo_rectangle(cr,
-                                text_left,
-                                baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx,
-                                hl_pad + ext.x_bearing + ext.width + hl_pad,
-                                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx);
-                cairo_fill(cr);
+                const GuiColor stroke_col =
+                    out_of_trim ? dim(kMarker) : kMarker;
+                cairo_set_source_rgb(cr,
+                    stroke_col.r, stroke_col.g, stroke_col.b);
+                const double rx = std::round(text_left) + 0.5;
+                const double ry = std::round(
+                    baseline_y + uniform_ext.y_bearing
+                  - hl_pad - kVPadExtraPx) + 0.5;
+                const int rw = static_cast<int>(std::round(
+                    hl_pad + ext.x_bearing + ext.width + hl_pad));
+                const int rh = static_cast<int>(std::round(
+                    uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
+                cairo_set_line_width(cr, 1.0);
+                cairo_rectangle(cr, rx, ry,
+                                static_cast<double>(rw),
+                                static_cast<double>(rh));
+                cairo_stroke(cr);
             }
 
             const GuiColor txt = out_of_trim ? dim(kText) : kText;

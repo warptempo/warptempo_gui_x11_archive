@@ -1790,8 +1790,17 @@ int main(int argc, char** argv) {
                                 if (oot) bg_col = dim(bg_col);
                                 cairo_set_source_rgb(cr,
                                     bg_col.r, bg_col.g, bg_col.b);
-                                cairo_rectangle(cr, bg_x, bg_y, bg_w, bg_h);
-                                cairo_fill(cr);
+                                const double sx = std::round(bg_x) + 0.5;
+                                const double sy = std::round(bg_y) + 0.5;
+                                const int sw = static_cast<int>(
+                                    std::round(bg_w));
+                                const int sh = static_cast<int>(
+                                    std::round(bg_h));
+                                cairo_set_line_width(cr, 1.0);
+                                cairo_rectangle(cr, sx, sy,
+                                    static_cast<double>(sw),
+                                    static_cast<double>(sh));
+                                cairo_stroke(cr);
 
                                 const double baseline_y =
                                     static_cast<double>(anchor.y)
@@ -2078,7 +2087,7 @@ int main(int argc, char** argv) {
 
     auto invalidate_top_strip = [&]() {
         const GuiRect ts = top_strip_area(app);
-        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
+        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
     };
 
     // V.A3b: a warp marker is hover-popup-eligible iff its rect doesn't
