@@ -269,11 +269,14 @@ void render_playhead(cairo_t* cr,
     const double tip_y  = area.y;
     const double base_y = area.y - 12.0;
     const double half_w = 6.5;
+    const cairo_antialias_t prev_aa = cairo_get_antialias(cr);
+    cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
     cairo_move_to(cr, tip_x - half_w, base_y);
     cairo_line_to(cr, tip_x + half_w, base_y);
     cairo_line_to(cr, tip_x,          tip_y);
     cairo_close_path(cr);
     cairo_fill(cr);
+    cairo_set_antialias(cr, prev_aa);
     cairo_restore(cr);
 }
 
