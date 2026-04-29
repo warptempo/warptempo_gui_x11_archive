@@ -305,9 +305,7 @@ void render_markers(cairo_t* cr,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
-                    const std::set<int>& selected_set,
                     const TrimRange& trim) {
-    (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -627,9 +625,7 @@ void render_transient_markers(cairo_t* cr,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
-                              const std::set<int>& selected_set,
                               const TrimRange& trim) {
-    (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;

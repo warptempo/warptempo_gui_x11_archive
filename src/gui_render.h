@@ -35,11 +35,11 @@ struct TrimRange {
 // Brief H palette: bases shared across the renderer module and
 // gui_main.cpp. kPlayhead is the foreground reference and must never be
 // passed to dim() — preserve that invariant in subsequent phases.
-inline constexpr GuiColor kBackground = {0.14, 0.15, 0.15};
-inline constexpr GuiColor kWaveform   = {0.75, 0.80, 0.81};
-inline constexpr GuiColor kMarker     = {0.24, 0.68, 0.91};
-inline constexpr GuiColor kPlayhead   = {0.10, 0.74, 0.61};
-inline constexpr GuiColor kAccent     = {0.93, 0.08, 0.08};
+inline constexpr GuiColor kBackground = {0.10, 0.10, 0.12};
+inline constexpr GuiColor kWaveform   = {0.55, 0.75, 0.90};
+inline constexpr GuiColor kMarker     = {0.57, 0.27, 0.68};
+inline constexpr GuiColor kPlayhead   = {0.95, 0.85, 0.35};
+inline constexpr GuiColor kAccent     = {0.75, 0.20, 0.18};
 inline constexpr GuiColor kText       = {0.99, 0.99, 0.99};
 
 // Half-blend toward background. The single derivation function for
@@ -121,7 +121,6 @@ void render_markers(cairo_t* cr,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
-                    const std::set<int>& selected_set,
                     const TrimRange& trim);
 
 // Editor overlay used by V.A1's top-flag editor. When `marker_index >= 0`
@@ -204,7 +203,6 @@ void render_transient_markers(cairo_t* cr,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
-                              const std::set<int>& selected_set,
                               const TrimRange& trim);
 
 // Flag text for transients is `[b=|e=]<status>` where status is `I`

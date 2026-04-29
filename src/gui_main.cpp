@@ -1536,18 +1536,15 @@ int main(int argc, char** argv) {
                     // visual-only — it does not flow into commit.
                     render_markers(cr, area, app.render_view_markers,
                                    vp_start, vp_end, sr,
-                                   app.render_view_selected_markers,
                                    trim_struct);
                 } else if (app.active_mode == 'T') {
                     render_transient_markers(
                         cr, area, app.transients.markers(),
                         vp_start, vp_end, sr,
-                        app.selected_markers,
                         trim_struct);
                 } else {
                     render_markers(cr, area, app.markers.markers(),
                                    vp_start, vp_end, sr,
-                                   app.selected_markers,
                                    trim_struct);
                 }
                 const auto m1 = clock::now();
