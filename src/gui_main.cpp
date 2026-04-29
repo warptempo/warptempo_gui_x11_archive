@@ -158,7 +158,7 @@ inline std::vector<IterPopupHit> compute_iter_popup_hits(
     // the [%+0.2f,%+0.2f] format with single-digit integer parts.
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "[+0.00,+0.00]", &uniform_ext);
-    const double hl_pad = 2.0;
+    const double hl_pad = kFlagInnerPadPx;
 
     for (const auto& r : rects) {
         const int idx = r.marker_index;
@@ -1762,7 +1762,7 @@ int main(int argc, char** argv) {
                                 cairo_text_extents(cr, pending.c_str(), &pext);
                                 cairo_text_extents_t uext;
                                 cairo_text_extents(cr, "[+0.00,+0.00]", &uext);
-                                const double hl_pad = 2.0;
+                                const double hl_pad = kFlagInnerPadPx;
                                 const double bg_w =
                                     pext.x_advance + 2.0 * hl_pad;
                                 const double bg_x =

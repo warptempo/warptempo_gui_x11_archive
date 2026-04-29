@@ -42,6 +42,24 @@ inline constexpr GuiColor kPlayhead   = {0.95, 0.85, 0.35};
 inline constexpr GuiColor kAccent     = {0.75, 0.20, 0.18};
 inline constexpr GuiColor kText       = {0.99, 0.99, 0.99};
 
+// Flag rect geometry. Internal padding around the text glyph bounding box,
+// applied symmetrically (horizontal and vertical). Brief Q raised this from
+// 2 to 3 for breathing room. The single source of truth — both render and
+// hit-rect computation must use this value, and so must the iteration popup
+// in gui_main.cpp.
+constexpr double kFlagInnerPadPx = 3.0;
+
+// Extra vertical inner padding added on top of kFlagInnerPadPx on each side.
+// (V.B Addendum 2: rects grow by 2*kVPadExtraPx in height; the horizontal
+// pad is unaffected.) Was previously file-private to gui_render.cpp; moved
+// here in Brief Q to share with gui_main.cpp's iteration popup.
+constexpr double kVPadExtraPx = 1.0;
+
+// Brief J/K: the flag rect's painted bottom edge sits this many pixels above
+// the strip-bottom row (= waveform_area.y). Moving the rect off the strip-
+// boundary row eliminates the boundary-paint fragility from Brief I.
+constexpr double kFlagBottomLiftPx = 11.0;
+
 // Half-blend toward background. The single derivation function for
 // "subordinate" / "out-of-trim" state under the new palette.
 constexpr GuiColor dim(GuiColor c) {

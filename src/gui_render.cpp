@@ -15,22 +15,17 @@ namespace perf_counters {
     int flag_elided          = 0;
 }
 
-// V.B Addendum 2: extra vertical padding (top + bottom) added to the inner
-// padding of flag rects, hit rects, and the iteration popup edit bg. The
-// horizontal pad (`hl_pad`) is unchanged. Value applies symmetrically:
-// rects grow by 2*kVPadExtraPx in height, with kVPadExtraPx on each side.
-constexpr double kVPadExtraPx = 1.0;
+// kVPadExtraPx and kFlagBottomLiftPx now live in gui_render.h so the
+// iteration popup in gui_main.cpp can reference the same values.
 
 // Brief J: lift the flag rect's bottom edge above the strip-boundary row by
-// this many pixels. The boundary row (top_strip_area.y + top_strip_area.h)
-// coincides with the waveform area's first row and paints unreliably outside
-// narrow playhead-column invalidates. Lifting by 12px places the bottom edge
-// solidly inside the top-strip clip in every code path. The 12px figure also
-// matches the playhead's downward triangle height, leaving room for a future
-// stem connector between flag bottom and marker stem.
-// Coupled with kMarkerConnectorRows below: if the flag lift changes, the
-// connector length should track it.
-constexpr double kFlagBottomLiftPx     = 11.0;
+// kFlagBottomLiftPx pixels. The boundary row coincides with the waveform
+// area's first row and paints unreliably outside narrow playhead-column
+// invalidates; lifting it places the bottom edge solidly inside the top-
+// strip clip in every code path. The lift figure also matches the
+// playhead's downward triangle height, leaving room for the stem connector
+// between flag bottom and marker stem. If the flag lift changes,
+// kMarkerConnectorRows should track it.
 constexpr double kMarkerConnectorRows  = 11.0;
 
 namespace {
@@ -393,7 +388,7 @@ void iterate_visible_flags(cairo_t* cr,
     // constant.
     cairo_text_extents_t base_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &base_ext);
-    const double hl_pad_helper = 2.0;
+    const double hl_pad_helper = kFlagInnerPadPx;
     const double baseline_y =
         static_cast<double>(top_strip_area.y + top_strip_area.h)
       - kFlagBottomLiftPx
@@ -455,7 +450,7 @@ void render_flags(cairo_t* cr,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, font_size);
 
-    const double hl_pad = 2.0;
+    const double hl_pad = kFlagInnerPadPx;
     const double sr_d   = static_cast<double>(sample_rate);
 
     cairo_text_extents_t uniform_ext;
@@ -563,7 +558,7 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     // background register on the marker.
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
-    const double hl_pad = 2.0;
+    const double hl_pad = kFlagInnerPadPx;
 
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
@@ -623,7 +618,7 @@ void iterate_visible_transient_flags(
     // measurement.
     cairo_text_extents_t base_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &base_ext);
-    const double hl_pad_helper = 2.0;
+    const double hl_pad_helper = kFlagInnerPadPx;
     const double baseline_y =
         static_cast<double>(top_strip_area.y + top_strip_area.h)
       - kFlagBottomLiftPx
@@ -736,7 +731,7 @@ void render_transient_flags(cairo_t* cr,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, font_size);
 
-    const double hl_pad = 2.0;
+    const double hl_pad = kFlagInnerPadPx;
 
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
@@ -801,7 +796,7 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
 
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
-    const double hl_pad = 2.0;
+    const double hl_pad = kFlagInnerPadPx;
 
     iterate_visible_transient_flags(cr, top_strip_area, transients,
                                     viewport_start_sample, viewport_end_sample,
