@@ -5,11 +5,6 @@ namespace gui_text_display {
 namespace {
 // Pixel gap between the popup baseline and the anchor edge.
 constexpr double kVerticalGapPx = 4.0;
-// V.B Addendum 2: extra inner padding on the popup's own (implicit) rect.
-// Mirrors gui_render.cpp's kVPadExtraPx so the popup's text sits the same
-// kVerticalGapPx away from the (now-bigger) anchor's edge while leaving
-// kVPadExtraPx of clearance between text and the popup rect's near edge.
-constexpr double kVPadExtraPx = 1.0;
 } // namespace
 
 void render(cairo_t* cr, const State& s, double font_size) {

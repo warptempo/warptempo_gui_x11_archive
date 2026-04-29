@@ -1591,7 +1591,8 @@ int main(int argc, char** argv) {
                             for (const auto& r : rects) {
                                 if (r.marker_index == hidx) {
                                     anchor.x = static_cast<int>(
-                                        std::lround(r.x)) + 2;
+                                        std::lround(r.x)) +
+                                        static_cast<int>(kFlagInnerPadPx);
                                     anchor.y = static_cast<int>(
                                         std::lround(r.y));
                                     anchor.w = static_cast<int>(
@@ -1682,10 +1683,11 @@ int main(int argc, char** argv) {
                                 if (r.marker_index == hidx) {
                                     // anchor.x is the flag rect's text-origin
                                     // (rect's geometric x + render_flags' hl_pad
-                                    // = 2px), so the popup's leading character
-                                    // sits at the same column as the flag's
-                                    // leading character.
-                                    anchor.x = static_cast<int>(std::lround(r.x)) + 2;
+                                    // = kFlagInnerPadPx), so the popup's
+                                    // leading character sits at the same column
+                                    // as the flag's leading character.
+                                    anchor.x = static_cast<int>(std::lround(r.x)) +
+                                               static_cast<int>(kFlagInnerPadPx);
                                     anchor.y = static_cast<int>(std::lround(r.y));
                                     anchor.w = static_cast<int>(std::lround(r.w));
                                     anchor.h = static_cast<int>(std::lround(r.h));
@@ -1731,10 +1733,11 @@ int main(int argc, char** argv) {
                                 gui_text_editor::Kind::IterationBracket;
                         for (const auto& h : hits) {
                             // Anchor for gui_text_display: x at the flag's
-                            // text-origin (flag.x + 2, mirrors hover popup),
-                            // y/w/h from the flag rect itself.
+                            // text-origin (flag.x + kFlagInnerPadPx, mirrors
+                            // hover popup), y/w/h from the flag rect itself.
                             GuiRect anchor{
-                                h.flag_rect.x + 2,
+                                h.flag_rect.x +
+                                    static_cast<int>(kFlagInnerPadPx),
                                 h.flag_rect.y,
                                 h.flag_rect.w,
                                 h.flag_rect.h
