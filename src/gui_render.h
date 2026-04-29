@@ -284,47 +284,6 @@ void render_dirty_indicator(cairo_t* cr, double cx, double cy,
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);
 
-// Modal-dialog button rectangle in screen coords. Returned by the layout
-// helper so the click handler can hit-test.
-struct DialogButtonRect {
-    int x;
-    int y;
-    int w;
-    int h;
-};
-
-// Layout of an N-button dialog: the buttons' rects (left-to-right, parallel
-// to the labels passed to compute_dialog_layout) and the panel's outer
-// bounds. Panel width scales to fit the wider of prompt text or button row.
-struct DialogLayout {
-    DialogButtonRect              panel;
-    std::vector<DialogButtonRect> buttons;
-};
-
-// Compute the dialog's on-screen layout for the given prompt + ordered
-// button labels. Cairo is needed for font measurement; the caller's `cr`
-// can be the same pixmap context.
-DialogLayout compute_dialog_layout(cairo_t* cr,
-                                   int window_w,
-                                   int window_h,
-                                   const char* prompt_text,
-                                   const std::vector<std::string>& button_labels);
-
-// Paint a modal dialog: a semi-transparent overlay across the window, a
-// centered panel with the prompt text, and one button per label. The
-// button at `focused_button_index` renders with a highlighted outline.
-void render_dialog(cairo_t* cr,
-                   const DialogLayout& layout,
-                   const char* prompt_text,
-                   const std::vector<std::string>& button_labels,
-                   int focused_button_index,
-                   int window_w,
-                   int window_h,
-                   GuiColor text_color,
-                   GuiColor panel_color,
-                   GuiColor button_color,
-                   GuiColor focus_color);
-
 // One-line toggle for the render-path perf instrumentation (chunk M). When
 // false, all perf_counters increments and [dbg perf] stderr emissions in
 // the redraw path are compiled out.

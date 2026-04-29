@@ -473,9 +473,9 @@ struct HoverPopupState {
     std::chrono::steady_clock::time_point entry_time{};
 };
 
-// What action triggered the modal dialog; the activate-button dispatch
-// switches on this together with the focused button index. Save/Discard/
-// Cancel apply to the unsaved-work dialogs (CLOSE_WINDOW, REVERT_TO_BLANK);
+// What action triggered the modal prompt; the activate-response dispatch
+// switches on this together with the response key. Save/Discard/Cancel
+// applies to the unsaved-work prompts (CLOSE_WINDOW, REVERT_TO_BLANK);
 // Detect/Cancel applies to the re-detect confirmation (DETECT_TRANSIENTS).
 enum class DialogTrigger {
     CLOSE_WINDOW,
@@ -483,18 +483,19 @@ enum class DialogTrigger {
     DETECT_TRANSIENTS,
 };
 
-// In-window modal dialog state. When `active` is true, the redraw paints
-// a dim overlay + panel + N buttons on top of the normal pipeline; input
-// handling routes through dialog-only filters and the rest of the UI is
-// visually blocked. `button_labels` holds the ordered button text;
-// `focused_button` is the index into that vector.
-struct DialogState {
-    bool                      active         = false;
-    int                       focused_button = 0;
-    DialogTrigger             trigger        = DialogTrigger::CLOSE_WINDOW;
-    std::string               prompt_text    =
-        "Unsaved changes. Save before continuing?";
-    std::vector<std::string>  button_labels  = {"Save", "Discard", "Cancel"};
+// In-window modal prompt state. When `active` is true, the bottom strip
+// overlays the prompt's text and response options in place of the
+// timestamp / tab letter / dirty indicator / render-view filename.
+// Input is owned by the prompt: only the response keys (and Esc, which
+// activates the rightmost response) do anything; everything else is
+// swallowed. `response_keys` holds lowercase letters; the activator
+// lowercases incoming keypresses before comparing.
+struct PromptState {
+    bool                     active = false;
+    std::string              text;
+    std::vector<char>        response_keys;     // lowercase
+    std::vector<std::string> response_labels;   // e.g. "[S]ave"
+    DialogTrigger            trigger = DialogTrigger::CLOSE_WINDOW;
 };
 
 // Navigational bookmark. Holds a snapshot of the three fields that define
@@ -685,9 +686,11 @@ struct AppState {
     // the GUI; exists so the wrapper script's keys survive a round-trip.
     std::vector<std::pair<std::string, std::string>> settings_passthrough;
 
-    // Unsaved-work dialog. Active only when a close / revert gesture
-    // fires while history is dirty. See Part 2 of chunk Q.
-    DialogState dialog;
+    // Bottom-strip command prompt. Active only when a close / revert /
+    // re-detect gesture fires while a confirmation is required. See Part
+    // 2 of chunk Q (originally a centered modal dialog; brief H.5 moves
+    // the same modal semantics into the bottom strip).
+    PromptState prompt;
 
     // Top-flag text editor (V.A1). Active only when editing a flag rect
     // in warp mode. The editor owns the keyboard while active and
@@ -992,7 +995,12 @@ GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x) {
     return GuiRect{x0, y0, x1 - x0, y1 - y0};
 }
 
-GuiRect timestamp_invalidate_rect(int window_height) {
+GuiRect timestamp_invalidate_rect(int window_height, int window_width,
+                                  bool prompt_active) {
+    if (prompt_active) {
+        return GuiRect{0, window_height - kTimestampRegionH,
+                       window_width, kTimestampRegionH};
+    }
     return GuiRect{0, window_height - kTimestampRegionH,
                    kTimestampRegionW, kTimestampRegionH};
 }
@@ -1232,7 +1240,8 @@ int main(int argc, char** argv) {
     };
 
     auto invalidate_timestamp_area = [&]() {
-        const GuiRect t = timestamp_invalidate_rect(app.height);
+        const GuiRect t = timestamp_invalidate_rect(
+            app.height, app.width, app.prompt.active);
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
@@ -1896,126 +1905,131 @@ int main(int argc, char** argv) {
                     std::chrono::duration<double, std::milli>(f1 - f0).count();
             }
 
-            // Timestamp in the bottom status strip.
-            const GuiRect ts = timestamp_invalidate_rect(app.height);
+            // Bottom strip: either the prompt overlay (when active) or
+            // the regular elements (timestamp / tab letter / dirty / render
+            // -view filename). The prompt is modal — while active, it
+            // owns the strip and the regular elements are not visible.
+            const GuiRect ts = timestamp_invalidate_rect(
+                app.height, app.width, app.prompt.active);
             if (rects_intersect(exposed, ts)) {
-                // In source-view, sr is the loaded file's sample rate and
-                // playhead_sample is in source-frames. In render-view the
-                // active `audio` is the render, so its sr is what the
-                // engine wrote out (typically same as source) — but the
-                // playhead is in render-frame coords. To display the
-                // timestamp in the source's time axis, offset by F_begin
-                // and divide by the cached source sr.
-                // Render-view timestamp is render-domain (zero at render
-                // sample 0). Source-time and render-time advance at
-                // different rates because of warping, so adding a
-                // source-side offset to a render-domain playhead doesn't
-                // correspond to anything meaningful — same arithmetic as
-                // source-view.
-                double seconds = 0.0;
-                if (sr > 0) {
-                    seconds = static_cast<double>(app.playhead_sample) /
-                              static_cast<double>(sr);
-                }
                 const int baseline_y = app.height - kTimestampBaselineFromBottom;
-                {
-                    const auto s0 = clock::now();
-                    render_timestamp(cr, kTimestampPadX, baseline_y,
-                                     seconds, kText);
-                    const auto s1 = clock::now();
-                    t_ts_ms =
-                        std::chrono::duration<double, std::milli>(s1 - s0).count();
-                }
-
-                // A/B tab letter between timestamp and dirty indicator.
-                // Same font/size/color as the timestamp; no background.
-                // Suppressed in render-view since the Tab key is gated out
-                // there and the letter would carry no meaning.
-                const double tw = measure_timestamp_width(cr, seconds);
-                double right_after_letter =
-                    static_cast<double>(kTimestampPadX) + tw;
-                if (!app.render_view_enabled) {
-                    const double letter_x =
-                        static_cast<double>(kTimestampPadX) + tw +
-                        kTabLetterGapPx;
-                    const char letter_buf[2] = { app.active_tab, '\0' };
+                if (app.prompt.active) {
                     cairo_save(cr);
                     cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
                     cairo_set_font_size(cr, 14.0);
-                    cairo_text_extents_t ext;
-                    cairo_text_extents(cr, letter_buf, &ext);
-                    cairo_move_to(cr, letter_x, baseline_y);
-                    cairo_show_text(cr, letter_buf);
-                    right_after_letter = letter_x + ext.x_advance;
+                    cairo_move_to(cr, kTimestampPadX, baseline_y);
+                    cairo_show_text(cr, app.prompt.text.c_str());
+                    cairo_text_extents_t pext;
+                    cairo_text_extents(cr, app.prompt.text.c_str(), &pext);
+                    const double label_gap = kTabLetterGapPx * 2.0;
+                    double cursor_x = static_cast<double>(kTimestampPadX) +
+                                      pext.x_advance + label_gap;
+                    for (const auto& label : app.prompt.response_labels) {
+                        cairo_move_to(cr, cursor_x, baseline_y);
+                        cairo_show_text(cr, label.c_str());
+                        cairo_text_extents_t lext;
+                        cairo_text_extents(cr, label.c_str(), &lext);
+                        cursor_x += lext.x_advance + label_gap;
+                    }
                     cairo_restore(cr);
-                }
+                } else {
+                    // In source-view, sr is the loaded file's sample rate
+                    // and playhead_sample is in source-frames. In render
+                    // -view the active `audio` is the render, so its sr
+                    // is what the engine wrote out — but the playhead is
+                    // in render-frame coords. Render-view timestamp is
+                    // render-domain (zero at render sample 0); source-time
+                    // and render-time advance at different rates because
+                    // of warping, so the same arithmetic suffices.
+                    double seconds = 0.0;
+                    if (sr > 0) {
+                        seconds = static_cast<double>(app.playhead_sample) /
+                                  static_cast<double>(sr);
+                    }
+                    {
+                        const auto s0 = clock::now();
+                        render_timestamp(cr, kTimestampPadX, baseline_y,
+                                         seconds, kText);
+                        const auto s1 = clock::now();
+                        t_ts_ms =
+                            std::chrono::duration<double, std::milli>(s1 - s0).count();
+                    }
 
-                if (app.dirty) {
-                    const auto d0 = clock::now();
-                    const double cx = right_after_letter + kTabLetterGapPx;
-                    cairo_save(cr);
-                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
-                    cairo_select_font_face(cr, "monospace",
-                                           CAIRO_FONT_SLANT_NORMAL,
-                                           CAIRO_FONT_WEIGHT_NORMAL);
-                    cairo_set_font_size(cr, 14.0);
-                    cairo_move_to(cr, cx, baseline_y);
-                    cairo_show_text(cr, "*");
-                    cairo_restore(cr);
-                    const auto d1 = clock::now();
-                    t_dirty_ms =
-                        std::chrono::duration<double, std::milli>(d1 - d0).count();
-                }
+                    // A/B tab letter between timestamp and dirty indicator.
+                    // Same font/size/color as the timestamp; no background.
+                    // Suppressed in render-view since the Tab key is gated
+                    // out there and the letter would carry no meaning.
+                    const double tw = measure_timestamp_width(cr, seconds);
+                    double right_after_letter =
+                        static_cast<double>(kTimestampPadX) + tw;
+                    if (!app.render_view_enabled) {
+                        const double letter_x =
+                            static_cast<double>(kTimestampPadX) + tw +
+                            kTabLetterGapPx;
+                        const char letter_buf[2] = { app.active_tab, '\0' };
+                        cairo_save(cr);
+                        cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
+                        cairo_select_font_face(cr, "monospace",
+                                               CAIRO_FONT_SLANT_NORMAL,
+                                               CAIRO_FONT_WEIGHT_NORMAL);
+                        cairo_set_font_size(cr, 14.0);
+                        cairo_text_extents_t ext;
+                        cairo_text_extents(cr, letter_buf, &ext);
+                        cairo_move_to(cr, letter_x, baseline_y);
+                        cairo_show_text(cr, letter_buf);
+                        right_after_letter = letter_x + ext.x_advance;
+                        cairo_restore(cr);
+                    }
 
-                // Chunk W: render-view filename. Right-aligned in the
-                // bottom strip so it doesn't conflict with the timestamp
-                // / tab letter / dirty indicator on the left. Format is
-                // `<batch_folder_name>/<basename>.wav` so the user can
-                // tell which batch the displayed render came from.
-                if (app.render_view_enabled &&
-                    app.render_view_index >= 0 &&
-                    app.render_view_index <
-                        static_cast<int>(app.render_view_list.size())) {
-                    const auto& e =
-                        app.render_view_list[app.render_view_index];
-                    const std::string label =
-                        e.batch_folder.filename().string() + "/" +
-                        e.basename + ".wav";
-                    cairo_save(cr);
-                    cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
-                    cairo_select_font_face(cr, "monospace",
-                                           CAIRO_FONT_SLANT_NORMAL,
-                                           CAIRO_FONT_WEIGHT_NORMAL);
-                    cairo_set_font_size(cr, 14.0);
-                    cairo_text_extents_t ext;
-                    cairo_text_extents(cr, label.c_str(), &ext);
-                    const double rx = static_cast<double>(app.width) -
-                                      static_cast<double>(kTimestampPadX) -
-                                      ext.x_advance;
-                    cairo_move_to(cr, rx, baseline_y);
-                    cairo_show_text(cr, label.c_str());
-                    cairo_restore(cr);
+                    if (app.dirty) {
+                        const auto d0 = clock::now();
+                        const double cx = right_after_letter + kTabLetterGapPx;
+                        cairo_save(cr);
+                        cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
+                        cairo_select_font_face(cr, "monospace",
+                                               CAIRO_FONT_SLANT_NORMAL,
+                                               CAIRO_FONT_WEIGHT_NORMAL);
+                        cairo_set_font_size(cr, 14.0);
+                        cairo_move_to(cr, cx, baseline_y);
+                        cairo_show_text(cr, "*");
+                        cairo_restore(cr);
+                        const auto d1 = clock::now();
+                        t_dirty_ms =
+                            std::chrono::duration<double, std::milli>(d1 - d0).count();
+                    }
+
+                    // Chunk W: render-view filename. Right-aligned in the
+                    // bottom strip so it doesn't conflict with the
+                    // timestamp / tab letter / dirty indicator on the left.
+                    if (app.render_view_enabled &&
+                        app.render_view_index >= 0 &&
+                        app.render_view_index <
+                            static_cast<int>(app.render_view_list.size())) {
+                        const auto& e =
+                            app.render_view_list[app.render_view_index];
+                        const std::string label =
+                            e.batch_folder.filename().string() + "/" +
+                            e.basename + ".wav";
+                        cairo_save(cr);
+                        cairo_set_source_rgb(cr, kText.r, kText.g, kText.b);
+                        cairo_select_font_face(cr, "monospace",
+                                               CAIRO_FONT_SLANT_NORMAL,
+                                               CAIRO_FONT_WEIGHT_NORMAL);
+                        cairo_set_font_size(cr, 14.0);
+                        cairo_text_extents_t ext;
+                        cairo_text_extents(cr, label.c_str(), &ext);
+                        const double rx = static_cast<double>(app.width) -
+                                          static_cast<double>(kTimestampPadX) -
+                                          ext.x_advance;
+                        cairo_move_to(cr, rx, baseline_y);
+                        cairo_show_text(cr, label.c_str());
+                        cairo_restore(cr);
+                    }
                 }
             }
-        }
-
-        // Unsaved-work dialog sits on top of everything else. The modal
-        // paint happens after all normal rendering so the dim overlay and
-        // dialog panel visually cover the waveform / flags / timestamp.
-        if (app.dialog.active) {
-            const DialogLayout L = compute_dialog_layout(
-                cr, app.width, app.height,
-                app.dialog.prompt_text.c_str(),
-                app.dialog.button_labels);
-            render_dialog(cr, L, app.dialog.prompt_text.c_str(),
-                          app.dialog.button_labels,
-                          app.dialog.focused_button,
-                          app.width, app.height,
-                          kDialogTextColor, kDialogPanelColor,
-                          kDialogButtonColor, kDialogFocusColor);
         }
 
         cairo_restore(cr);
@@ -2228,7 +2242,8 @@ int main(int argc, char** argv) {
     };
 
     auto invalidate_dirty_and_timestamp = [&]() {
-        const GuiRect t = timestamp_invalidate_rect(app.height);
+        const GuiRect t = timestamp_invalidate_rect(
+            app.height, app.width, app.prompt.active);
         gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
@@ -4234,7 +4249,7 @@ int main(int argc, char** argv) {
         invalidate_all();
     };
 
-    // Forward decl: defined below so it can be captured by the dialog
+    // Forward decl: defined below so it can be captured by the prompt
     // helpers, but invoked only on Detect-confirmation.
     std::function<void()> run_detect_now;
 
@@ -4252,81 +4267,89 @@ int main(int argc, char** argv) {
         }
     };
 
-    auto open_unsaved_dialog = [&](DialogTrigger t) {
-        app.dialog.active         = true;
-        app.dialog.focused_button = 0;
-        app.dialog.trigger        = t;
-        app.dialog.prompt_text    =
-            "Unsaved changes. Save before continuing?";
-        app.dialog.button_labels  = {"Save", "Discard", "Cancel"};
+    auto open_prompt_unsaved = [&](DialogTrigger t) {
+        app.prompt.active          = true;
+        app.prompt.text            = "Save unsaved changes?";
+        app.prompt.response_keys   = {'s', 'd', 'c'};
+        app.prompt.response_labels = {"[S]ave", "[D]iscard", "[C]ancel"};
+        app.prompt.trigger         = t;
         clear_hover_popup();
         invalidate_all();
     };
 
-    auto open_detect_confirm_dialog = [&]() {
-        app.dialog.active         = true;
-        // Default focus on Cancel: re-detection discards entries the
-        // current detector would no longer place, so the safe default
-        // is to back out.
-        app.dialog.focused_button = 1;
-        app.dialog.trigger        = DialogTrigger::DETECT_TRANSIENTS;
-        app.dialog.prompt_text    =
+    auto open_prompt_detect_confirm = [&]() {
+        app.prompt.active          = true;
+        app.prompt.text            =
             "Re-detect transients? Existing detection will be replaced.";
-        app.dialog.button_labels  = {"Detect", "Cancel"};
+        app.prompt.response_keys   = {'d', 'c'};
+        app.prompt.response_labels = {"[D]etect", "[C]ancel"};
+        app.prompt.trigger         = DialogTrigger::DETECT_TRANSIENTS;
         clear_hover_popup();
         invalidate_all();
     };
 
-    auto close_dialog = [&]() {
-        app.dialog = DialogState{};
-        invalidate_all();
-    };
+    // Single-key response dispatch. The trigger captured at prompt-open
+    // time selects which response set is in play; the key picks the
+    // response. On a Save failure, the prompt mutates in place to a
+    // retry/discard/cancel state — same trigger, new text and response
+    // set — rather than dismissing.
+    auto prompt_activate_response = [&](char k) {
+        if (!app.prompt.active) return;
+        const DialogTrigger trigger = app.prompt.trigger;
 
-    // Dispatch a dialog button activation. The button index is interpreted
-    // per trigger: CLOSE_WINDOW / REVERT_TO_BLANK use 0=Save 1=Discard
-    // 2=Cancel; DETECT_TRANSIENTS uses 0=Detect 1=Cancel.
-    auto dialog_activate_button = [&](int button) {
-        if (!app.dialog.active) return;
-        const DialogTrigger t = app.dialog.trigger;
-        if (t == DialogTrigger::DETECT_TRANSIENTS) {
-            if (button == 0) {
-                close_dialog();
-                proceed_with_trigger(t);
-            } else {
-                close_dialog();
+        if (trigger == DialogTrigger::CLOSE_WINDOW ||
+            trigger == DialogTrigger::REVERT_TO_BLANK) {
+            if (k == 's' || k == 'r') {
+                const bool ok = save_markers();
+                if (!ok) {
+                    app.prompt.text            = "Save failed.";
+                    app.prompt.response_keys   = {'r', 'd', 'c'};
+                    app.prompt.response_labels =
+                        {"[R]etry", "[D]iscard", "[C]ancel"};
+                    invalidate_all();
+                    return;
+                }
+                app.prompt.active = false;
+                invalidate_all();
+                proceed_with_trigger(trigger);
+                return;
             }
-            return;
-        }
-        // Unsaved-work dialog: 0=Save, 1=Discard, 2=Cancel.
-        switch (button) {
-        case 0: { // Save
-            const bool ok = save_markers();
-            if (!ok) {
-                app.dialog.prompt_text = "Save failed.";
+            if (k == 'd') {
+                app.prompt.active = false;
+                invalidate_all();
+                proceed_with_trigger(trigger);
+                return;
+            }
+            if (k == 'c') {
+                app.prompt.active = false;
                 invalidate_all();
                 return;
             }
-            close_dialog();
-            proceed_with_trigger(t);
-            break;
+            return;
         }
-        case 1: // Discard
-            close_dialog();
-            proceed_with_trigger(t);
-            break;
-        case 2: // Cancel
-        default:
-            close_dialog();
-            break;
+
+        if (trigger == DialogTrigger::DETECT_TRANSIENTS) {
+            if (k == 'd') {
+                app.prompt.active = false;
+                invalidate_all();
+                proceed_with_trigger(trigger);
+                return;
+            }
+            if (k == 'c') {
+                app.prompt.active = false;
+                invalidate_all();
+                return;
+            }
+            return;
         }
     };
 
-    // Route a close / revert gesture through the dialog when history is
+    // Route a close / revert gesture through the prompt when history is
     // dirty; otherwise proceed immediately. Centralizes the decision so
     // Ctrl+Q, Ctrl+W, and the WM-close callback share identical behavior.
     auto request_close_or_revert = [&](DialogTrigger t) {
-        if (app.dialog.active) return; // already gated; ignore re-entry
-        if (app.dirty) open_unsaved_dialog(t);
+        if (app.prompt.active) return; // already gated; ignore re-entry
+        if (app.dirty) open_prompt_unsaved(t);
         else           proceed_with_trigger(t);
     };
 
@@ -4437,7 +4460,7 @@ int main(int argc, char** argv) {
     // detection (any D entry in the list). With no prior detection (only
     // I entries or the auto frame-0 head), runs immediately.
     auto detect_transients = [&]() {
-        if (app.dialog.active)             return;
+        if (app.prompt.active)             return;
         if (app.source_audio_path.empty()) return;
         if (audio.total_frames() <= 0)     return;
 
@@ -4446,7 +4469,7 @@ int main(int argc, char** argv) {
             if (!m.is_inserted) { has_prior_detection = true; break; }
         }
         if (has_prior_detection) {
-            open_detect_confirm_dialog();
+            open_prompt_detect_confirm();
             return;
         }
         run_detect_now();
@@ -4627,7 +4650,7 @@ int main(int argc, char** argv) {
         // view. Source-view also requires warp mode + iter mode off;
         // render-view bypasses the mode checks because hover always
         // applies against the loaded render's warpmarkers.
-        if (app.dialog.active ||
+        if (app.prompt.active ||
             app.drag.active ||
             app.playhead_drag.active ||
             gui_text_editor::is_active(app.top_flag_editor) ||
@@ -5370,44 +5393,32 @@ int main(int argc, char** argv) {
         const bool shift = (mods & ShiftMask)   != 0;
         const bool alt   = (mods & Mod1Mask)    != 0;
 
-        // Unsaved-work dialog owns input while active. Only the dialog's
-        // own keys (Tab / Shift+Tab / arrows / Enter / Esc) route through
-        // dialog handling; everything else is swallowed so marker edits /
-        // playback / viewport keys cannot sneak in while the modal is up.
-        if (app.dialog.active) {
+        // Bottom-strip prompt owns input while active. Only the prompt's
+        // own response keys (case-insensitive) and Esc (rightmost
+        // response = Cancel by convention) do anything; everything else
+        // is swallowed so marker edits / playback / viewport keys cannot
+        // sneak in while the prompt is up.
+        if (app.prompt.active) {
+            char k = 0;
+            if (keysym >= XK_a && keysym <= XK_z) {
+                k = static_cast<char>('a' + (keysym - XK_a));
+            } else if (keysym >= XK_A && keysym <= XK_Z) {
+                k = static_cast<char>('a' + (keysym - XK_A));
+            }
             if (keysym == XK_Escape) {
-                // Cancel = the last button, by convention across all
-                // dialog forms (Save/Discard/Cancel and Detect/Cancel).
-                const int last = std::max(0,
-                    static_cast<int>(app.dialog.button_labels.size()) - 1);
-                dialog_activate_button(last);
+                if (!app.prompt.response_keys.empty()) {
+                    prompt_activate_response(app.prompt.response_keys.back());
+                }
                 return;
             }
-            if (keysym == XK_Return || keysym == XK_KP_Enter ||
-                keysym == XK_space) {
-                dialog_activate_button(app.dialog.focused_button);
-                return;
+            if (k != 0) {
+                for (char rk : app.prompt.response_keys) {
+                    if (k == rk) {
+                        prompt_activate_response(rk);
+                        return;
+                    }
+                }
             }
-            const bool move_left =
-                keysym == XK_Left ||
-                keysym == XK_ISO_Left_Tab ||
-                (keysym == XK_Tab && shift);
-            const bool move_right =
-                keysym == XK_Right ||
-                (keysym == XK_Tab && !shift);
-            const int n = static_cast<int>(app.dialog.button_labels.size());
-            if (n > 0 && move_left) {
-                app.dialog.focused_button =
-                    (app.dialog.focused_button + n - 1) % n;
-                invalidate_all();
-                return;
-            }
-            if (n > 0 && move_right) {
-                app.dialog.focused_button = (app.dialog.focused_button + 1) % n;
-                invalidate_all();
-                return;
-            }
-            // Other keys: swallow.
             return;
         }
 
@@ -6132,30 +6143,10 @@ int main(int argc, char** argv) {
         if constexpr (kDebugPerf) {
             app.last_input_event_time = std::chrono::steady_clock::now();
         }
-        // Dialog-modal input handling: only left-button clicks on a dialog
-        // button do anything; everything else (including wheel) is swallowed.
-        if (app.dialog.active) {
-            if (button != 1) return;
-            cairo_surface_t* s = cairo_image_surface_create(
-                CAIRO_FORMAT_ARGB32, 1, 1);
-            cairo_t* c = cairo_create(s);
-            const DialogLayout L = compute_dialog_layout(
-                c, app.width, app.height,
-                app.dialog.prompt_text.c_str(),
-                app.dialog.button_labels);
-            cairo_destroy(c);
-            cairo_surface_destroy(s);
-            for (size_t i = 0; i < L.buttons.size(); ++i) {
-                const DialogButtonRect& r = L.buttons[i];
-                if (x >= r.x && x < r.x + r.w &&
-                    y >= r.y && y < r.y + r.h) {
-                    dialog_activate_button(static_cast<int>(i));
-                    return;
-                }
-            }
-            // Click outside any button: no-op per spec.
-            return;
-        }
+        // Prompt-modal input handling: while the bottom-strip prompt is
+        // active, all mouse events are swallowed. Responses go through
+        // the keyboard.
+        if (app.prompt.active) return;
         if (app.loading || audio.total_frames() <= 0) return;
         const GuiRect area = waveform_area(app);
         const GuiRect top  = top_strip_area(app);
@@ -6501,7 +6492,7 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_button_release([&](unsigned int button, int, int, unsigned int) {
-        if (app.dialog.active) return;
+        if (app.prompt.active) return;
         if (button != 1) return;
         if (app.playhead_drag.active) {
             app.playhead_drag = PlayheadDragState{};
@@ -6519,7 +6510,7 @@ int main(int argc, char** argv) {
         // mutators can re-evaluate hover at the cursor's last position.
         app.last_mouse_x = mouse_x;
         app.last_mouse_y = mouse_y;
-        if (app.dialog.active) {
+        if (app.prompt.active) {
             clear_hover_popup();
             return;
         }
