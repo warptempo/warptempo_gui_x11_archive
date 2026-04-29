@@ -3,6 +3,7 @@
 #include "gui_transients.h"
 
 #include <cairo/cairo.h>
+#include <cstdint>
 #include <set>
 #include <string>
 #include <vector>
@@ -21,6 +22,43 @@ struct GuiColor {
     double g;
     double b;
 };
+
+// Trim boundaries in source-frame samples. Threaded through the marker /
+// flag renderers so they can apply uniform out-of-trim dimming under the
+// brief H palette consolidation. Values match the convention in
+// compute_trim_samples (gui_main.cpp).
+struct TrimRange {
+    int64_t begin;
+    int64_t end;
+};
+
+// Brief H palette: bases shared across the renderer module and
+// gui_main.cpp. kPlayhead is the foreground reference and must never be
+// passed to dim() — preserve that invariant in subsequent phases.
+inline constexpr GuiColor kBackground = {0.10, 0.10, 0.12};
+inline constexpr GuiColor kWaveform   = {0.55, 0.75, 0.90};
+inline constexpr GuiColor kMarker     = {0.30, 0.28, 0.22};
+inline constexpr GuiColor kPlayhead   = {0.95, 0.85, 0.35};
+inline constexpr GuiColor kAccent     = {0.75, 0.20, 0.18};
+inline constexpr GuiColor kText       = {0.99, 0.99, 0.99};
+
+// Half-blend toward background. The single derivation function for
+// "subordinate" / "out-of-trim" state under the new palette.
+constexpr GuiColor dim(GuiColor c) {
+    return GuiColor{
+        c.r * 0.5 + kBackground.r * 0.5,
+        c.g * 0.5 + kBackground.g * 0.5,
+        c.b * 0.5 + kBackground.b * 0.5,
+    };
+}
+
+// Out-of-trim predicate. Caller computes source-frame position from its
+// own native field (time_seconds*sample_rate for GuiMarker,
+// effective_frame() for GuiTransient) and passes it through here.
+inline bool marker_out_of_trim(int64_t source_frame_pos,
+                               const TrimRange& trim) {
+    return source_frame_pos < trim.begin || source_frame_pos >= trim.end;
+}
 
 // Screen-coord rect of one rendered flag, keyed back to its marker index.
 // Emitted in the same order flags appear left-to-right.
@@ -89,7 +127,8 @@ void render_markers(cairo_t* cr,
                     GuiColor disabled_color,
                     GuiColor selected_color,
                     const std::set<int>& selected_set,
-                    int last_selected);
+                    int last_selected,
+                    const TrimRange& trim);
 
 // Editor overlay used by V.A1's top-flag editor. When `marker_index >= 0`
 // and matches a flag the renderer is about to draw, that flag's text is
@@ -137,6 +176,7 @@ void render_flags(cairo_t* cr,
                   double font_size,
                   const std::set<int>& selected_set,
                   int last_selected,
+                  const TrimRange& trim,
                   const FlagEditorOverlay& editor = {});
 
 // Same greedy-pack and elision logic as render_flags, without drawing —
@@ -166,7 +206,8 @@ void render_transient_markers(cairo_t* cr,
                               GuiColor disabled_color,
                               GuiColor selected_color,
                               const std::set<int>& selected_set,
-                              int last_selected);
+                              int last_selected,
+                              const TrimRange& trim);
 
 // Flag text for transients is `[b=|e=]<status>` where status is `I`
 // (inserted), `D` (detected), or `D*` (detected with user displacement).
@@ -182,7 +223,8 @@ void render_transient_flags(cairo_t* cr,
                             GuiColor highlight_color,
                             double font_size,
                             const std::set<int>& selected_set,
-                            int last_selected);
+                            int last_selected,
+                            const TrimRange& trim);
 
 std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_t* cr,

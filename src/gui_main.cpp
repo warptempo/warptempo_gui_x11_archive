@@ -1461,6 +1461,7 @@ int main(int argc, char** argv) {
                       sr, audio.total_frames());
             const int64_t trim_begin = trim.first;
             const int64_t trim_end   = trim.second;
+            const TrimRange trim_struct{trim_begin, trim_end};
 
             const int rc = audio.render_channels();
             {
@@ -1509,7 +1510,7 @@ int main(int argc, char** argv) {
                         render_waveform(ccr, cache_area, audio, 0,
                                         vp_start, vp_end,
                                         trim_begin, trim_end,
-                                        kWaveformColor, kWaveformDimColor);
+                                        kWaveform, dim(kWaveform));
                     } else if (rc >= 2) {
                         const int ch_h = (cache_area.h - kChannelGapPx) / 2;
                         const GuiRect ch0{0, 0, cache_area.w, ch_h};
@@ -1518,11 +1519,11 @@ int main(int argc, char** argv) {
                         render_waveform(ccr, ch0, audio, 0,
                                         vp_start, vp_end,
                                         trim_begin, trim_end,
-                                        kWaveformColor, kWaveformDimColor);
+                                        kWaveform, dim(kWaveform));
                         render_waveform(ccr, ch1, audio, 1,
                                         vp_start, vp_end,
                                         trim_begin, trim_end,
-                                        kWaveformColor, kWaveformDimColor);
+                                        kWaveform, dim(kWaveform));
                     }
                     cairo_destroy(ccr);
                     wf_cache.fp_audio_gen  = app.audio_generation;
@@ -1569,7 +1570,8 @@ int main(int argc, char** argv) {
                                    kRenderViewMarkerColor,
                                    kRenderViewMarkerSelectedColor,
                                    app.render_view_selected_markers,
-                                   app.render_view_last_selected_marker);
+                                   app.render_view_last_selected_marker,
+                                   trim_struct);
                 } else if (app.active_mode == 'T') {
                     render_transient_markers(
                         cr, area, app.transients.markers(),
@@ -1577,14 +1579,16 @@ int main(int argc, char** argv) {
                         kTransientColor, kTransientDimColor,
                         kTransientSelectedColor,
                         app.selected_markers,
-                        app.last_selected_marker);
+                        app.last_selected_marker,
+                        trim_struct);
                 } else {
                     render_markers(cr, area, app.markers.markers(),
                                    vp_start, vp_end, sr,
                                    kMarkerColor, kMarkerDimColor,
                                    kSelectedColor,
                                    app.selected_markers,
-                                   app.last_selected_marker);
+                                   app.last_selected_marker,
+                                   trim_struct);
                 }
                 const auto m1 = clock::now();
                 t_markers_ms =
@@ -1627,6 +1631,7 @@ int main(int argc, char** argv) {
                                  kFlagFontSize,
                                  app.render_view_selected_markers,
                                  app.render_view_last_selected_marker,
+                                 trim_struct,
                                  FlagEditorOverlay{});
 
                     // V.A3b hover popup paint, render-view variant.
@@ -1683,7 +1688,8 @@ int main(int argc, char** argv) {
                         kTransientSelectedColor, kTransientHighlightColor,
                         kFlagFontSize,
                         app.selected_markers,
-                        app.last_selected_marker);
+                        app.last_selected_marker,
+                        trim_struct);
                 } else {
                     FlagEditorOverlay overlay;
                     // Only the V.A1 FlagPayload kind paints into the flag
@@ -1715,6 +1721,7 @@ int main(int argc, char** argv) {
                                  kFlagFontSize,
                                  app.selected_markers,
                                  app.last_selected_marker,
+                                 trim_struct,
                                  overlay);
 
                     // V.A3b hover popup. Drawn on top of the flag strip,

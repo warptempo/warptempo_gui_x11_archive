@@ -309,7 +309,12 @@ void render_markers(cairo_t* cr,
                     GuiColor disabled_color,
                     GuiColor selected_color,
                     const std::set<int>& selected_set,
-                    int /*last_selected*/) {
+                    int /*last_selected*/,
+                    const TrimRange& trim) {
+    (void)enabled_color;
+    (void)disabled_color;
+    (void)selected_color;
+    (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -326,22 +331,21 @@ void render_markers(cairo_t* cr,
     cairo_save(cr);
     cairo_set_line_width(cr, 1.0);
 
-    // Two passes — one path per color — for the unselected markers, split by
-    // enabled/disabled. Selected markers are drawn on top afterwards so
-    // their selected_color wins regardless of z-order within the unselected
-    // set.
+    // Two passes — one path per color — split by in-trim vs out-of-trim.
+    // Disabled markers are skipped entirely (no stem); selection has no
+    // effect on stems under the brief H palette rules.
     for (int pass = 0; pass < 2; pass++) {
-        const bool this_disabled = (pass == 1);
-        const GuiColor& c = this_disabled ? disabled_color : enabled_color;
+        const bool out_of_trim_pass = (pass == 1);
+        const GuiColor c = out_of_trim_pass ? dim(kMarker) : kMarker;
         cairo_set_source_rgb(cr, c.r, c.g, c.b);
         for (size_t i = 0; i < markers.size(); ++i) {
-            if (selected_set.count(static_cast<int>(i))) continue;
-            const bool dis = effective_disabled(markers, static_cast<int>(i));
-            if (dis != this_disabled) continue;
+            if (effective_disabled(markers, static_cast<int>(i))) continue;
             const auto& m = markers[i];
             const double ms = m.time_seconds * sr;
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
+            const int64_t pos = static_cast<int64_t>(m.time_seconds * sr);
+            if (marker_out_of_trim(pos, trim) != out_of_trim_pass) continue;
             const double x_raw =
                 (ms - static_cast<double>(viewport_start_sample))
                     / samples_per_pixel;
@@ -349,26 +353,6 @@ void render_markers(cairo_t* cr,
             cairo_move_to(cr, x_px, y0);
             cairo_line_to(cr, x_px, y1);
         }
-        cairo_stroke(cr);
-    }
-
-    for (int idx : selected_set) {
-        if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
-        const auto& m = markers[idx];
-        const double ms = m.time_seconds * sr;
-        if (ms < static_cast<double>(viewport_start_sample)) continue;
-        if (ms >= static_cast<double>(viewport_end_sample)) continue;
-        GuiColor c = selected_color;
-        if (effective_disabled(markers, idx)) {
-            c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
-        }
-        cairo_set_source_rgb(cr, c.r, c.g, c.b);
-        const double x_raw =
-            (ms - static_cast<double>(viewport_start_sample))
-                / samples_per_pixel;
-        const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
-        cairo_move_to(cr, x_px, y0);
-        cairo_line_to(cr, x_px, y1);
         cairo_stroke(cr);
     }
 
@@ -446,7 +430,9 @@ void render_flags(cairo_t* cr,
                   double font_size,
                   const std::set<int>& selected_set,
                   int last_selected,
+                  const TrimRange& trim,
                   const FlagEditorOverlay& editor) {
+    (void)trim;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -675,7 +661,12 @@ void render_transient_markers(cairo_t* cr,
                               GuiColor disabled_color,
                               GuiColor selected_color,
                               const std::set<int>& selected_set,
-                              int /*last_selected*/) {
+                              int /*last_selected*/,
+                              const TrimRange& trim) {
+    (void)enabled_color;
+    (void)disabled_color;
+    (void)selected_color;
+    (void)selected_set;
     if (waveform_area.w <= 0 || waveform_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -691,17 +682,22 @@ void render_transient_markers(cairo_t* cr,
     cairo_save(cr);
     cairo_set_line_width(cr, 1.0);
 
+    // Two passes — one path per color — split by in-trim vs out-of-trim.
+    // Disabled transients are skipped entirely (no stem); selection has no
+    // effect on stems under the brief H palette rules. is_inserted does
+    // not affect stem color either.
     for (int pass = 0; pass < 2; pass++) {
-        const bool this_disabled = (pass == 1);
-        const GuiColor& c = this_disabled ? disabled_color : enabled_color;
+        const bool out_of_trim_pass = (pass == 1);
+        const GuiColor c = out_of_trim_pass ? dim(kMarker) : kMarker;
         cairo_set_source_rgb(cr, c.r, c.g, c.b);
         for (size_t i = 0; i < transients.size(); ++i) {
-            if (selected_set.count(static_cast<int>(i))) continue;
             const auto& m = transients[i];
-            if (m.disabled != this_disabled) continue;
-            const double ms = static_cast<double>(m.effective_frame());
+            if (m.disabled) continue;
+            const int64_t pos = m.effective_frame();
+            const double ms = static_cast<double>(pos);
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
+            if (marker_out_of_trim(pos, trim) != out_of_trim_pass) continue;
             const double x_raw =
                 (ms - static_cast<double>(viewport_start_sample))
                     / samples_per_pixel;
@@ -709,26 +705,6 @@ void render_transient_markers(cairo_t* cr,
             cairo_move_to(cr, x_px, y0);
             cairo_line_to(cr, x_px, y1);
         }
-        cairo_stroke(cr);
-    }
-
-    for (int idx : selected_set) {
-        if (idx < 0 || idx >= static_cast<int>(transients.size())) continue;
-        const auto& m = transients[idx];
-        const double ms = static_cast<double>(m.effective_frame());
-        if (ms < static_cast<double>(viewport_start_sample)) continue;
-        if (ms >= static_cast<double>(viewport_end_sample)) continue;
-        GuiColor c = selected_color;
-        if (m.disabled) {
-            c.r *= 0.70; c.g *= 0.70; c.b *= 0.70;
-        }
-        cairo_set_source_rgb(cr, c.r, c.g, c.b);
-        const double x_raw =
-            (ms - static_cast<double>(viewport_start_sample))
-                / samples_per_pixel;
-        const double x_px = waveform_area.x + std::round(x_raw) + 0.5;
-        cairo_move_to(cr, x_px, y0);
-        cairo_line_to(cr, x_px, y1);
         cairo_stroke(cr);
     }
 
@@ -747,7 +723,9 @@ void render_transient_flags(cairo_t* cr,
                             GuiColor highlight_color,
                             double font_size,
                             const std::set<int>& selected_set,
-                            int last_selected) {
+                            int last_selected,
+                            const TrimRange& trim) {
+    (void)trim;
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
