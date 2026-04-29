@@ -944,7 +944,7 @@ bool rects_intersect(GuiRect a, GuiRect b) {
 }
 
 GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x) {
-    const int col = static_cast<int>(std::floor(px_x));
+    const int col = static_cast<int>(std::floor(px_x + 0.5));
     const int x0 = std::max(area.x, col - kPlayheadHalfPx);
     const int x1 = std::min(area.x + area.w, col + kPlayheadHalfPx + 1);
     if (x1 <= x0) return GuiRect{area.x, 0, 0, 0};
@@ -1560,7 +1560,8 @@ int main(int argc, char** argv) {
             if (rects_intersect(exposed, area) ||
                 rects_intersect(exposed, top_strip)) {
                 const auto p0 = clock::now();
-                render_playhead(cr, area, px_x, kPlayhead);
+                render_playhead(cr, area, px_x, kPlayhead,
+                                gui.playhead_triangle_surface());
                 const auto p1 = clock::now();
                 t_playhead_ms =
                     std::chrono::duration<double, std::milli>(p1 - p0).count();

@@ -28,7 +28,7 @@ constexpr double kVPadExtraPx = 1.0;
 // solidly inside the top-strip clip in every code path. The 12px figure also
 // matches the playhead's downward triangle height, leaving room for a future
 // stem connector between flag bottom and marker stem.
-constexpr double kFlagBottomLiftPx = 13.0;
+constexpr double kFlagBottomLiftPx = 11.0;
 
 namespace {
 
@@ -245,7 +245,8 @@ void render_waveform(cairo_t* cr,
 void render_playhead(cairo_t* cr,
                      GuiRect area,
                      double  playhead_pixel_x,
-                     GuiColor color) {
+                     GuiColor color,
+                     cairo_surface_t* triangle_surface) {
     if (area.w <= 0 || area.h <= 0) return;
     if (playhead_pixel_x < 0.0) return;
     if (playhead_pixel_x > static_cast<double>(area.w - 1)) return;
@@ -260,23 +261,19 @@ void render_playhead(cairo_t* cr,
     cairo_line_to(cr, x_px, area.y + area.h);
     cairo_stroke(cr);
 
-    // Inverted-triangle indicator: tip at the top of the waveform area on
-    // the same integer-snapped column as the line, base 12 px above in the
-    // flag-strip region, 12 px wide. Filled solid. Flags are rendered after
-    // the playhead in the redraw path, so overlapping flags overpaint this
-    // triangle (flags take z-order precedence).
-    const double tip_x  = area.x + col;
-    const double tip_y  = area.y;
-    const double base_y = area.y - 12.0;
-    const double half_w = 6.5;
-    const cairo_antialias_t prev_aa = cairo_get_antialias(cr);
-    cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
-    cairo_move_to(cr, tip_x - half_w, base_y);
-    cairo_line_to(cr, tip_x + half_w, base_y);
-    cairo_line_to(cr, tip_x,          tip_y);
-    cairo_close_path(cr);
-    cairo_fill(cr);
-    cairo_set_antialias(cr, prev_aa);
+    // Inverted-triangle indicator: stamped from a hand-authored PNG mask so
+    // every pixel is explicit (no rasterizer ambiguity). Asset is 17×9 with
+    // the tip at column index 8 (image-local); integer division places that
+    // tip column at `area.x + col`. The bottom row sits one pixel above
+    // `area.y` so the stem stroke beginning at `area.y` is visually adjacent.
+    if (triangle_surface) {
+        const int img_w = cairo_image_surface_get_width(triangle_surface);
+        const int img_h = cairo_image_surface_get_height(triangle_surface);
+        const double dst_x = static_cast<double>(area.x + col - img_w / 2);
+        const double dst_y = static_cast<double>(area.y - img_h);
+        cairo_set_source_rgb(cr, color.r, color.g, color.b);
+        cairo_mask_surface(cr, triangle_surface, dst_x, dst_y);
+    }
     cairo_restore(cr);
 }
 

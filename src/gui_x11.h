@@ -37,6 +37,15 @@ public:
     int width()  const { return width_;  }
     int height() const { return height_; }
 
+    // Pre-loaded image surface for the playhead's inverted-triangle
+    // indicator. Decoded once during init() from a PNG byte buffer embedded
+    // in the binary (see playhead_cursor_data.h). Renderers paint it via
+    // cairo_mask_surface so every pixel is hand-authored — no rasterizer
+    // ambiguity. Returns nullptr if the asset failed to load.
+    cairo_surface_t* playhead_triangle_surface() const {
+        return playhead_triangle_surface_;
+    }
+
     void set_on_redraw(RedrawCallback cb)          { on_redraw_         = std::move(cb); }
     void set_on_resize(ResizeCallback cb)          { on_resize_         = std::move(cb); }
     void set_on_key(KeyCallback cb)                { on_key_            = std::move(cb); }
@@ -64,6 +73,7 @@ private:
     Pixmap           pixmap_   = 0;
     cairo_surface_t* surface_  = nullptr;
     cairo_t*         cr_       = nullptr;
+    cairo_surface_t* playhead_triangle_surface_ = nullptr;
     Atom             wm_delete_window_ = 0;
     int              width_    = 0;
     int              height_   = 0;

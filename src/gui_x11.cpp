@@ -1,11 +1,14 @@
 #include "gui_x11.h"
 
+#include "playhead_cursor_data.h"
+
 #include <cairo/cairo-xlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 
 #include <poll.h>
+#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +70,20 @@ std::string decode_file_uri(const std::string& uri) {
     return out;
 }
 
+struct PngMemReader {
+    const unsigned char* data;
+    unsigned int         len;
+    unsigned int         pos;
+};
+
+cairo_status_t png_mem_read(void* closure, unsigned char* out, unsigned int n) {
+    auto* r = static_cast<PngMemReader*>(closure);
+    if (r->pos + n > r->len) return CAIRO_STATUS_READ_ERROR;
+    std::memcpy(out, r->data + r->pos, n);
+    r->pos += n;
+    return CAIRO_STATUS_SUCCESS;
+}
+
 } // namespace
 
 bool GuiX11::init(int width, int height, const char* title) {
@@ -114,6 +131,17 @@ bool GuiX11::init(int width, int height, const char* title) {
 
     init_xdnd();
 
+    PngMemReader reader{playhead_cursor_png, playhead_cursor_png_len, 0};
+    playhead_triangle_surface_ = cairo_image_surface_create_from_png_stream(
+        png_mem_read, &reader);
+    const cairo_status_t st = cairo_surface_status(playhead_triangle_surface_);
+    if (st != CAIRO_STATUS_SUCCESS) {
+        std::fprintf(stderr,
+            "warptempo_gui: failed to decode embedded playhead triangle (%s)\n",
+            cairo_status_to_string(st));
+        return false;
+    }
+
     XMapWindow(dpy_, win_);
     XFlush(dpy_);
 
@@ -122,6 +150,10 @@ bool GuiX11::init(int width, int height, const char* title) {
 
 void GuiX11::shutdown() {
     destroy_buffer();
+    if (playhead_triangle_surface_) {
+        cairo_surface_destroy(playhead_triangle_surface_);
+        playhead_triangle_surface_ = nullptr;
+    }
     if (gc_ && dpy_) {
         XFreeGC(dpy_, gc_);
         gc_ = nullptr;
