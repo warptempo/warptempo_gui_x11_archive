@@ -39,11 +39,15 @@ struct GuiPlayback::Impl {
 
     // Mutable playback state.
     std::atomic<int64_t> cursor{0};
-    // steady_clock::now() in ns at the moment `cursor` was last published by
-    // the audio thread. Stored *before* `cursor` so a torn read on the main
-    // thread yields stale-cursor + fresh-time (under-extrapolates, self-
-    // correcting) rather than fresh-cursor + stale-time (overshoots).
-    std::atomic<int64_t> cursor_publish_ns{0};
+    // Free-running cursor predictor anchor. The main thread extrapolates
+    // linearly from (anchor_sample, anchor_ns) using wall-clock time.
+    // Re-anchored at events of acceptable visible discontinuity (play(),
+    // playhead jumps, viewport reflows, speed changes) — never inside the
+    // audio callback. Drift between predictor and audio is bounded by time
+    // since last resync × steady_clock vs sample-clock skew (sub-pixel at
+    // typical zoom levels for typical resync intervals).
+    std::atomic<int64_t> anchor_sample{0};
+    std::atomic<int64_t> anchor_ns{0};
     std::atomic<int32_t> speed_x1000{1000};  // speed * 1000, so we can store in int
     std::atomic<bool>    playing{false};
 
@@ -131,16 +135,13 @@ void fill_output(GuiPlayback::Impl& impl,
 
     // Advance the fractional cursor by the exact float amount consumed.
     // Drift-free across buffer boundaries. The integer atomic is the
-    // main-thread snapshot.
+    // main-thread snapshot, used for end-of-file detection and as the
+    // resync-truth source — the predictor itself does not extrapolate
+    // from buffer-boundary timestamps.
     impl.fractional_cursor += static_cast<double>(frame_count) * speed;
     int64_t new_cur = static_cast<int64_t>(std::floor(impl.fractional_cursor));
     if (new_cur > end)   new_cur = end;
     if (new_cur > total) new_cur = total;
-    // Publish timestamp before cursor: see cursor_publish_ns docstring for the
-    // store-order invariant the main-thread extrapolator depends on.
-    const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    impl.cursor_publish_ns.store(now_ns, std::memory_order_relaxed);
     impl.cursor.store(new_cur, std::memory_order_relaxed);
     if (natural_end) {
         impl.playing.store(false, std::memory_order_relaxed);
@@ -182,7 +183,8 @@ bool GuiPlayback::init(int sample_rate, int channels, const float* samples,
     impl_->channels     = channels;
     impl_->source_rate  = sample_rate;
     impl_->cursor.store(0, std::memory_order_relaxed);
-    impl_->cursor_publish_ns.store(0, std::memory_order_relaxed);
+    impl_->anchor_sample.store(0, std::memory_order_relaxed);
+    impl_->anchor_ns.store(0, std::memory_order_relaxed);
     impl_->end_sample.store(0, std::memory_order_relaxed);
     impl_->speed_x1000.store(1000, std::memory_order_relaxed);
     impl_->playing.store(false, std::memory_order_relaxed);
@@ -240,7 +242,26 @@ void GuiPlayback::play(int64_t start_sample, int64_t end_sample) {
     impl_->cursor.store(start_sample, std::memory_order_relaxed);
     impl_->end_sample.store(end_sample, std::memory_order_relaxed);
     impl_->pending_start.store(start_sample, std::memory_order_relaxed);
+
+    // Anchor the predictor to start_sample directly: the audio thread may
+    // not yet have processed pending_start, so the cursor atomic still
+    // reflects the previous session. Sample first, then ns — a torn main-
+    // thread read yields fresh-sample + stale-time (under-extrapolates,
+    // self-correcting).
+    const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    impl_->anchor_sample.store(start_sample, std::memory_order_relaxed);
+    impl_->anchor_ns.store(now_ns, std::memory_order_relaxed);
     impl_->playing.store(true, std::memory_order_relaxed);
+}
+
+void GuiPlayback::resync_predictor() {
+    if (!impl_) return;
+    const int64_t cur = impl_->cursor.load(std::memory_order_relaxed);
+    const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    impl_->anchor_sample.store(cur, std::memory_order_relaxed);
+    impl_->anchor_ns.store(now_ns, std::memory_order_relaxed);
 }
 
 void GuiPlayback::stop() {
@@ -261,24 +282,26 @@ bool GuiPlayback::is_playing() const {
 
 int64_t GuiPlayback::cursor() const {
     if (!impl_) return 0;
-    const int64_t base = impl_->cursor.load(std::memory_order_relaxed);
-    if (!impl_->playing.load(std::memory_order_relaxed)) return base;
-    const int64_t pub_ns = impl_->cursor_publish_ns.load(std::memory_order_relaxed);
-    if (pub_ns == 0) return base;  // before first fill
+    if (!impl_->playing.load(std::memory_order_relaxed)) {
+        return impl_->cursor.load(std::memory_order_relaxed);
+    }
+    const int64_t a_sample = impl_->anchor_sample.load(std::memory_order_relaxed);
+    const int64_t a_ns     = impl_->anchor_ns.load(std::memory_order_relaxed);
+    if (a_ns == 0) return a_sample;  // before first anchor
     const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    const int64_t elapsed_ns = now_ns - pub_ns;
-    if (elapsed_ns <= 0) return base;
+    const int64_t elapsed_ns = now_ns - a_ns;
+    if (elapsed_ns <= 0) return a_sample;
     const double speed = static_cast<double>(
         impl_->speed_x1000.load(std::memory_order_relaxed)) / 1000.0;
     const int64_t sr = static_cast<int64_t>(impl_->source_rate);
     const double advance_samples =
         static_cast<double>(elapsed_ns) * 1e-9 * speed * static_cast<double>(sr);
-    int64_t extrapolated = base + static_cast<int64_t>(advance_samples);
+    int64_t predicted = a_sample + static_cast<int64_t>(advance_samples);
     const int64_t end = impl_->end_sample.load(std::memory_order_relaxed);
-    if (extrapolated > end) extrapolated = end;
-    if (extrapolated > impl_->total_frames) extrapolated = impl_->total_frames;
-    return extrapolated;
+    if (predicted > end) predicted = end;
+    if (predicted > impl_->total_frames) predicted = impl_->total_frames;
+    return predicted;
 }
 
 void GuiPlayback::shutdown() {

@@ -45,6 +45,14 @@ public:
     // takes effect on the next callback buffer.
     void set_speed(float speed);
 
+    // Re-anchor the free-running cursor predictor at the audio thread's
+    // current cursor and the current steady_clock time. Call from the main
+    // thread at events where a small visible discontinuity is acceptable
+    // (jumps, viewport reflows, speed changes) so the predictor remains a
+    // smooth linear function of wall-clock between resyncs. Safe to call
+    // when not playing — the next play() will overwrite the anchor.
+    void resync_predictor();
+
     // Snapshot accessors. Safe from the main thread.
     bool    is_playing() const;
     int64_t cursor()     const;
