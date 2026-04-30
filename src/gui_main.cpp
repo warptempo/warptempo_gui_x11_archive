@@ -742,17 +742,6 @@ struct AppState {
     // `<basename>.rendertransientmarkers`.
     std::vector<GuiMarker>       render_view_markers;
     std::vector<GuiTransient>    render_view_transients;
-    // Render-view marker selection (visual-only — never participates in
-    // the commit / undo paths). Stashed onto the active RenderViewEntry
-    // on render-view exit / batch-nav and restored from the destination
-    // entry on entry / batch-nav, gated by stat tuple.
-    std::set<int>                render_view_selected_markers;
-    int                          render_view_last_selected_marker = -1;
-    // Brief F Section 3: parallel selection set for the transient
-    // sub-view. Concurrent with the warp pair; the visible sub-view's
-    // pair is selected by the global active_mode flag (Brief J.2).
-    std::set<int>                render_view_selected_transients;
-    int                          render_view_last_selected_transient = -1;
     // Source-frame mapping of the current render: F_begin..F_end (source
     // sample-rate frames) is what the render's full audio covers. When the
     // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
@@ -1629,7 +1618,7 @@ int main(int argc, char** argv) {
                     render_flags(cr, top_strip, app.render_view_markers,
                                  vp_start, vp_end, sr,
                                  kFlagFontSize,
-                                 app.render_view_selected_markers,
+                                 app.selected_markers,
                                  trim_struct,
                                  px_x,
                                  FlagEditorOverlay{});
@@ -4088,15 +4077,22 @@ int main(int argc, char** argv) {
 
     // Brief J.2 Section 1: indirection that returns the currently
     // active ViewState — the slot that holds the inactive-mode
-    // selection. Source-view: the active tab. Render-view (Commit B
-    // upgrade): the active render entry's `state`. Returns nullptr
-    // when no valid active view-state is available; callers must
-    // handle nullptr by no-op-ing rather than silently corrupting a
-    // fallback slot.
-    // TODO(J.2 Commit B): add render-view branch returning
-    // &app.render_view_list[app.render_view_index].state when
-    // app.render_view_enabled and the index is valid.
+    // selection. Source-view: the active tab. Render-view: the
+    // active render entry's `state`. Returns nullptr when no valid
+    // active view-state is available; callers must handle nullptr
+    // by no-op-ing rather than silently corrupting a fallback slot.
     auto active_view_state = [&]() -> ViewState* {
+        if (app.render_view_enabled) {
+            if (app.render_view_index >= 0 &&
+                app.render_view_index <
+                    static_cast<int>(app.render_view_list.size())) {
+                return &app.render_view_list[app.render_view_index].state;
+            }
+            // Render-view enabled but no valid entry. Return null
+            // rather than silently writing render-view indices into
+            // a source tab slot.
+            return nullptr;
+        }
         return (app.active_tab == 'B') ? &app.tab_b : &app.tab_a;
     };
 
@@ -5366,11 +5362,15 @@ int main(int argc, char** argv) {
                 static_cast<int64_t>(st.st_mtime)};
     };
 
-    // Brief F Section 4: stash the live render-view selection (warp +
-    // transient pairs) onto the active RenderViewEntry, along with
-    // the wav's current stat tuple. No-op when no entry is active.
-    // Called from the render-view exit path and from the batch-nav
-    // path (Shift+Left/Right) before the destination is loaded.
+    // Brief J.2 Section 4: stash the live selection into the active
+    // RenderViewEntry's matching-mode slot, along with the wav's
+    // current stat tuple. No-op when no entry is active. Called from
+    // the render-view exit path and from the batch-nav path
+    // (Shift+Left/Right) before the destination is loaded. The
+    // OTHER-mode slot was last written when active_mode flipped
+    // away from it via switch_active_mode_to (or never written if
+    // the user has not flipped mode in this render-view session);
+    // either way it is current at stash time.
     auto stash_render_view_selection_to_active_entry = [&]() {
         if (app.render_view_index < 0 ||
             app.render_view_index >=
@@ -5378,10 +5378,13 @@ int main(int argc, char** argv) {
             return;
         }
         auto& e = app.render_view_list[app.render_view_index];
-        e.state.warp_selected           = app.render_view_selected_markers;
-        e.state.warp_last_selected      = app.render_view_last_selected_marker;
-        e.state.transient_selected      = app.render_view_selected_transients;
-        e.state.transient_last_selected = app.render_view_last_selected_transient;
+        if (app.active_mode == 'T') {
+            e.state.transient_selected      = app.selected_markers;
+            e.state.transient_last_selected = app.last_selected_marker;
+        } else {
+            e.state.warp_selected           = app.selected_markers;
+            e.state.warp_last_selected      = app.last_selected_marker;
+        }
         const auto stat = wav_stat_tuple(e.wav_path);
         e.persisted_size  = stat.first;
         e.persisted_mtime = stat.second;
@@ -5403,7 +5406,7 @@ int main(int argc, char** argv) {
             index >= static_cast<int>(app.render_view_list.size())) {
             return false;
         }
-        const auto& e = app.render_view_list[index];
+        auto& e = app.render_view_list[index];
 
         GuiAudio next;
         if (!next.load(e.wav_path.string(), {})) {
@@ -5486,56 +5489,32 @@ int main(int argc, char** argv) {
             cur_stat.first  == e.persisted_size &&
             cur_stat.second == e.persisted_mtime;
         if (stat_match) {
-            app.render_view_selected_markers     = e.state.warp_selected;
-            app.render_view_last_selected_marker = e.state.warp_last_selected;
-            app.render_view_selected_transients  = e.state.transient_selected;
-            app.render_view_last_selected_transient =
-                e.state.transient_last_selected;
-            // Prune stale indices in case marker counts changed despite
-            // the stat tuple matching by coincidence.
-            const int n_warp =
-                static_cast<int>(app.render_view_markers.size());
-            const int n_trans =
-                static_cast<int>(app.render_view_transients.size());
-            for (auto it = app.render_view_selected_markers.begin();
-                 it != app.render_view_selected_markers.end();) {
-                if (*it < 0 || *it >= n_warp) {
-                    it = app.render_view_selected_markers.erase(it);
-                } else {
-                    ++it;
-                }
+            // Brief J.2 Section 4: load only the matching-mode slot
+            // into the live pair. The OTHER-mode slot stays on state
+            // and gets swapped in if mode flips during this render-
+            // view session via switch_active_mode_to.
+            if (app.active_mode == 'T') {
+                app.selected_markers     = e.state.transient_selected;
+                app.last_selected_marker = e.state.transient_last_selected;
+            } else {
+                app.selected_markers     = e.state.warp_selected;
+                app.last_selected_marker = e.state.warp_last_selected;
             }
-            for (auto it = app.render_view_selected_transients.begin();
-                 it != app.render_view_selected_transients.end();) {
-                if (*it < 0 || *it >= n_trans) {
-                    it = app.render_view_selected_transients.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            if (app.render_view_last_selected_marker < 0 ||
-                app.render_view_last_selected_marker >= n_warp ||
-                !app.render_view_selected_markers.count(
-                    app.render_view_last_selected_marker)) {
-                app.render_view_last_selected_marker =
-                    app.render_view_selected_markers.empty()
-                        ? -1
-                        : *app.render_view_selected_markers.rbegin();
-            }
-            if (app.render_view_last_selected_transient < 0 ||
-                app.render_view_last_selected_transient >= n_trans ||
-                !app.render_view_selected_transients.count(
-                    app.render_view_last_selected_transient)) {
-                app.render_view_last_selected_transient =
-                    app.render_view_selected_transients.empty()
-                        ? -1
-                        : *app.render_view_selected_transients.rbegin();
-            }
+            prune_live_selection();
         } else {
-            app.render_view_selected_markers.clear();
-            app.render_view_last_selected_marker    = -1;
-            app.render_view_selected_transients.clear();
-            app.render_view_last_selected_transient = -1;
+            // Stat mismatch invalidates BOTH slots — the wav has
+            // changed, so any stashed indices for either mode could
+            // be stale. Symmetric with stat-match's "live pair gets
+            // matching slot, OTHER stays on state": when we don't
+            // trust state, clear both the live pair AND the OTHER
+            // slot on state so a later mode-flip doesn't pull in
+            // stale data.
+            app.selected_markers.clear();
+            app.last_selected_marker = -1;
+            e.state.warp_selected.clear();
+            e.state.warp_last_selected      = -1;
+            e.state.transient_selected.clear();
+            e.state.transient_last_selected = -1;
         }
 
         // Apply this render's persisted zoom/viewport/playhead (or
@@ -5576,7 +5555,19 @@ int main(int argc, char** argv) {
         app.viewport_start_sample = t.viewport_start_sample;
         app.zoom_level            = t.zoom_level;
         app.playhead_sample       = t.playhead_sample;
+        // Brief J.2 Section 4: load the matching-mode slot into the
+        // live pair. Live pair held render-view selection while
+        // render-view was active; restoring source-view requires
+        // pulling the source tab's matching-mode slot back in.
+        if (app.active_mode == 'T') {
+            app.selected_markers     = t.transient_selected;
+            app.last_selected_marker = t.transient_last_selected;
+        } else {
+            app.selected_markers     = t.warp_selected;
+            app.last_selected_marker = t.warp_last_selected;
+        }
         clamp_viewport_start(app, audio);
+        prune_live_selection();
 
         if (!playback.init(audio.sample_rate(), audio.channels(),
                            audio.samples_ptr(), audio.total_frames())) {
@@ -6052,6 +6043,19 @@ int main(int argc, char** argv) {
             app.selected_markers.clear();
             app.transient_selected_markers.clear();
             app.last_selected_marker = -1;
+            // Brief J.2 Section 4: the active tab's per-mode slots
+            // referenced the OLD app.markers/transients we just
+            // replaced. Clear them so restore_source_audio loads
+            // empty into the live pair (and so a later mode flip
+            // doesn't surface stale indices).
+            {
+                ViewState& t = (app.active_tab == 'B') ? app.tab_b
+                                                       : app.tab_a;
+                t.warp_selected.clear();
+                t.warp_last_selected      = -1;
+                t.transient_selected.clear();
+                t.transient_last_selected = -1;
+            }
 
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'W', OpKind::Other,
@@ -6069,10 +6073,6 @@ int main(int argc, char** argv) {
             app.render_view_list.clear();
             app.render_view_markers.clear();
             app.render_view_transients.clear();
-            app.render_view_selected_markers.clear();
-            app.render_view_last_selected_marker    = -1;
-            app.render_view_selected_transients.clear();
-            app.render_view_last_selected_transient = -1;
             app.render_view_index             = -1;
             app.render_view_src_F_begin       = 0;
             app.render_view_src_F_end         = 0;
@@ -6267,10 +6267,6 @@ int main(int argc, char** argv) {
                 app.render_view_enabled = false;
                 app.render_view_markers.clear();
                 app.render_view_transients.clear();
-                app.render_view_selected_markers.clear();
-                app.render_view_last_selected_marker = -1;
-                app.render_view_selected_transients.clear();
-                app.render_view_last_selected_transient = -1;
                 app.render_view_index             = -1;
                 app.render_view_src_F_begin       = 0;
                 app.render_view_src_F_end         = 0;
@@ -6508,15 +6504,12 @@ int main(int argc, char** argv) {
             if (inside_waveform)  hit = hit_test_marker_line(x);
             else if (inside_top)  hit = hit_test_flag(x, y);
             else                  return;
-            // Brief F Section 3: route selection through the sub-view's
-            // own pair (warp set + last, or transient set + last).
+            // Brief J.2 Section 3: live selection lives in the global
+            // pair regardless of view domain. active_mode tells us
+            // which marker list the indices map to.
             const bool sub_t = (app.active_mode == 'T');
-            std::set<int>& sel = sub_t
-                ? app.render_view_selected_transients
-                : app.render_view_selected_markers;
-            int& last_sel = sub_t
-                ? app.render_view_last_selected_transient
-                : app.render_view_last_selected_marker;
+            std::set<int>& sel = app.selected_markers;
+            int& last_sel      = app.last_selected_marker;
             const int n = sub_t
                 ? static_cast<int>(app.render_view_transients.size())
                 : static_cast<int>(app.render_view_markers.size());
@@ -6855,20 +6848,16 @@ int main(int argc, char** argv) {
             }
             if (snapped >= 0) {
                 if (app.render_view_enabled) {
-                    const bool sub_t = (app.active_mode == 'T');
-                    std::set<int>& sel = sub_t
-                        ? app.render_view_selected_transients
-                        : app.render_view_selected_markers;
-                    int& last_sel = sub_t
-                        ? app.render_view_last_selected_transient
-                        : app.render_view_last_selected_marker;
+                    // Brief J.2 Section 3: render-view writes the
+                    // global live pair. active_mode tells us which
+                    // marker list the indices map to.
                     if (shift) {
-                        sel.insert(snapped);
-                        last_sel = snapped;
+                        app.selected_markers.insert(snapped);
+                        app.last_selected_marker = snapped;
                     } else {
-                        sel.clear();
-                        sel.insert(snapped);
-                        last_sel = snapped;
+                        app.selected_markers.clear();
+                        app.selected_markers.insert(snapped);
+                        app.last_selected_marker = snapped;
                     }
                     gui.invalidate_region(0, 0, app.width, app.height);
                 } else if (shift) {
