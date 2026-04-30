@@ -5,8 +5,9 @@
 #include <string>
 
 // X11 + Cairo window/event-loop plumbing. Owns the display connection, the
-// window, an off-screen pixmap for double-buffering, and the Cairo surface
-// bound to that pixmap. Turns X11 events into application-level callbacks.
+// window, a client-side Cairo image surface for double-buffering, and an
+// XImage view of that surface used to push painted regions to the server
+// via XPutImage. Turns X11 events into application-level callbacks.
 class GuiX11 {
 public:
     using RedrawCallback       = std::function<void(cairo_t*, int x, int y, int w, int h)>;
@@ -76,7 +77,7 @@ private:
     Window           win_      = 0;
     int              screen_   = 0;
     GC               gc_       = nullptr;
-    Pixmap           pixmap_   = 0;
+    XImage*          image_    = nullptr;
     cairo_surface_t* surface_  = nullptr;
     cairo_t*         cr_       = nullptr;
     cairo_surface_t* playhead_triangle_surface_ = nullptr;

@@ -2,7 +2,6 @@
 
 #include "playhead_cursor_data.h"
 
-#include <cairo/cairo-xlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -101,6 +100,26 @@ bool GuiX11::init(int width, int height, const char* title) {
 
     screen_ = DefaultScreen(dpy_);
     Window root = RootWindow(dpy_, screen_);
+
+    // One-shot sanity check: cairo's CAIRO_FORMAT_RGB24 produces BGRX
+    // little-endian pixel data, which assumes a 24-bit TrueColor visual
+    // with R=0xff0000, G=0xff00, B=0xff masks. Flag, don't fall back —
+    // anything else is rare in 2026 but produces visibly wrong colors.
+    {
+        Visual* vis      = DefaultVisual(dpy_, screen_);
+        const int depth  = DefaultDepth(dpy_, screen_);
+        if (depth != 24 ||
+            vis->c_class    != TrueColor ||
+            vis->red_mask   != 0xff0000UL ||
+            vis->green_mask != 0x00ff00UL ||
+            vis->blue_mask  != 0x0000ffUL) {
+            std::fprintf(stderr,
+                "warptempo_gui: unexpected default visual "
+                "(depth=%d class=%d masks=%lx/%lx/%lx); colors may be wrong\n",
+                depth, vis->c_class,
+                vis->red_mask, vis->green_mask, vis->blue_mask);
+        }
+    }
 
     // Brief L: detect the active display's refresh rate via XRandR and
     // size the playback idle-poll timeout to oversample vblank by 2×
@@ -246,11 +265,18 @@ void GuiX11::recreate_buffer(int w, int h) {
     destroy_buffer();
     if (w < 1) w = 1;
     if (h < 1) h = 1;
-    pixmap_ = XCreatePixmap(dpy_, win_, w, h, DefaultDepth(dpy_, screen_));
-    surface_ = cairo_xlib_surface_create(dpy_, pixmap_,
-                                         DefaultVisual(dpy_, screen_),
-                                         w, h);
-    cr_ = cairo_create(surface_);
+    surface_ = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+    cr_      = cairo_create(surface_);
+    image_   = XCreateImage(
+        dpy_,
+        DefaultVisual(dpy_, screen_),
+        DefaultDepth(dpy_, screen_),
+        ZPixmap,
+        0,
+        reinterpret_cast<char*>(cairo_image_surface_get_data(surface_)),
+        w, h,
+        32,
+        cairo_image_surface_get_stride(surface_));
 }
 
 void GuiX11::destroy_buffer() {
@@ -258,19 +284,22 @@ void GuiX11::destroy_buffer() {
         cairo_destroy(cr_);
         cr_ = nullptr;
     }
+    if (image_) {
+        // Cairo owns the pixel buffer; null XImage's data pointer first so
+        // XDestroyImage doesn't free cairo's memory and corrupt the heap.
+        image_->data = nullptr;
+        XDestroyImage(image_);
+        image_ = nullptr;
+    }
     if (surface_) {
         cairo_surface_destroy(surface_);
         surface_ = nullptr;
     }
-    if (pixmap_ && dpy_) {
-        XFreePixmap(dpy_, pixmap_);
-        pixmap_ = 0;
-    }
 }
 
 void GuiX11::blit(int x, int y, int w, int h) {
-    if (!pixmap_ || !dpy_) return;
-    XCopyArea(dpy_, pixmap_, win_, gc_, x, y, w, h, x, y);
+    if (!image_ || !dpy_) return;
+    XPutImage(dpy_, win_, gc_, image_, x, y, x, y, w, h);
 }
 
 void GuiX11::invalidate_region(int x, int y, int w, int h) {
@@ -614,6 +643,6 @@ void GuiX11::drain_events() {
         XNextEvent(dpy_, &ev);
         dispatch_event(ev);
     }
-    // Ensure the resulting XCopyArea blits reach the server promptly.
+    // Ensure the resulting XPutImage blits reach the server promptly.
     XFlush(dpy_);
 }
