@@ -7406,7 +7406,7 @@ int main(int argc, char** argv) {
     // Idle timeout: wake the poll loop every ~16 ms during playback so the
     // tick can advance the playhead even in the absence of input events.
     gui.set_idle_timeout_provider([&]() -> int {
-        if (app.is_playing || playback.is_playing()) return 16;
+        if (app.is_playing || playback.is_playing()) return gui.playback_tick_ms();
         // While the top-flag editor is active, wake periodically so the
         // cursor blink can flip. ~125ms gives ample resolution on a
         // 500ms half-period without burning CPU.

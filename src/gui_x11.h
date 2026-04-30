@@ -37,6 +37,12 @@ public:
     int width()  const { return width_;  }
     int height() const { return height_; }
 
+    // Brief L: idle-poll timeout (ms) sized to oversample the active
+    // display's vblank by 2× (1000 / refresh_hz / 2). Detected once at
+    // init() via XRandR; on detection failure, holds Brief K's 8 ms
+    // fallback.
+    int playback_tick_ms() const { return playback_tick_ms_; }
+
     // Pre-loaded image surface for the playhead's inverted-triangle
     // indicator. Decoded once during init() from a PNG byte buffer embedded
     // in the binary (see playhead_cursor_data.h). Renderers paint it via
@@ -78,6 +84,7 @@ private:
     int              width_    = 0;
     int              height_   = 0;
     bool             should_exit_ = false;
+    int              playback_tick_ms_ = 8;
 
     // --- XDND (drag-and-drop) protocol state ---
     Atom xdnd_aware_       = 0;

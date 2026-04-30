@@ -6,6 +6,7 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
+#include <X11/extensions/Xrandr.h>
 
 #include <poll.h>
 #include <unistd.h>
@@ -100,6 +101,75 @@ bool GuiX11::init(int width, int height, const char* title) {
 
     screen_ = DefaultScreen(dpy_);
     Window root = RootWindow(dpy_, screen_);
+
+    // Brief L: detect the active display's refresh rate via XRandR and
+    // size the playback idle-poll timeout to oversample vblank by 2×
+    // (1000 / refresh_hz / 2). Guarantees every vblank receives at least
+    // one tick worth of playhead advance, regardless of refresh rate,
+    // even with timer slack. Falls back to Brief K's fixed 8 ms if any
+    // XRandR call fails.
+    {
+        bool detected = false;
+        double detected_hz = 0.0;
+        XRRScreenResources* res = XRRGetScreenResources(dpy_, root);
+        if (res) {
+            RROutput primary = XRRGetOutputPrimary(dpy_, root);
+            XRROutputInfo* oi = nullptr;
+            RRCrtc crtc = None;
+            if (primary != None) {
+                oi = XRRGetOutputInfo(dpy_, res, primary);
+                if (oi) crtc = oi->crtc;
+            }
+            if (crtc == None) {
+                for (int i = 0; i < res->ncrtc; i++) {
+                    XRRCrtcInfo* ci = XRRGetCrtcInfo(dpy_, res, res->crtcs[i]);
+                    if (!ci) continue;
+                    if (ci->mode != None) {
+                        crtc = res->crtcs[i];
+                        XRRFreeCrtcInfo(ci);
+                        break;
+                    }
+                    XRRFreeCrtcInfo(ci);
+                }
+            }
+            XRRCrtcInfo* ci = (crtc != None)
+                ? XRRGetCrtcInfo(dpy_, res, crtc)
+                : nullptr;
+            if (ci) {
+                const RRMode mode_id = ci->mode;
+                for (int i = 0; i < res->nmode; i++) {
+                    const XRRModeInfo& m = res->modes[i];
+                    if (m.id != mode_id) continue;
+                    if (m.dotClock == 0 || m.hTotal == 0 || m.vTotal == 0) break;
+                    const double hz =
+                        static_cast<double>(m.dotClock) /
+                        (static_cast<double>(m.hTotal) *
+                         static_cast<double>(m.vTotal));
+                    if (hz <= 0.0) break;
+                    int t = static_cast<int>(1000.0 / hz / 2.0);
+                    if (t < 1)  t = 1;
+                    if (t > 16) t = 16;
+                    playback_tick_ms_ = t;
+                    detected_hz = hz;
+                    detected = true;
+                    break;
+                }
+                XRRFreeCrtcInfo(ci);
+            }
+            if (oi) XRRFreeOutputInfo(oi);
+            XRRFreeScreenResources(res);
+        }
+        if (detected) {
+            std::fprintf(stderr,
+                "Display refresh rate detected: %.0f Hz, "
+                "playback tick timeout: %d ms\n",
+                detected_hz, playback_tick_ms_);
+        } else {
+            std::fprintf(stderr,
+                "XRandR refresh detection failed, using fallback (%d ms)\n",
+                playback_tick_ms_);
+        }
+    }
 
     win_ = XCreateSimpleWindow(
         dpy_, root,

@@ -40,7 +40,7 @@ add_executable(parser src/parser.cpp)
 # If it does, we can add a target_link_libraries block for it here.)
 
 # --- 3. Build the GUI (Xlib + Cairo) ---
-pkg_check_modules(X11 REQUIRED x11)
+pkg_check_modules(X11 REQUIRED x11 xrandr)
 pkg_check_modules(CAIRO REQUIRED cairo)
 
 add_executable(warptempo_gui
