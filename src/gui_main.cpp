@@ -466,7 +466,14 @@ struct PromptState {
 // tabs (Ctrl+Tab) and switching modes (`t`) both restore the right
 // selection set for the destination cell. The active selection lives in
 // AppState; these slots are the persistent snapshots.
-struct Tab {
+//
+// Brief J.1: the same struct is reused by RenderViewEntry::state to carry
+// per-render persisted view-state across render-view exit/enter and
+// batch-nav. Source-view tabs leave `sub_mode` at its default and never
+// read it; render-view entries leave the viewport/zoom/playhead fields at
+// default in J.1 (those still flow through the live AppState fields and
+// the .rendersettings sidecar; J.2 will reroute them through `state`).
+struct ViewState {
     int64_t viewport_start_sample = 0;
     int     zoom_level            = 0;
     int64_t playhead_sample       = 0;
@@ -475,6 +482,10 @@ struct Tab {
     int           warp_last_selected      = -1;
     std::set<int> transient_selected;
     int           transient_last_selected = -1;
+
+    // Render-view-only sub-mode persistence ('W' or 'T'). Unused by
+    // source-view tabs in J.1.
+    char sub_mode = 'W';
 };
 
 // Parsed contents of .settings, separated into tab-handled keys (typed with
@@ -551,7 +562,7 @@ struct AppState {
     //
     // Chunk S.2.2: this pair holds the *active* selection — i.e. for the
     // current tab + current `active_mode`. The persistent per-tab per-mode
-    // slots live on Tab and are saved/restored on mode/tab transitions.
+    // slots live on ViewState and are saved/restored on mode/tab transitions.
     std::set<int> selected_markers;
     int           last_selected_marker = -1;
 
@@ -638,8 +649,8 @@ struct AppState {
 
     // A/B navigational tabs. Ctrl+Tab toggles between them; each holds a
     // snapshot of viewport/zoom/playhead. Persisted in .settings.
-    Tab  tab_a;
-    Tab  tab_b;
+    ViewState tab_a;
+    ViewState tab_b;
     char active_tab = 'A';
 
     // Pass-through entries read from .settings on load and re-emitted
@@ -714,17 +725,16 @@ struct AppState {
         std::string           basename;         // e.g. "01" (no extension)
         std::filesystem::path wav_path;         // batch_folder / (basename + ".wav")
 
-        // Brief F Section 4: per-entry persisted selection across
-        // render-view exit/enter and batch-nav. The four selection fields
-        // are valid only when the wav still has the same (size, mtime)
-        // as when stashed; mismatch on reload drops them silently.
-        std::set<int> persisted_selected_warp;
-        int           persisted_last_warp        = -1;
-        std::set<int> persisted_selected_trans;
-        int           persisted_last_trans       = -1;
-        // Sub-view restored alongside the selection. Persisted only when
-        // stat tuple matches; default 'W' otherwise.
-        char          persisted_sub_mode         = 'W';
+        // Brief J.1: per-entry persisted view-state across render-view
+        // exit/enter and batch-nav. Selection + sub-mode are valid only
+        // when the wav still has the same (size, mtime) as when stashed;
+        // mismatch on reload drops them silently. The viewport/zoom/
+        // playhead fields on `state` are unused in J.1 — render-view's
+        // viewport state continues to flow through the live AppState
+        // fields and the .rendersettings sidecar; J.2 will reroute them
+        // through `state`.
+        ViewState state;
+
         // Stat-tuple key for selection validity. Captured when stashed,
         // compared against the current file's stat on re-load.
         uintmax_t     persisted_size             = 0;
@@ -751,7 +761,7 @@ struct AppState {
     // Brief F Section 3: render-view-only sub-view flag. 'W' = the
     // rendered warp markers list, 'T' = the rendered transient markers
     // list. Reset to 'W' on render-view entry unless restored from the
-    // entry's persisted_sub_mode (Section 4). Plain `t` flips it.
+    // entry's state.sub_mode (Section 4). Plain `t` flips it.
     char                         render_view_sub_mode = 'W';
     // Source-frame mapping of the current render: F_begin..F_end (source
     // sample-rate frames) is what the render's full audio covers. When the
@@ -1109,8 +1119,8 @@ bool parse_settings_file(const std::string& path, ParsedSettings& out) {
 // (tmp → fsync → rename). Best-effort: failure is logged by the caller.
 bool write_settings_file(
     const std::string& path,
-    const Tab& tab_a,
-    const Tab& tab_b,
+    const ViewState& tab_a,
+    const ViewState& tab_b,
     bool follow,
     const std::vector<std::pair<std::string, std::string>>& passthrough) {
     std::string data;
@@ -3030,7 +3040,7 @@ int main(int argc, char** argv) {
         if (entry.op_mode != app.active_mode) {
             // Stash the current selection into the leaving mode's slot,
             // then restore the destination mode's slot.
-            Tab& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+            ViewState& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
             if (app.active_mode == 'T') {
                 curtab.transient_selected      = app.selected_markers;
                 curtab.transient_last_selected = app.last_selected_marker;
@@ -3087,7 +3097,7 @@ int main(int argc, char** argv) {
         app.transients.markers_mut() = std::move(entry.transient_snapshot);
 
         if (entry.op_mode != app.active_mode) {
-            Tab& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+            ViewState& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
             if (app.active_mode == 'T') {
                 curtab.transient_selected      = app.selected_markers;
                 curtab.transient_last_selected = app.last_selected_marker;
@@ -4073,7 +4083,7 @@ int main(int argc, char** argv) {
     // Also stashes the active selection into the per-mode slot so a tab
     // flip + mode flip can restore the right pair on return.
     auto refresh_active_tab_from_app = [&]() {
-        Tab& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+        ViewState& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
         t.viewport_start_sample = app.viewport_start_sample;
         t.zoom_level            = app.zoom_level;
         t.playhead_sample       = app.playhead_sample;
@@ -4093,7 +4103,7 @@ int main(int argc, char** argv) {
     // run; this helper just shuffles the AppState fields.
     auto switch_active_mode_to = [&](char target_mode) {
         if (target_mode == app.active_mode) return;
-        Tab& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+        ViewState& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
         if (app.active_mode == 'T') {
             t.transient_selected      = app.selected_markers;
             t.transient_last_selected = app.last_selected_marker;
@@ -4273,8 +4283,8 @@ int main(int argc, char** argv) {
         app.pending_drop_path.clear();
         app.settings_passthrough.clear();
 
-        app.tab_a = Tab{};
-        app.tab_b = Tab{};
+        app.tab_a = ViewState{};
+        app.tab_b = ViewState{};
         app.active_tab = 'A';
 
         invalidate_all();
@@ -5329,11 +5339,11 @@ int main(int argc, char** argv) {
             return;
         }
         auto& e = app.render_view_list[app.render_view_index];
-        e.persisted_selected_warp  = app.render_view_selected_markers;
-        e.persisted_last_warp      = app.render_view_last_selected_marker;
-        e.persisted_selected_trans = app.render_view_selected_transients;
-        e.persisted_last_trans     = app.render_view_last_selected_transient;
-        e.persisted_sub_mode       = app.render_view_sub_mode;
+        e.state.warp_selected           = app.render_view_selected_markers;
+        e.state.warp_last_selected      = app.render_view_last_selected_marker;
+        e.state.transient_selected      = app.render_view_selected_transients;
+        e.state.transient_last_selected = app.render_view_last_selected_transient;
+        e.state.sub_mode                = app.render_view_sub_mode;
         const auto stat = wav_stat_tuple(e.wav_path);
         e.persisted_size  = stat.first;
         e.persisted_mtime = stat.second;
@@ -5442,11 +5452,11 @@ int main(int argc, char** argv) {
             cur_stat.first  == e.persisted_size &&
             cur_stat.second == e.persisted_mtime;
         if (stat_match) {
-            app.render_view_selected_markers     = e.persisted_selected_warp;
-            app.render_view_last_selected_marker = e.persisted_last_warp;
-            app.render_view_selected_transients  = e.persisted_selected_trans;
+            app.render_view_selected_markers     = e.state.warp_selected;
+            app.render_view_last_selected_marker = e.state.warp_last_selected;
+            app.render_view_selected_transients  = e.state.transient_selected;
             app.render_view_last_selected_transient =
-                e.persisted_last_trans;
+                e.state.transient_last_selected;
             // Prune stale indices in case marker counts changed despite
             // the stat tuple matching by coincidence.
             const int n_warp =
@@ -5488,7 +5498,7 @@ int main(int argc, char** argv) {
                         : *app.render_view_selected_transients.rbegin();
             }
             if (restore_sub_mode) {
-                app.render_view_sub_mode = e.persisted_sub_mode;
+                app.render_view_sub_mode = e.state.sub_mode;
             }
         } else {
             app.render_view_selected_markers.clear();
@@ -5531,7 +5541,7 @@ int main(int argc, char** argv) {
         // first entered. The Tab key is gated out of render-view's input
         // allowlist, so app.active_tab is the same letter the snapshot
         // was written under.
-        const Tab& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
+        const ViewState& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
         app.viewport_start_sample = t.viewport_start_sample;
         app.zoom_level            = t.zoom_level;
         app.playhead_sample       = t.playhead_sample;
@@ -6188,13 +6198,9 @@ int main(int argc, char** argv) {
                         auto it = prior.find(ne.wav_path.string());
                         if (it == prior.end()) continue;
                         const auto& src = *it->second;
-                        ne.persisted_selected_warp  = src.persisted_selected_warp;
-                        ne.persisted_last_warp      = src.persisted_last_warp;
-                        ne.persisted_selected_trans = src.persisted_selected_trans;
-                        ne.persisted_last_trans     = src.persisted_last_trans;
-                        ne.persisted_sub_mode       = src.persisted_sub_mode;
-                        ne.persisted_size           = src.persisted_size;
-                        ne.persisted_mtime          = src.persisted_mtime;
+                        ne.state           = src.state;
+                        ne.persisted_size  = src.persisted_size;
+                        ne.persisted_mtime = src.persisted_mtime;
                     }
                 }
                 int target = 0;
@@ -6214,7 +6220,7 @@ int main(int argc, char** argv) {
                 app.render_view_enabled    = true;
                 // Brief F Section 3 / 4: enter with sub-mode 'W' as the
                 // default; load_render_view_at may overwrite via the
-                // destination entry's persisted_sub_mode when the stat
+                // destination entry's state.sub_mode when the stat
                 // tuple still matches.
                 app.render_view_sub_mode  = 'W';
                 if (!load_render_view_at(target, /*restore_sub_mode=*/true)) {
@@ -6298,7 +6304,7 @@ int main(int argc, char** argv) {
             clear_hover_popup();
             refresh_active_tab_from_app();
             app.active_tab = (app.active_tab == 'A') ? 'B' : 'A';
-            const Tab& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
+            const ViewState& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
             app.viewport_start_sample = target.viewport_start_sample;
             app.zoom_level            = target.zoom_level;
             app.playhead_sample       = target.playhead_sample;
@@ -7219,7 +7225,7 @@ int main(int argc, char** argv) {
 
         // Seed both tabs with the freshly-computed default post-load state.
         // Parsed .settings values overwrite per-key below.
-        Tab default_tab;
+        ViewState default_tab;
         default_tab.viewport_start_sample = app.viewport_start_sample;
         default_tab.zoom_level            = app.zoom_level;
         default_tab.playhead_sample       = app.playhead_sample;
@@ -7245,7 +7251,7 @@ int main(int argc, char** argv) {
             auto apply = [&](bool has_vp, int64_t vp,
                              bool has_zoom, int zoom,
                              bool has_ph, int64_t ph,
-                             Tab& dst) {
+                             ViewState& dst) {
                 if (has_vp   && vp   >= 0 && vp   <  total)  dst.viewport_start_sample = vp;
                 if (has_zoom && valid_zoom(zoom))            dst.zoom_level            = zoom;
                 if (has_ph   && ph   >= 0 && ph   <= total)  dst.playhead_sample       = ph;
