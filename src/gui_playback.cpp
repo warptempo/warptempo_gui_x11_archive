@@ -39,11 +39,14 @@ struct GuiPlayback::Impl {
 
     // Mutable playback state.
     std::atomic<int64_t> cursor{0};
-    // Free-running cursor predictor anchor. Set at play() to (start_sample,
-    // now()). The main thread extrapolates linearly from this pair using
-    // wall-clock time. Drift between predictor and audio is bounded by
-    // session length × steady_clock vs sample-clock skew (sub-pixel at
-    // typical zoom levels for typical session lengths).
+    // Free-running cursor predictor anchor. The main thread extrapolates
+    // linearly from (anchor_sample, anchor_ns) using wall-clock time.
+    // Re-anchored at events of acceptable visible discontinuity (play(),
+    // playhead jumps, viewport reflows, speed changes, follow-mode on)
+    // — never inside the audio callback. Drift between predictor and
+    // audio is bounded by time since last resync × steady_clock vs
+    // sample-clock skew (sub-pixel at typical zoom levels for typical
+    // resync intervals).
     std::atomic<int64_t> anchor_sample{0};
     std::atomic<int64_t> anchor_ns{0};
     std::atomic<int32_t> speed_x1000{1000};  // speed * 1000, so we can store in int
@@ -251,6 +254,15 @@ void GuiPlayback::play(int64_t start_sample, int64_t end_sample) {
     impl_->anchor_sample.store(start_sample, std::memory_order_relaxed);
     impl_->anchor_ns.store(now_ns, std::memory_order_relaxed);
     impl_->playing.store(true, std::memory_order_relaxed);
+}
+
+void GuiPlayback::resync_predictor() {
+    if (!impl_) return;
+    const int64_t cur = impl_->cursor.load(std::memory_order_relaxed);
+    const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    impl_->anchor_sample.store(cur, std::memory_order_relaxed);
+    impl_->anchor_ns.store(now_ns, std::memory_order_relaxed);
 }
 
 void GuiPlayback::stop() {

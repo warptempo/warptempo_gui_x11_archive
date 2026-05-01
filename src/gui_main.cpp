@@ -1310,6 +1310,7 @@ int main(int argc, char** argv) {
         if (viewport_changed && recompute_hover_at_cursor) {
             recompute_hover_at_cursor();
         }
+        if (playback.is_playing()) playback.resync_predictor();
     };
 
     auto move_playhead_pixels = [&](int delta_px) {
@@ -1353,6 +1354,7 @@ int main(int argc, char** argv) {
         // V.A3b Addendum 3: rects shifted under the (possibly stationary)
         // cursor — re-evaluate hover.
         if (recompute_hover_at_cursor) recompute_hover_at_cursor();
+        if (playback.is_playing()) playback.resync_predictor();
     };
 
     auto zoom_in = [&]() {
@@ -2124,6 +2126,7 @@ int main(int argc, char** argv) {
             if (max_num < 0 || app.zoom_level > max_num) {
                 app.zoom_level = kFitFileLevel;
                 app.viewport_start_sample = 0;
+                if (playback.is_playing()) playback.resync_predictor();
             }
         }
         clamp_viewport_start(app, audio);
@@ -2852,6 +2855,7 @@ int main(int argc, char** argv) {
             app.viewport_start_sample = target_sample - visible / 2;
             clamp_viewport_start(app, audio);
         }
+        if (playback.is_playing()) playback.resync_predictor();
     };
 
     // Apply post-restore selection and playhead rules per the chunk L
@@ -4602,6 +4606,10 @@ int main(int argc, char** argv) {
     auto set_playback_speed = [&](float s) {
         app.playback_speed = s;
         playback.set_speed(s);
+        // Speed change without resync would cause a backward cursor jump:
+        // the predictor would retroactively apply the new speed to the
+        // entire elapsed-since-anchor period.
+        if (playback.is_playing()) playback.resync_predictor();
     };
 
     // Hit-test a marker line in the waveform area. Returns index or -1.
@@ -6427,7 +6435,12 @@ int main(int argc, char** argv) {
             case XK_Up:     zoom_in();                        break;
             case XK_Down:   zoom_out();                       break;
             case XK_f: {
+                const bool was_off = !app.follow_mode;
                 app.follow_mode = !app.follow_mode;
+                if (was_off && app.follow_mode &&
+                    playback.is_playing()) {
+                    playback.resync_predictor();
+                }
                 break;
             }
             case XK_c:      center_viewport_on_playhead();    break;
@@ -7058,6 +7071,7 @@ int main(int argc, char** argv) {
             if (ph != app.playhead_sample) {
                 const double old_px = playhead_pixel_x(app, audio);
                 app.playhead_sample = ph;
+                if (playback.is_playing()) playback.resync_predictor();
                 const double new_px = playhead_pixel_x(app, audio);
                 invalidate_playhead_columns(old_px, new_px);
                 invalidate_timestamp_area();
@@ -7343,6 +7357,7 @@ int main(int argc, char** argv) {
             clamp_viewport_start(app, audio);
             if (app.viewport_start_sample != old_vp) {
                 invalidate_waveform_area();
+                if (playback.is_playing()) playback.resync_predictor();
             }
         }
     };
