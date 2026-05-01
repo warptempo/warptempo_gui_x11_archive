@@ -42,6 +42,9 @@ add_executable(parser src/parser.cpp)
 # --- 3. Build the GUI (Xlib + Cairo) ---
 pkg_check_modules(X11 REQUIRED x11 xrandr)
 pkg_check_modules(CAIRO REQUIRED cairo)
+# JACK is required: miniaudio is initialized with the JACK backend explicitly
+# (no auto-fallback). On Arch this is satisfied by pipewire-jack.
+pkg_check_modules(JACK REQUIRED jack)
 
 add_executable(warptempo_gui
     src/gui_main.cpp
@@ -69,6 +72,7 @@ target_include_directories(warptempo_gui PRIVATE
     ${CAIRO_INCLUDE_DIRS}
     ${SNDFILE_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
+    ${JACK_INCLUDE_DIRS}
 )
 target_link_libraries(warptempo_gui PRIVATE
     ${X11_LIBRARIES}
@@ -76,6 +80,7 @@ target_link_libraries(warptempo_gui PRIVATE
     ${SNDFILE_LIBRARIES}
     ${FFTW3_THREADS_LIB}
     ${FFTW3_LIBRARIES}
+    ${JACK_LIBRARIES}
     pthread
     dl
     m

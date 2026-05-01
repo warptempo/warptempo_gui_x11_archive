@@ -43,7 +43,11 @@
 // resync's discontinuity (bounded by one audio buffer's worth of samples)
 // must land in the same monitor frame as the viewport reflow it is
 // co-located with. Future predictor work must preserve this constraint
-// or argue explicitly to overturn it.
+// or argue explicitly to overturn it. The masking criterion holds across
+// all zoom levels because drift visibility scales inversely with
+// viewport-event frequency, keeping per-event accumulated drift sub-pixel
+// at every zoom and per-event buffer-staleness snap masked by the user 
+// motion at the resync site.
 class GuiPlayback {
 public:
     GuiPlayback();

@@ -24,6 +24,12 @@
 // stays constant within one fill, avoiding mid-buffer rate artefacts.
 
 struct GuiPlayback::Impl {
+    // Explicit JACK context. miniaudio's backend selection lives at the
+    // context level — `ma_device_config` has no backend field — so we
+    // initialize a context with a single-entry backend list before
+    // creating the device. No auto-fallback to ALSA.
+    ma_context context{};
+    bool      context_inited = false;
     ma_device device{};
     bool      device_inited = false;
 
@@ -192,6 +198,25 @@ bool GuiPlayback::init(int sample_rate, int channels, const float* samples,
     impl_->pending_start.store(-1, std::memory_order_relaxed);
     impl_->fractional_cursor = 0.0;
 
+    // Force JACK explicitly: the user runs PipeWire with pipewire-jack and
+    // wants warptempo's latency profile to match REAPER's JACK path. A
+    // silent fallback to ALSA would defeat the purpose, so we pass a
+    // single-element backends array — if JACK is unavailable, init fails
+    // here rather than landing on the ALSA shim.
+    ma_backend backends[] = { ma_backend_jack };
+    const ma_result ctx_r = ma_context_init(backends, 1, nullptr,
+                                            &impl_->context);
+    if (ctx_r != MA_SUCCESS) {
+        std::fprintf(stderr,
+            "warptempo_gui: JACK audio context init failed (ma_result=%d); "
+            "playback disabled. Verify pipewire-jack is running.\n",
+            static_cast<int>(ctx_r));
+        impl_->samples      = nullptr;
+        impl_->total_frames = 0;
+        return false;
+    }
+    impl_->context_inited = true;
+
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format  = ma_format_f32;
     cfg.playback.channels = static_cast<ma_uint32>(channels);
@@ -199,11 +224,14 @@ bool GuiPlayback::init(int sample_rate, int channels, const float* samples,
     cfg.dataCallback      = data_callback;
     cfg.pUserData         = impl_.get();
 
-    const ma_result r = ma_device_init(nullptr, &cfg, &impl_->device);
+    const ma_result r = ma_device_init(&impl_->context, &cfg, &impl_->device);
     if (r != MA_SUCCESS) {
         std::fprintf(stderr,
-            "warptempo_gui: audio device init failed (ma_result=%d); "
-            "playback disabled\n", static_cast<int>(r));
+            "warptempo_gui: JACK audio device init failed (ma_result=%d); "
+            "playback disabled. Verify pipewire-jack is running.\n",
+            static_cast<int>(r));
+        ma_context_uninit(&impl_->context);
+        impl_->context_inited = false;
         impl_->samples      = nullptr;
         impl_->total_frames = 0;
         return false;
@@ -213,14 +241,20 @@ bool GuiPlayback::init(int sample_rate, int channels, const float* samples,
     const ma_result s = ma_device_start(&impl_->device);
     if (s != MA_SUCCESS) {
         std::fprintf(stderr,
-            "warptempo_gui: audio device start failed (ma_result=%d); "
-            "playback disabled\n", static_cast<int>(s));
+            "warptempo_gui: JACK audio device start failed (ma_result=%d); "
+            "playback disabled. Verify pipewire-jack is running.\n",
+            static_cast<int>(s));
         ma_device_uninit(&impl_->device);
         impl_->device_inited = false;
+        ma_context_uninit(&impl_->context);
+        impl_->context_inited = false;
         impl_->samples      = nullptr;
         impl_->total_frames = 0;
         return false;
     }
+    std::fprintf(stderr,
+        "warptempo_gui: audio backend = JACK (via pipewire-jack), "
+        "sample_rate=%d, channels=%d\n", sample_rate, channels);
     return true;
 }
 
@@ -314,6 +348,10 @@ void GuiPlayback::shutdown() {
         // immediately after this returns.
         ma_device_uninit(&impl_->device);
         impl_->device_inited = false;
+    }
+    if (impl_->context_inited) {
+        ma_context_uninit(&impl_->context);
+        impl_->context_inited = false;
     }
     impl_->samples      = nullptr;
     impl_->total_frames = 0;
