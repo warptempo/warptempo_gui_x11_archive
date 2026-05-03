@@ -27,8 +27,10 @@
 // topology: playhead jumps via move_playhead, zoom in/out via the shared
 // apply_zoom_change helper, the resize fit-file fallback,
 // sync_playhead_to_last_selected (live nudges and undo/redo restores),
-// set_playback_speed, follow-mode off-to-on, marker-drag hover, and
-// follow-scroll auto-shift.
+// set_playback_speed, follow-mode off-to-on, marker-drag hover,
+// follow-scroll auto-shift, wheel-driven horizontal pan via
+// scroll_viewport (Alt-wheel coarse, Ctrl+Alt-wheel fine), and
+// viewport recenter via center_viewport_on_playhead (C key).
 //
 // Two alternatives were considered and rejected. A free-running predictor
 // with no resync (Brief O state) is insufficient for medium-zoom playback

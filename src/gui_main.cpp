@@ -1394,6 +1394,7 @@ int main(int argc, char** argv) {
             // V.A3b Addendum 3: rects shifted under the (possibly
             // stationary) cursor — re-evaluate hover.
             if (recompute_hover_at_cursor) recompute_hover_at_cursor();
+            if (playback.is_playing()) playback.resync_predictor();
         }
     };
 
@@ -1410,6 +1411,7 @@ int main(int argc, char** argv) {
             // V.A3b Addendum 3: rects shifted under the (possibly
             // stationary) cursor — re-evaluate hover.
             if (recompute_hover_at_cursor) recompute_hover_at_cursor();
+            if (playback.is_playing()) playback.resync_predictor();
         }
     };
 
