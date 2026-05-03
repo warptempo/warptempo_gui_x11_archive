@@ -59,14 +59,12 @@ void Transients::process(AudioSTFT& stft) {
             for (int n = 0; n < N; ++n)
                 stft.fft_in[n] = read_buf[n * channels + ch] * stft.window[n];
             fftw_execute(stft.plan_fwd);
-            #pragma omp parallel for
             for (int k = 0; k <= N / 2; ++k)
                 M_sq[k] += (stft.fft_out[k][0] * stft.fft_out[k][0] +
                             stft.fft_out[k][1] * stft.fft_out[k][1]) / channels;
         }
 
         double den_M = 0.0;
-        #pragma omp parallel for reduction(+:den_M)
         for (int k = 1; k <= N / 2; ++k)
             den_M += M_sq[k] * W_M[k];
         energy[m] = den_M;
@@ -81,7 +79,6 @@ void Transients::process(AudioSTFT& stft) {
     // --- dB conversion ---
     const double norm = static_cast<double>(N) / 2.0;
     std::vector<double> db(total_frames, 0.0);
-    #pragma omp parallel for
     for (int m = 0; m < total_frames; ++m)
         db[m] = 20.0 * std::log10(std::sqrt(energy[m]) / norm + 1e-9);
 

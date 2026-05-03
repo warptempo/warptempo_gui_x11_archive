@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Dependencies for the DSP Engine ---
-find_package(OpenMP)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SNDFILE REQUIRED sndfile)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
@@ -30,7 +29,6 @@ target_link_libraries(warptempo_engine PRIVATE
     ${FFTW3_THREADS_LIB}
     ${FFTW3_LIBRARIES}
     m
-    $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
 # --- 2. Build the Timemap Parser ---
@@ -82,7 +80,6 @@ target_link_libraries(warptempo_gui PRIVATE
     pthread
     dl
     m
-    $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
 # miniaudio is vendored third-party C. Suppress the warnings that its macro

@@ -67,7 +67,6 @@ void Synthesis::synthesize_full(
 
             fftw_execute(stft.plan_inv);
             const double inv_N = 1.0 / N;
-            #pragma omp parallel for
             for (int n = 0; n < N; ++n)
                 ola_out[ch][n] += (stft.ifft_out[n] * inv_N) * stft.synth_window[n];
         }
