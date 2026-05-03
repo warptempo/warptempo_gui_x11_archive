@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -10,7 +11,6 @@
 #include <fftw3.h>
 
 #include "stft_container.h"
-#include "phase_vocoder.h"
 #include "transients.h"
 #include "limiter.h"
 #include "synthesis.h"
@@ -119,20 +119,21 @@ bool run_warptempo_engine(const EngineParams& p,
               << ", Target: " << std::fixed << duration_sec << "s at "
               << audio_stft.src_info.samplerate << "Hz\n";
 
-    PhaseVocoder   stft_engine;
     Transients     detector;
     Limiter        limiter;
     Synthesis      synthesis;
 
-    std::cout << "[Pass 1/4] Analysis + virtual buffer........ " << std::flush;
-    stft_engine.process(audio_stft);
-    std::cout << "done\n";
+    auto pass_ms = [](std::chrono::steady_clock::time_point t0,
+                      std::chrono::steady_clock::time_point t1) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    };
 
     // Transient pass: either run the detector, or use the user-curated
     // list verbatim. transients_enabled is the master gate for both paths.
+    auto t_p2_0 = std::chrono::steady_clock::now();
     if (!p.transient_frames.empty()) {
         if (!tp.enabled) {
-            std::cout << "[Pass 2/4] Transient detection.............. disabled (curated list ignored)\n";
+            std::cout << "[Pass 1/3] Transient detection.............. disabled (curated list ignored)\n";
             audio_stft.transient_markers.clear();
         } else {
             audio_stft.transient_markers.clear();
@@ -149,15 +150,25 @@ bool run_warptempo_engine(const EngineParams& p,
                 audio_stft.transient_markers.push_back(
                     {static_cast<int>(s), F});
             }
-            std::cout << "[Pass 2/4] Transient detection.............. bypassed ("
+            std::cout << "[Pass 1/3] Transient detection.............. bypassed ("
                       << audio_stft.transient_markers.size()
                       << " curated)\n";
         }
     } else {
         detector.process(audio_stft);
     }
+    auto t_p2_1 = std::chrono::steady_clock::now();
+    std::cout << "  (" << pass_ms(t_p2_0, t_p2_1) << " ms)\n";
+
+    auto t_p3_0 = std::chrono::steady_clock::now();
     limiter.process(audio_stft);
+    auto t_p3_1 = std::chrono::steady_clock::now();
+    std::cout << "  (" << pass_ms(t_p3_0, t_p3_1) << " ms)\n";
+
+    auto t_p4_0 = std::chrono::steady_clock::now();
     synthesis.process(audio_stft);
+    auto t_p4_1 = std::chrono::steady_clock::now();
+    std::cout << "  (" << pass_ms(t_p4_0, t_p4_1) << " ms)\n";
 
     if (audio_stft.transients_diag) {
         SF_INFO probe_info{};

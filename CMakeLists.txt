@@ -15,7 +15,6 @@ find_library(FFTW3_THREADS_LIB fftw3_threads HINTS ${FFTW3_LIBRARY_DIRS} REQUIRE
 add_executable(warptempo_engine
     src/main.cpp
     src/engine/engine.cpp
-    src/engine/phase_vocoder.cpp
     src/engine/transients.cpp
     src/engine/limiter.cpp
     src/engine/synthesis.cpp
@@ -60,7 +59,6 @@ add_executable(warptempo_gui
     src/timemap.cpp
     src/miniaudio_impl.cpp
     src/engine/engine.cpp
-    src/engine/phase_vocoder.cpp
     src/engine/transients.cpp
     src/engine/limiter.cpp
     src/engine/synthesis.cpp

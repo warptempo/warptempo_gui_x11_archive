@@ -189,7 +189,7 @@ void Limiter::process(AudioSTFT& stft) {
     auto& lp = stft.limiter_params;
 
     if (!lp.enabled) {
-        std::cout << "[Pass 3/4] Limiter.......................... disabled\n";
+        std::cout << "[Pass 2/3] Limiter.......................... disabled\n";
         return;
     }
 
@@ -237,7 +237,7 @@ void Limiter::process(AudioSTFT& stft) {
                              ceiling, queue);
 
     if (queue.empty()) {
-        std::cout << "[Pass 3/4] Limiter.......................... 0 peaks, no attenuation required\n";
+        std::cout << "[Pass 2/3] Limiter.......................... 0 peaks, no attenuation required\n";
         return;
     }
 
@@ -496,7 +496,7 @@ void Limiter::process(AudioSTFT& stft) {
         reduction_db_list.push_back(reduction_db);
     }
 
-    std::cout << "[Pass 3/4] Limiter.......................... "
+    std::cout << "[Pass 2/3] Limiter.......................... "
               << resolved.size() << " peaks, " << iterations
               << " iterations, done\n";
 

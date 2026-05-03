@@ -149,6 +149,6 @@ void Synthesis::process(AudioSTFT& stft) {
 
     synthesize_full(stft, nullptr, write_to_file,
                     /*show_progress=*/true,
-                    /*pass_label=*/"[Pass 4/4] Synthesis........................ ");
+                    /*pass_label=*/"[Pass 3/3] Synthesis........................ ");
     sf_close(output_snd);
 }

@@ -11,7 +11,7 @@ void Transients::process(AudioSTFT& stft) {
     stft.transient_markers.clear();
 
     if (!tp.enabled) {
-        std::cout << "[Pass 2/4] Transient detection.............. disabled\n";
+        std::cout << "[Pass 1/3] Transient detection.............. disabled\n";
         return;
     }
 
@@ -25,7 +25,7 @@ void Transients::process(AudioSTFT& stft) {
     const int total_frames = static_cast<int>(fm.size());
 
     if (total_frames <= 1) {
-        std::cout << "[Pass 2/4] Transient detection.............. 0 transients\n";
+        std::cout << "[Pass 1/3] Transient detection.............. 0 transients\n";
         std::cout << "  ! fewer than two frames; no detection possible\n";
         return;
     }
@@ -139,7 +139,7 @@ void Transients::process(AudioSTFT& stft) {
     }
 
     const int n_total = static_cast<int>(stft.transient_markers.size());
-    std::cout << "[Pass 2/4] Transient detection.............. "
+    std::cout << "[Pass 1/3] Transient detection.............. "
               << n_total << " transients\n";
     if (n_total < 3)
         std::cout << "  ! fewer than 3 detections; output may be unusable\n";
