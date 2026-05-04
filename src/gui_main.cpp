@@ -6008,7 +6008,7 @@ int main(int argc, char** argv) {
         // markers with no iter range authored are excluded from the CSV
         // and contribute one fixed value (their authored tempo_base) to
         // the product. Per-cell progress and Esc cancellation are handled
-        // by run_render_batch. Silent no-op outside iteration mode.
+        // by run_render_batch. Silent no-op outside iteration mode. 
         if (ctrl && alt && !shift &&
             (keysym == XK_i || keysym == XK_I)) {
             if (app.source_audio_path.empty()) return;
