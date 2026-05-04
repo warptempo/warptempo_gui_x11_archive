@@ -307,7 +307,6 @@ struct UndoEntry {
     std::vector<GuiTransient> transient_snapshot;
     char                      op_mode              = 'W';
     OpKind                    op_kind              = OpKind::Other;
-    std::set<int>             hint_selected;
     int                       hint_last_selected   = -1;
 };
 
@@ -336,8 +335,7 @@ struct DragState {
     // (DragState is reset wholesale there).
     std::vector<GuiMarker>    pre_drag_snapshot;
     std::vector<GuiTransient> pre_drag_transient_snapshot;
-    // Pre-drag selection for the undo hint; carried onto the entry at commit.
-    std::set<int>          pre_drag_selected;
+    // Pre-drag last_selected for the undo hint; carried onto the entry at commit.
     int                    pre_drag_last_selected = -1;
     // Index of the marker that was clicked to start the drag. Used to track
     // the playhead during motion so the audio cursor follows the grabbed
@@ -560,13 +558,6 @@ struct AppState {
     // slots live on ViewState and are saved/restored on mode/tab transitions.
     std::set<int> selected_markers;
     int           last_selected_marker = -1;
-
-    // Spec-mandated AppState slots for transient selection. Chunk S.2.2
-    // routes the active selection through `selected_markers` regardless
-    // of mode, so these stay default-empty and act as the seed for the
-    // first transient-mode entry on a freshly loaded file.
-    std::set<int> transient_selected_markers;
-    int           transient_last_selected_marker = -1;
 
     // Active editing mode: 'W' = warp markers, 'T' = transient markers
     // (chunk S.2.2). Toggled by `t`. Determines which list is visible /
@@ -1615,9 +1606,9 @@ int main(int argc, char** argv) {
                     // dark-blue otherwise). Iteration popups are
                     // suppressed by the iteration_mode_enabled toggle
                     // being forced false on entry to render-view.
-                    // Brief F Section 3: in transient sub-view there are
-                    // no flags and no popup-eligible markers — skip both
-                    // paints entirely.
+                    // Sub-mode 'T' (transients): paint via
+                    // render_transient_flags from app.render_view_transients
+                    // (no popups; transient markers are not popup-eligible).
                     if (app.active_mode != 'T') {
                     render_flags(cr, top_strip, app.render_view_markers,
                                  vp_start, vp_end, sr,
@@ -1680,7 +1671,15 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
-                    } // end if (active_mode != 'T') — Brief F Section 3
+                    } else {
+                        render_transient_flags(
+                            cr, top_strip, app.render_view_transients,
+                            vp_start, vp_end, sr,
+                            kFlagFontSize,
+                            app.selected_markers,
+                            trim_struct,
+                            px_x);
+                    }
                 } else if (app.active_mode == 'T') {
                     render_transient_flags(
                         cr, top_strip, app.transients.markers(),
@@ -2345,18 +2344,17 @@ int main(int argc, char** argv) {
 
     // Push the pre-mutation entry onto the undo stack. Every warp-mode
     // mutation site calls this at the point the mutation is confirmed to
-    // land. Caller passes the warp pre-state + op kind + selection hint;
-    // the transient pre-state is captured here from the live AppState
-    // (warp ops don't touch transients, so post-mutation == pre-mutation
-    // for that list).
+    // land. Caller passes the warp pre-state + op kind + last-selected
+    // hint; the transient pre-state is captured here from the live
+    // AppState (warp ops don't touch transients, so post-mutation ==
+    // pre-mutation for that list).
     auto push_undo = [&](std::vector<GuiMarker> pre_state, OpKind op_kind,
-                         std::set<int> hint_sel, int hint_last) {
+                         int hint_last) {
         UndoEntry e;
         e.snapshot           = std::move(pre_state);
         e.transient_snapshot = app.transients.markers();
         e.op_kind            = op_kind;
         e.op_mode            = 'W';
-        e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
         clear_hover_popup();
@@ -2366,14 +2364,12 @@ int main(int argc, char** argv) {
     // state; warp pre-state is captured from live AppState (transient ops
     // don't touch warp markers).
     auto push_undo_transient = [&](std::vector<GuiTransient> pre_state,
-                                   OpKind op_kind,
-                                   std::set<int> hint_sel, int hint_last) {
+                                   OpKind op_kind, int hint_last) {
         UndoEntry e;
         e.snapshot           = app.markers.markers();
         e.transient_snapshot = std::move(pre_state);
         e.op_kind            = op_kind;
         e.op_mode            = 'T';
-        e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
         clear_hover_popup();
@@ -2383,14 +2379,12 @@ int main(int argc, char** argv) {
     // helpers, which may mutate either or both lists in a single op.
     auto push_undo_both = [&](std::vector<GuiMarker> warp_pre,
                               std::vector<GuiTransient> trans_pre,
-                              char op_mode, OpKind op_kind,
-                              std::set<int> hint_sel, int hint_last) {
+                              char op_mode, OpKind op_kind, int hint_last) {
         UndoEntry e;
         e.snapshot           = std::move(warp_pre);
         e.transient_snapshot = std::move(trans_pre);
         e.op_kind            = op_kind;
         e.op_mode            = op_mode;
-        e.hint_selected      = std::move(hint_sel);
         e.hint_last_selected = hint_last;
         app.history.push(std::move(e));
         clear_hover_popup();
@@ -2507,7 +2501,6 @@ int main(int argc, char** argv) {
 
         // Capture pre-state for undo BEFORE mutating.
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
 
         const std::string old_def = mv_const[idx].label_def;
@@ -2568,8 +2561,7 @@ int main(int argc, char** argv) {
                 old_def.c_str(), new_def.c_str(), n_refs_renamed);
         }
 
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
 
         gui_text_editor::deactivate(app.top_flag_editor);
@@ -2710,7 +2702,6 @@ int main(int argc, char** argv) {
         }
 
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
 
         GuiMarker* m = app.markers.marker_mut(idx);
@@ -2742,8 +2733,7 @@ int main(int argc, char** argv) {
             m->iter_end   = std::numeric_limits<double>::quiet_NaN();
         }
 
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         if (tempo_changed) {
             recompute_dirty();
             invalidate_waveform_area();
@@ -2771,14 +2761,12 @@ int main(int argc, char** argv) {
         }
         if (!any) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         for (auto& m : mv) {
             m.iter_start = std::numeric_limits<double>::quiet_NaN();
             m.iter_end   = std::numeric_limits<double>::quiet_NaN();
         }
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         invalidate_top_strip();
     };
 
@@ -3008,7 +2996,6 @@ int main(int argc, char** argv) {
         redo_entry.transient_snapshot = app.transients.markers();
         redo_entry.op_kind            = entry.op_kind;
         redo_entry.op_mode            = entry.op_mode;
-        redo_entry.hint_selected      = entry.hint_selected;
         redo_entry.hint_last_selected = entry.hint_last_selected;
         std::vector<GuiMarker>    before_w = redo_entry.snapshot;
         std::vector<GuiTransient> before_t = redo_entry.transient_snapshot;
@@ -3070,7 +3057,6 @@ int main(int argc, char** argv) {
         undo_entry.transient_snapshot = app.transients.markers();
         undo_entry.op_kind            = entry.op_kind;
         undo_entry.op_mode            = entry.op_mode;
-        undo_entry.hint_selected      = entry.hint_selected;
         undo_entry.hint_last_selected = entry.hint_last_selected;
         std::vector<GuiMarker>    before_w = undo_entry.snapshot;
         std::vector<GuiTransient> before_t = undo_entry.transient_snapshot;
@@ -3240,7 +3226,6 @@ int main(int argc, char** argv) {
         // Snapshot pre-mutation state for undo. Captured after the dup
         // check so rejected drops don't leave a no-op entry on the stack.
         std::vector<GuiMarker> pre_state = mv;
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         GuiMarker nm;
         nm.time_seconds    = time_seconds;
@@ -3267,8 +3252,7 @@ int main(int argc, char** argv) {
         app.selected_markers.clear();
         app.selected_markers.insert(new_idx);
         app.last_selected_marker = new_idx;
-        push_undo(std::move(pre_state), OpKind::Create,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Create, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3342,7 +3326,6 @@ int main(int argc, char** argv) {
         // All validations passed — capture snapshot and selection hint
         // before mutating so the undo can restore the pre-delete selection.
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         // Delete in descending order so earlier indices stay valid.
         for (auto it = app.selected_markers.rbegin();
@@ -3351,8 +3334,7 @@ int main(int argc, char** argv) {
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
-        push_undo(std::move(pre_state), OpKind::Destroy,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3397,15 +3379,13 @@ int main(int argc, char** argv) {
         }
 
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         for (auto it = expanded.rbegin(); it != expanded.rend(); ++it) {
             app.markers.remove_marker(*it);
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
-        push_undo(std::move(pre_state), OpKind::Destroy,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3422,7 +3402,6 @@ int main(int argc, char** argv) {
     auto toggle_inherits = [&]() {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         const auto& mv_const = app.markers.markers();
         bool changed = false;
@@ -3451,8 +3430,7 @@ int main(int argc, char** argv) {
             changed = true;
         }
         if (!changed) return;
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3464,7 +3442,6 @@ int main(int argc, char** argv) {
     auto toggle_disabled = [&]() {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
@@ -3474,8 +3451,7 @@ int main(int argc, char** argv) {
             changed = true;
         }
         if (!changed) return;
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3501,14 +3477,12 @@ int main(int argc, char** argv) {
 
         std::vector<GuiMarker>    warp_pre  = mv;
         std::vector<GuiTransient> trans_pre = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_begin_time) {
             app.markers.marker_mut(idx)->is_begin_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                           'W', OpKind::Other,
-                           std::move(hint_sel), hint_last);
+                           'W', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
             invalidate_dirty_and_timestamp();
@@ -3552,7 +3526,7 @@ int main(int argc, char** argv) {
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'W', OpKind::Other, std::move(hint_sel), hint_last);
+                       'W', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3571,14 +3545,12 @@ int main(int argc, char** argv) {
 
         std::vector<GuiMarker>    warp_pre  = mv;
         std::vector<GuiTransient> trans_pre = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_end_time) {
             app.markers.marker_mut(idx)->is_end_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                           'W', OpKind::Other,
-                           std::move(hint_sel), hint_last);
+                           'W', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
             invalidate_dirty_and_timestamp();
@@ -3619,7 +3591,7 @@ int main(int argc, char** argv) {
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'W', OpKind::Other, std::move(hint_sel), hint_last);
+                       'W', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3633,7 +3605,6 @@ int main(int argc, char** argv) {
     auto adjust_tempo = [&](double delta) {
         if (app.selected_markers.empty()) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         const auto& mv_const = app.markers.markers();
         bool changed = false;
@@ -3661,8 +3632,7 @@ int main(int argc, char** argv) {
             changed = true;
         }
         if (!changed) return;
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_top_strip();
         invalidate_dirty_and_timestamp();
@@ -3672,7 +3642,6 @@ int main(int argc, char** argv) {
     // No-op if no marker carries either flag.
     auto clear_trim = [&]() {
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
         for (auto& m : app.markers.markers_mut()) {
@@ -3683,8 +3652,7 @@ int main(int argc, char** argv) {
             }
         }
         if (!changed) return;
-        push_undo(std::move(pre_state), OpKind::Other,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3704,7 +3672,6 @@ int main(int argc, char** argv) {
         const int64_t frame = static_cast<int64_t>(std::llround(
             time_seconds * static_cast<double>(sr)));
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
         GuiTransient nm;
         nm.src_frame   = frame;
@@ -3723,8 +3690,7 @@ int main(int argc, char** argv) {
         app.selected_markers.clear();
         app.selected_markers.insert(new_idx);
         app.last_selected_marker = new_idx;
-        push_undo_transient(std::move(pre_state), OpKind::Create,
-                            std::move(hint_sel), hint_last);
+        push_undo_transient(std::move(pre_state), OpKind::Create, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3764,7 +3730,6 @@ int main(int argc, char** argv) {
             }
         }
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
         for (auto it = app.selected_markers.rbegin();
              it != app.selected_markers.rend(); ++it) {
@@ -3772,8 +3737,7 @@ int main(int argc, char** argv) {
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
-        push_undo_transient(std::move(pre_state), OpKind::Destroy,
-                            std::move(hint_sel), hint_last);
+        push_undo_transient(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3784,7 +3748,6 @@ int main(int argc, char** argv) {
     auto toggle_transient_disabled = [&]() {
         if (app.selected_markers.empty()) return;
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
@@ -3794,8 +3757,7 @@ int main(int argc, char** argv) {
             changed = true;
         }
         if (!changed) return;
-        push_undo_transient(std::move(pre_state), OpKind::Other,
-                            std::move(hint_sel), hint_last);
+        push_undo_transient(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3884,15 +3846,13 @@ int main(int argc, char** argv) {
         if (delta == 0) return;
 
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
             GuiTransient* m = app.transients.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
-        push_undo_transient(std::move(pre_state), OpKind::Move,
-                            std::move(hint_sel), hint_last);
+        push_undo_transient(std::move(pre_state), OpKind::Move, hint_last);
         sync_playhead_to_last_selected();
         recompute_dirty();
         invalidate_waveform_area();
@@ -3919,15 +3879,13 @@ int main(int argc, char** argv) {
             return;
         }
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
             GuiTransient* m = app.transients.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
-        push_undo_transient(std::move(pre_state), OpKind::Move,
-                            std::move(hint_sel), hint_last);
+        push_undo_transient(std::move(pre_state), OpKind::Move, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3946,14 +3904,12 @@ int main(int argc, char** argv) {
 
         std::vector<GuiMarker>    warp_pre  = app.markers.markers();
         std::vector<GuiTransient> trans_pre = tv;
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_begin_time) {
             app.transients.marker_mut(idx)->is_begin_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                           'T', OpKind::Other,
-                           std::move(hint_sel), hint_last);
+                           'T', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
             invalidate_dirty_and_timestamp();
@@ -3995,7 +3951,7 @@ int main(int argc, char** argv) {
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'T', OpKind::Other, std::move(hint_sel), hint_last);
+                       'T', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -4010,14 +3966,12 @@ int main(int argc, char** argv) {
 
         std::vector<GuiMarker>    warp_pre  = app.markers.markers();
         std::vector<GuiTransient> trans_pre = tv;
-        std::set<int>             hint_sel  = app.selected_markers;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_end_time) {
             app.transients.marker_mut(idx)->is_end_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                           'T', OpKind::Other,
-                           std::move(hint_sel), hint_last);
+                           'T', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
             invalidate_dirty_and_timestamp();
@@ -4059,7 +4013,7 @@ int main(int argc, char** argv) {
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'T', OpKind::Other, std::move(hint_sel), hint_last);
+                       'T', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -4308,7 +4262,6 @@ int main(int argc, char** argv) {
 
         app.markers.clear();
         app.transients.clear();
-        app.transient_selected_markers.clear();
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
@@ -4499,7 +4452,6 @@ int main(int argc, char** argv) {
 
         // Clear any in-flight transient selection — indices into the
         // pre-merge list are not meaningful afterwards.
-        app.transient_selected_markers.clear();
         if (app.active_mode == 'T') app.last_selected_marker = -1;
 
         DetectionRequest dr;
@@ -4571,15 +4523,12 @@ int main(int argc, char** argv) {
         if (app.transients.markers().empty()) return;
 
         std::vector<GuiTransient> pre_state = app.transients.markers();
-        std::set<int> pre_sel = app.transient_selected_markers;
         const int pre_last = app.last_selected_marker;
 
         app.transients.clear();
-        app.transient_selected_markers.clear();
         if (app.active_mode == 'T') app.last_selected_marker = -1;
 
-        push_undo_transient(std::move(pre_state), OpKind::Destroy,
-                            std::move(pre_sel), pre_last);
+        push_undo_transient(std::move(pre_state), OpKind::Destroy, pre_last);
         recompute_dirty();
         invalidate_all();
     };
@@ -4905,7 +4854,6 @@ int main(int argc, char** argv) {
         } else {
             d.pre_drag_snapshot = app.markers.markers();
         }
-        d.pre_drag_selected      = app.selected_markers;
         d.pre_drag_last_selected = app.last_selected_marker;
         d.hit_marker             = hit;
         d.pre_drag_playhead_sample = app.playhead_sample;
@@ -5019,17 +4967,13 @@ int main(int argc, char** argv) {
             std::move(app.drag.pre_drag_snapshot);
         std::vector<GuiTransient> snap_t =
             std::move(app.drag.pre_drag_transient_snapshot);
-        std::set<int>             hint_sel  =
-            std::move(app.drag.pre_drag_selected);
         const int                 hint_last = app.drag.pre_drag_last_selected;
         app.drag = DragState{};
         if (moved) {
             if (transient) {
-                push_undo_transient(std::move(snap_t), OpKind::Move,
-                                    std::move(hint_sel), hint_last);
+                push_undo_transient(std::move(snap_t), OpKind::Move, hint_last);
             } else {
-                push_undo(std::move(snap_w), OpKind::Move,
-                          std::move(hint_sel), hint_last);
+                push_undo(std::move(snap_w), OpKind::Move, hint_last);
             }
             recompute_dirty();
             invalidate_dirty_and_timestamp();
@@ -5112,11 +5056,9 @@ int main(int argc, char** argv) {
             static_cast<double>(direction) * spp / static_cast<double>(sr);
         if (delta_s == 0.0) return;
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         if (apply_selection_shift(delta_s)) {
-            push_undo(std::move(pre_state), OpKind::Move,
-                      std::move(hint_sel), hint_last);
+            push_undo(std::move(pre_state), OpKind::Move, hint_last);
             sync_playhead_to_last_selected();
             recompute_dirty();
             invalidate_waveform_area();
@@ -5150,15 +5092,13 @@ int main(int argc, char** argv) {
             return;
         }
         std::vector<GuiMarker> pre_state = app.markers.markers();
-        std::set<int>          hint_sel  = app.selected_markers;
         const int              hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
             GuiMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             m->time_seconds += delta;
         }
-        push_undo(std::move(pre_state), OpKind::Move,
-                  std::move(hint_sel), hint_last);
+        push_undo(std::move(pre_state), OpKind::Move, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -6258,13 +6198,11 @@ int main(int argc, char** argv) {
 
             std::vector<GuiMarker>    warp_pre  = app.markers.markers();
             std::vector<GuiTransient> trans_pre = app.transients.markers();
-            std::set<int>             hint_sel  = app.selected_markers;
             const int                 hint_last = app.last_selected_marker;
 
             app.markers.markers_mut()    = std::move(src_warp);
             app.transients.markers_mut() = std::move(src_trans);
             app.selected_markers.clear();
-            app.transient_selected_markers.clear();
             app.last_selected_marker = -1;
             // Brief J.2 Section 4: the active tab's per-mode slots
             // referenced the OLD app.markers/transients we just
@@ -6281,8 +6219,7 @@ int main(int argc, char** argv) {
             }
 
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                           'W', OpKind::Other,
-                           std::move(hint_sel), hint_last);
+                           'W', OpKind::Other, hint_last);
             recompute_dirty();
 
             const std::filesystem::path src(app.source_audio_path);
@@ -7394,7 +7331,6 @@ int main(int argc, char** argv) {
         app.markers.clear();
         app.transients.clear();
         app.selected_markers.clear();
-        app.transient_selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
         app.drag = DragState{};
