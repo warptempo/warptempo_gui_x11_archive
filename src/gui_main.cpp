@@ -1663,8 +1663,9 @@ int main(int argc, char** argv) {
                             }
                             if (anchor.w > 0 && anchor.h > 0) {
                                 const int64_t pos = static_cast<int64_t>(
-                                    mv[hidx].time_seconds *
-                                    static_cast<double>(sr));
+                                    std::llround(
+                                        mv[hidx].time_seconds *
+                                        static_cast<double>(sr)));
                                 const bool oot =
                                     marker_out_of_trim(pos, trim_struct);
                                 gui_text_display::State td;
@@ -1758,8 +1759,9 @@ int main(int argc, char** argv) {
                             }
                             if (anchor.w > 0 && anchor.h > 0) {
                                 const int64_t pos = static_cast<int64_t>(
-                                    mv[hidx].time_seconds *
-                                    static_cast<double>(sr));
+                                    std::llround(
+                                        mv[hidx].time_seconds *
+                                        static_cast<double>(sr)));
                                 const bool oot =
                                     marker_out_of_trim(pos, trim_struct);
                                 gui_text_display::State td;
@@ -1805,8 +1807,9 @@ int main(int argc, char** argv) {
                                 h.flag_rect.h
                             };
                             const int64_t pos = static_cast<int64_t>(
-                                mv[h.marker_index].time_seconds *
-                                static_cast<double>(sr));
+                                std::llround(
+                                    mv[h.marker_index].time_seconds *
+                                    static_cast<double>(sr)));
                             const bool oot =
                                 marker_out_of_trim(pos, trim_struct);
                             if (editor_on_iter &&
@@ -2826,8 +2829,8 @@ int main(int argc, char** argv) {
     // Three callers converge on the same rule: after a marker move, the
     // playhead follows last_selected to its new position and, if that
     // position is now outside the viewport, the viewport recenters (same
-    // math as the `c` key). Callers: live Ctrl+Left/Right/wheel nudges,
-    // and apply_post_restore_rules on undo/redo of Move ops. Invalidation
+    // math as the `c` key). Callers: live Ctrl+Left/Right nudges, and
+    // apply_post_restore_rules on undo/redo of Move ops. Invalidation
     // is left to the caller — all three sites already invalidate the
     // waveform strip, which covers the playhead column.
     auto sync_playhead_to_last_selected = [&]() {
@@ -5099,8 +5102,7 @@ int main(int argc, char** argv) {
     auto nudge_selected_markers = [&](int direction) {
         if (app.loading || audio.total_frames() <= 0) return;
         // Nudges move the playhead (via sync_playhead_to_last_selected).
-        // Stop playback first — covers both Ctrl+Left/Right keys and
-        // Ctrl+wheel in one place.
+        // Stop playback first — Ctrl+Left/Right is the only caller path.
         stop_playback_if_playing();
         if (app.selected_markers.empty()) return;
         const int sr = audio.sample_rate();
@@ -5220,7 +5222,8 @@ int main(int argc, char** argv) {
                 const std::string stem = fe.path().stem().string();
                 size_t end = 0;
                 const int v = leading_int(stem, end);
-                if (end != stem.size()) continue;
+                if (end == 0) continue;
+                if (end != stem.size() && stem[end] != '_') continue;
                 wavs.push_back({v, fe.path(), stem});
             }
             std::sort(wavs.begin(), wavs.end(),
@@ -5588,13 +5591,12 @@ int main(int argc, char** argv) {
 
     // Shared wheel handler covering source-view and render-view. Ctrl+Alt =
     // fine-pan (2% of viewport), Alt = coarse-pan (10%), plain = zoom.
-    // Ctrl+wheel nudges selected markers in source-view; render-view is
-    // read-only so it passes allow_nudge=false and Ctrl+wheel becomes a
-    // silent no-op there.
+    // Ctrl+wheel moves the playhead by one pixel (and stops playback),
+    // matching the bare Left/Right keyboard binding; this applies to both
+    // views since the playhead is interactive in render-view too.
     auto handle_wheel = [&](unsigned int button,
                             bool ctrl, bool alt,
-                            bool inside_waveform, bool inside_top,
-                            bool allow_nudge) {
+                            bool inside_waveform, bool inside_top) {
         if (!inside_waveform && !inside_top) return;
         if (ctrl && alt) {
             const int64_t step = std::max<int64_t>(
@@ -5603,9 +5605,8 @@ int main(int argc, char** argv) {
             return;
         }
         if (ctrl) {
-            if (allow_nudge) {
-                nudge_selected_markers(button == 4 ? -1 : +1);
-            }
+            stop_playback_if_playing();
+            move_playhead_pixels(button == 4 ? -1 : +1);
             return;
         }
         if (alt) {
@@ -5761,6 +5762,8 @@ int main(int argc, char** argv) {
         //   - Esc                    → top-level no-op (chunk Q)
         //   - t (no mods)            → toggle warp/transient sub-view (Brief F)
         //   - Ctrl+Q / Ctrl+W        → close-prompt routing (Brief F)
+        //   - Up/Down (no mods)      → zoom in/out (Brief S.2)
+        //   - =/- (no mods)          → zoom in/out symbol-key alias (Brief S.2)
         if (app.render_view_enabled) {
             const bool is_r =
                 (keysym == XK_r && !ctrl && !shift && !alt);
@@ -5784,9 +5787,16 @@ int main(int argc, char** argv) {
                 (ctrl && !shift && !alt && keysym == XK_q);
             const bool is_ctrl_w =
                 (ctrl && !shift && !alt && keysym == XK_w);
+            const bool is_zoom =
+                ((keysym == XK_Up || keysym == XK_Down) &&
+                 !ctrl && !shift && !alt);
+            const bool is_zoom_symbol =
+                ((keysym == XK_equal || keysym == XK_minus) &&
+                 !ctrl && !shift && !alt);
             if (!(is_r || is_nav || is_commit || is_playback ||
                   is_scrub || is_jump || is_esc ||
-                  is_sub_view_toggle || is_ctrl_q || is_ctrl_w)) {
+                  is_sub_view_toggle || is_ctrl_q || is_ctrl_w ||
+                  is_zoom || is_zoom_symbol)) {
                 return;
             }
         }
@@ -5977,6 +5987,209 @@ int main(int argc, char** argv) {
             }
 
             const auto result = run_render_batch(reqs, "render queue");
+            if (result.cancelled) {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries (cancelled)\n",
+                    result.rendered, total);
+            } else {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries into %s\n",
+                    result.rendered, total,
+                    batch_folder.filename().string().c_str());
+            }
+            return;
+        }
+
+        // Brief T: Ctrl+Alt+I renders the Cartesian product of the
+        // per-marker iter ranges authored in iteration mode. Output lands
+        // in `<source_parent>/renders/<N>_render_iterations/`, with one
+        // .wav per cell named `<seq>_<delta_csv>.wav`. The CSV holds the
+        // swept markers' deltas in timeline order, formatted `%+0.2f`;
+        // markers with no iter range authored are excluded from the CSV
+        // and contribute one fixed value (their authored tempo_base) to
+        // the product. Per-cell progress and Esc cancellation are handled
+        // by run_render_batch. Silent no-op outside iteration mode.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_i || keysym == XK_I)) {
+            if (app.source_audio_path.empty()) return;
+            if (!app.iteration_mode_enabled) return;
+
+            // Snapshot markers in timeline order (GuiMarkers guarantees
+            // strict-monotonic by time_seconds). For each owning marker
+            // build its per-cell delta list: a single 0.0 when no iter
+            // range is authored, otherwise integer-cents enumeration from
+            // iter_start to iter_end inclusive. Integer-cents avoids the
+            // float-accumulation drift a naive `for (d=start; d<=end;
+            // d+=0.01)` would suffer across many steps.
+            const std::vector<GuiMarker> base_markers =
+                app.markers.markers();
+            std::vector<int>                 eligible_indices;
+            std::vector<std::vector<double>> per_marker_deltas;
+            std::vector<bool>                is_swept;
+            for (int i = 0; i < static_cast<int>(base_markers.size()); ++i) {
+                const GuiMarker& m = base_markers[i];
+                if (!iter_popup_eligible_marker(m)) continue;
+                eligible_indices.push_back(i);
+                const bool swept =
+                    !std::isnan(m.iter_start) && !std::isnan(m.iter_end);
+                is_swept.push_back(swept);
+                std::vector<double> deltas;
+                if (swept) {
+                    const int start_cents = static_cast<int>(
+                        std::lround(m.iter_start * 100.0));
+                    const int end_cents = static_cast<int>(
+                        std::lround(m.iter_end * 100.0));
+                    // commit_iter_edit enforces start <= end, but a stray
+                    // hand-edit of memory could violate it. Treat that as
+                    // no sweep rather than producing zero cells.
+                    if (start_cents > end_cents) {
+                        deltas.push_back(0.0);
+                        is_swept.back() = false;
+                    } else {
+                        for (int c = start_cents; c <= end_cents; ++c) {
+                            deltas.push_back(static_cast<double>(c) / 100.0);
+                        }
+                    }
+                } else {
+                    deltas.push_back(0.0);
+                }
+                per_marker_deltas.push_back(std::move(deltas));
+            }
+
+            bool any_swept = false;
+            for (bool s : is_swept) {
+                if (s) { any_swept = true; break; }
+            }
+            if (!any_swept) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-iterations: no iter ranges "
+                    "authored; nothing to render\n");
+                return;
+            }
+
+            size_t total_cells = 1;
+            for (const auto& d : per_marker_deltas) total_cells *= d.size();
+            if (total_cells == 0) return;
+
+            std::filesystem::path src(app.source_audio_path);
+            std::filesystem::path src_parent = src.parent_path();
+            if (src_parent.empty()) src_parent = std::filesystem::path(".");
+            const std::filesystem::path queue_root = src_parent / "renders";
+
+            // Resolve the next batch index: max+1 over `<digits>_<anything>`
+            // entries. Mirrors render_all_in_queue's scanner.
+            int next_index = 1;
+            std::error_code ec;
+            if (std::filesystem::is_directory(queue_root, ec)) {
+                int max_idx = 0;
+                for (const auto& de :
+                     std::filesystem::directory_iterator(queue_root, ec)) {
+                    if (!de.is_directory()) continue;
+                    const std::string name = de.path().filename().string();
+                    int v = 0;
+                    size_t i = 0;
+                    while (i < name.size() &&
+                           name[i] >= '0' && name[i] <= '9') {
+                        v = v * 10 + (name[i] - '0');
+                        ++i;
+                    }
+                    if (i == 0 || i >= name.size() || name[i] != '_') continue;
+                    if (v > max_idx) max_idx = v;
+                }
+                next_index = max_idx + 1;
+            }
+
+            const std::string command_tag = "render_iterations";
+            const std::filesystem::path batch_folder =
+                queue_root /
+                (std::to_string(next_index) + "_" + command_tag);
+            std::filesystem::create_directories(batch_folder, ec);
+            if (ec) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-iterations: could not create "
+                    "'%s': %s\n",
+                    batch_folder.string().c_str(), ec.message().c_str());
+                return;
+            }
+
+            const int total = static_cast<int>(total_cells);
+            int pad_width = 1;
+            for (int n = total; n >= 10; n /= 10) ++pad_width;
+            if (pad_width > 9) pad_width = 9;
+
+            // Snapshot transients once — every cell shares the same
+            // transient configuration, only marker tempo_base values
+            // differ across cells.
+            const std::vector<GuiTransient> base_transients =
+                app.transients.markers();
+            std::vector<int64_t> base_transient_frames;
+            for (const auto& t : base_transients) {
+                if (t.disabled) continue;
+                base_transient_frames.push_back(t.effective_frame());
+            }
+
+            // Cartesian product enumeration. `indices[k]` holds the
+            // current cell coordinate along the k-th eligible marker
+            // (timeline order). Rightmost dimension increments fastest:
+            // consecutive cells differ in the last marker's delta first.
+            const size_t num_dims = per_marker_deltas.size();
+            std::vector<size_t> indices(num_dims, 0);
+
+            std::vector<RenderRequest> reqs;
+            reqs.reserve(total);
+            for (int cell = 0; cell < total; ++cell) {
+                std::string delta_csv;
+                for (size_t k = 0; k < num_dims; ++k) {
+                    if (!is_swept[k]) continue;
+                    const double d = per_marker_deltas[k][indices[k]];
+                    char dbuf[16];
+                    std::snprintf(dbuf, sizeof(dbuf), "%+0.2f", d);
+                    if (!delta_csv.empty()) delta_csv += ',';
+                    delta_csv += dbuf;
+                }
+
+                char num_buf[16];
+                std::snprintf(num_buf, sizeof(num_buf),
+                              "%0*d", pad_width, cell + 1);
+                std::string basename = num_buf;
+                basename += '_';
+                basename += delta_csv;
+
+                std::vector<GuiMarker> cell_markers = base_markers;
+                for (size_t k = 0; k < num_dims; ++k) {
+                    const int mi = eligible_indices[k];
+                    cell_markers[mi].tempo_base =
+                        base_markers[mi].tempo_base +
+                        per_marker_deltas[k][indices[k]];
+                    // The engine doesn't consume iter values; clear them
+                    // so the request is quiet.
+                    cell_markers[mi].iter_start =
+                        std::numeric_limits<double>::quiet_NaN();
+                    cell_markers[mi].iter_end =
+                        std::numeric_limits<double>::quiet_NaN();
+                }
+
+                RenderRequest req;
+                req.source_audio_path    = app.source_audio_path;
+                req.markers              = std::move(cell_markers);
+                req.transients           = base_transients;
+                req.transient_frames     = base_transient_frames;
+                req.settings_passthrough = app.settings_passthrough;
+                req.batch_folder         = batch_folder.string();
+                req.batch_basename       = std::move(basename);
+                reqs.push_back(std::move(req));
+
+                // Increment rightmost dimension; carry left on overflow.
+                // The last cell leaves indices in an overflowed state but
+                // the loop exits before that's read.
+                for (int k = static_cast<int>(num_dims) - 1; k >= 0; --k) {
+                    ++indices[k];
+                    if (indices[k] < per_marker_deltas[k].size()) break;
+                    indices[k] = 0;
+                }
+            }
+
+            const auto result = run_render_batch(reqs, "render iterations");
             if (result.cancelled) {
                 std::fprintf(stderr,
                     "warptempo_gui: rendered %d of %d entries (cancelled)\n",
@@ -6355,12 +6568,20 @@ int main(int argc, char** argv) {
         if (keysym == XK_Tab && shift)  { select_prev_marker(); return; }
         if (keysym == XK_ISO_Left_Tab)  { select_prev_marker(); return; }
 
-        // Tempo nudge. Plain `=` and `-` only — no Shift / Ctrl variants yet.
-        if (keysym == XK_equal && !shift && !ctrl) {
+        // Tempo nudge. Ctrl+Up / Ctrl+Down only. Bare `=` / `-` were the
+        // previous binding; they now zoom (see below) so the keyboard has
+        // a symbol-key alias for the bare Up/Down zoom chord.
+        if (ctrl && !shift && !alt && keysym == XK_Up) {
             adjust_tempo(+0.01); return;
         }
-        if (keysym == XK_minus && !shift && !ctrl) {
+        if (ctrl && !shift && !alt && keysym == XK_Down) {
             adjust_tempo(-0.01); return;
+        }
+        if (keysym == XK_equal && !shift && !ctrl && !alt) {
+            zoom_in(); return;
+        }
+        if (keysym == XK_minus && !shift && !ctrl && !alt) {
+            zoom_out(); return;
         }
 
         // `l` (no modifier) clears any b= / e= flags. `Shift+L` clears the
@@ -6499,17 +6720,16 @@ int main(int argc, char** argv) {
         // toggles selection and jumps the playhead to the marker;
         // left-click elsewhere in the waveform area positions the
         // playhead (with playback stop) and clears the selection unless
-        // Shift is held. Wheel zoom and Alt/Ctrl+Alt+wheel scroll are
-        // pure viewport ops and pass through; Ctrl+wheel marker-nudge
-        // is gated out (mutates markers). Drag-create and top-strip
-        // playhead movement are silent no-ops so the read-only
-        // invariant on marker state is preserved. Hover-popup motion
-        // still runs in the motion handler against render_view_markers.
+        // Shift is held. All wheel chords (zoom, Alt/Ctrl+Alt pan,
+        // Ctrl+wheel playhead-move) are pure viewport / playhead ops and
+        // pass through unchanged. Drag-create and top-strip playhead
+        // movement are silent no-ops so the read-only invariant on
+        // marker state is preserved. Hover-popup motion still runs in
+        // the motion handler against render_view_markers.
         if (app.render_view_enabled) {
             if (button == 4 || button == 5) {
                 handle_wheel(button, ctrl, alt,
-                             inside_waveform, inside_top,
-                             /*allow_nudge=*/false);
+                             inside_waveform, inside_top);
                 return;
             }
             if (button != 1) return;
@@ -6802,8 +7022,7 @@ int main(int argc, char** argv) {
             }
         } else if (button == 4 || button == 5) {
             handle_wheel(button, ctrl, alt,
-                         inside_waveform, inside_top,
-                         /*allow_nudge=*/true);
+                         inside_waveform, inside_top);
         }
     });
 

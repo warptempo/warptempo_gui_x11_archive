@@ -73,9 +73,15 @@ constexpr GuiColor dim(GuiColor c) {
 // Out-of-trim predicate. Caller computes source-frame position from its
 // own native field (time_seconds*sample_rate for GuiMarker,
 // effective_frame() for GuiTransient) and passes it through here.
+// The trim is treated as the closed interval [begin, end] for the dim-
+// vs-active flag-color decision, so a marker landing exactly on the end
+// boundary (the e=-marker itself) renders active, not dimmed. Other
+// trim consumers (heatmap stripe, playback bounds, engine timemap) use
+// their own direct comparisons against trim.begin / trim.end and are
+// unaffected by this predicate.
 inline bool marker_out_of_trim(int64_t source_frame_pos,
                                const TrimRange& trim) {
-    return source_frame_pos < trim.begin || source_frame_pos >= trim.end;
+    return source_frame_pos < trim.begin || source_frame_pos > trim.end;
 }
 
 // Screen-coord rect of one rendered flag, keyed back to its marker index.

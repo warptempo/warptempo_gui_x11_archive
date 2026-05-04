@@ -343,7 +343,8 @@ void render_markers(cairo_t* cr,
             const double ms = m.time_seconds * sr;
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
-            const int64_t pos = static_cast<int64_t>(m.time_seconds * sr);
+            const int64_t pos = static_cast<int64_t>(
+                std::llround(m.time_seconds * sr));
             if (marker_out_of_trim(pos, trim) != out_of_trim_pass) continue;
             const double x_raw =
                 (ms - static_cast<double>(viewport_start_sample))
@@ -471,8 +472,8 @@ void render_flags(cairo_t* cr,
             const bool is_editing    = (i == editor.marker_index);
             const bool is_parse_fail = is_editing && editor.is_red;
 
-            const int64_t source_pos =
-                static_cast<int64_t>(markers[i].time_seconds * sr_d);
+            const int64_t source_pos = static_cast<int64_t>(
+                std::llround(markers[i].time_seconds * sr_d));
             const bool out_of_trim = marker_out_of_trim(source_pos, trim);
 
             const int marker_col_px = static_cast<int>(std::round(text_left));
