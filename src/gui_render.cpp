@@ -121,7 +121,7 @@ std::string resolve_inherited_tempo_scale(
 
 void render_background(cairo_t* cr, int x, int y, int w, int h) {
     cairo_save(cr);
-    cairo_set_source_rgb(cr, 0.10, 0.10, 0.12);
+    cairo_set_source_rgb(cr, kBackground.r, kBackground.g, kBackground.b);
     cairo_rectangle(cr, x, y, w, h);
     cairo_fill(cr);
     cairo_restore(cr);
@@ -458,84 +458,124 @@ void render_flags(cairo_t* cr,
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
+    // Brief Y.5: collect emit args during the left-to-right iterate pass,
+    // then paint the collected list in REVERSE order. The pack rule inside
+    // iterate_visible_flags still elides right-of-collision flags (leftmost
+    // wins), and reverse paint order makes the leftmost flag's pixels land
+    // on top — so when an editor's pending text grows past its original
+    // flag width into the right neighbor's territory, the editor's bg-fill
+    // and text occlude the right neighbor instead of being overwritten by
+    // it. In all static (no-edit) states the bg-fills are kBackground and
+    // text rects don't overlap, so reverse paint order produces pixels
+    // identical to forward order.
+    struct FlagEmit {
+        int                  i;
+        double               text_left;
+        double               baseline_y;
+        std::string          text;
+        cairo_text_extents_t ext;
+    };
+    std::vector<FlagEmit> emits;
     iterate_visible_flags(cr, top_strip_area, markers,
                           viewport_start_sample, viewport_end_sample,
                           sample_rate,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
-            // V.B Addendum 2: when the iter popup above this flag owns
-            // the editor, suppress the flag's selection fill so the
-            // focused element (the iter popup) is the only one filled.
-            const bool is_iter_focus = (i == editor.iter_editor_target);
-            const bool is_selected   =
-                !is_iter_focus && selected_set.count(i) > 0;
-            const bool is_editing    = (i == editor.marker_index);
-            const bool is_parse_fail = is_editing && editor.is_red;
-
-            const int64_t source_pos = static_cast<int64_t>(
-                std::llround(markers[i].time_seconds * sr_d));
-            const bool out_of_trim = marker_out_of_trim(source_pos, trim);
-
-            const int marker_col_px = static_cast<int>(std::round(text_left));
-            const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
-            const bool is_playhead_on =
-                playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
-
-            std::string draw_text = is_editing ? editor.pending : text;
-            cairo_text_extents_t draw_ext = ext;
-            if (is_editing) {
-                cairo_text_extents(cr, draw_text.c_str(), &draw_ext);
-            }
-
-            if (is_selected || is_playhead_on) {
-                GuiColor stroke_col = is_parse_fail ? kAccent : kMarker;
-                if (out_of_trim) stroke_col = dim(stroke_col);
-                cairo_set_source_rgb(cr,
-                    stroke_col.r, stroke_col.g, stroke_col.b);
-                const double rx = std::round(text_left) + 0.5;
-                const double ry = std::round(
-                    baseline_y + uniform_ext.y_bearing
-                  - hl_pad - kVPadExtraPx) + 0.5;
-                const int rw = static_cast<int>(std::round(
-                    hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad));
-                const int rh = static_cast<int>(std::round(
-                    uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
-                cairo_set_line_width(cr, 1.0);
-                cairo_rectangle(cr, rx, ry,
-                                static_cast<double>(rw),
-                                static_cast<double>(rh));
-                cairo_stroke(cr);
-            }
-
-            const GuiColor txt = out_of_trim ? dim(kText) : kText;
-            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
-            cairo_move_to(cr, text_left + hl_pad, baseline_y);
-            cairo_show_text(cr, draw_text.c_str());
-
-            if (is_editing && editor.cursor_visible) {
-                double cursor_x_offset = 0.0;
-                if (editor.cursor_pos > 0) {
-                    cairo_text_extents_t pext;
-                    const std::string before =
-                        draw_text.substr(0,
-                            static_cast<size_t>(editor.cursor_pos));
-                    cairo_text_extents(cr, before.c_str(), &pext);
-                    cursor_x_offset = pext.x_advance;
-                }
-                const double cur_x =
-                    text_left + hl_pad + cursor_x_offset;
-                cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
-                cairo_set_line_width(cr, 1.0);
-                cairo_move_to(cr, std::round(cur_x) + 0.5,
-                              baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx);
-                cairo_line_to(cr, std::round(cur_x) + 0.5,
-                              baseline_y + uniform_ext.y_bearing
-                                  + uniform_ext.height + hl_pad + kVPadExtraPx);
-                cairo_stroke(cr);
-            }
-
-            if constexpr (kDebugPerf) perf_counters::flag_drawn++;
+            emits.push_back({i, text_left, baseline_y, text, ext});
         });
+
+    auto paint_one = [&](const FlagEmit& e) {
+        // V.B Addendum 2: when the iter popup above this flag owns
+        // the editor, suppress the flag's selection fill so the
+        // focused element (the iter popup) is the only one filled.
+        const bool is_iter_focus = (e.i == editor.iter_editor_target);
+        const bool is_selected   =
+            !is_iter_focus && selected_set.count(e.i) > 0;
+        const bool is_editing    = (e.i == editor.marker_index);
+        const bool is_parse_fail = is_editing && editor.is_red;
+
+        const int64_t source_pos = static_cast<int64_t>(
+            std::llround(markers[e.i].time_seconds * sr_d));
+        const bool out_of_trim = marker_out_of_trim(source_pos, trim);
+
+        const int marker_col_px = static_cast<int>(std::round(e.text_left));
+        const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
+        const bool is_playhead_on =
+            playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
+
+        std::string draw_text = is_editing ? editor.pending : e.text;
+        cairo_text_extents_t draw_ext = e.ext;
+        if (is_editing) {
+            cairo_text_extents(cr, draw_text.c_str(), &draw_ext);
+        }
+
+        // Brief Y.4 sub-bug A: opaque canvas-bg fill under the text,
+        // sized to the painted extent + kFlagInnerPadPx on each side.
+        // Drawn unconditionally — in non-edit states the fill matches
+        // the strip-clear color, so pixels stay identical; during an
+        // edit it occludes neighbor text once pending text widens
+        // past the original flag width. Y/height reuse the outline
+        // rect math below so the fill sits exactly under the outline.
+        const double bg_top =
+            e.baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx;
+        const double bg_h_full =
+            uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx;
+        render_flag_text_bg_fill(cr,
+            e.text_left + hl_pad, draw_ext.x_advance, bg_top, bg_h_full);
+
+        if (is_selected || is_playhead_on) {
+            GuiColor stroke_col = is_parse_fail ? kAccent : kMarker;
+            if (out_of_trim) stroke_col = dim(stroke_col);
+            cairo_set_source_rgb(cr,
+                stroke_col.r, stroke_col.g, stroke_col.b);
+            const double rx = std::round(e.text_left) + 0.5;
+            const double ry = std::round(
+                e.baseline_y + uniform_ext.y_bearing
+              - hl_pad - kVPadExtraPx) + 0.5;
+            const int rw = static_cast<int>(std::round(
+                hl_pad + draw_ext.x_bearing + draw_ext.width + hl_pad));
+            const int rh = static_cast<int>(std::round(
+                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
+            cairo_set_line_width(cr, 1.0);
+            cairo_rectangle(cr, rx, ry,
+                            static_cast<double>(rw),
+                            static_cast<double>(rh));
+            cairo_stroke(cr);
+        }
+
+        const GuiColor txt = out_of_trim ? dim(kText) : kText;
+        cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
+        cairo_move_to(cr, e.text_left + hl_pad, e.baseline_y);
+        cairo_show_text(cr, draw_text.c_str());
+
+        if (is_editing && editor.cursor_visible) {
+            double cursor_x_offset = 0.0;
+            if (editor.cursor_pos > 0) {
+                cairo_text_extents_t pext;
+                const std::string before =
+                    draw_text.substr(0,
+                        static_cast<size_t>(editor.cursor_pos));
+                cairo_text_extents(cr, before.c_str(), &pext);
+                cursor_x_offset = pext.x_advance;
+            }
+            const double cur_x =
+                e.text_left + hl_pad + cursor_x_offset;
+            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
+            cairo_set_line_width(cr, 1.0);
+            cairo_move_to(cr, std::round(cur_x) + 0.5,
+                          e.baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx);
+            cairo_line_to(cr, std::round(cur_x) + 0.5,
+                          e.baseline_y + uniform_ext.y_bearing
+                              + uniform_ext.height + hl_pad + kVPadExtraPx);
+            cairo_stroke(cr);
+        }
+
+        if constexpr (kDebugPerf) perf_counters::flag_drawn++;
+    };
+
+    for (auto it = emits.rbegin(); it != emits.rend(); ++it) {
+        paint_one(*it);
+    }
 
     cairo_restore(cr);
 }
@@ -744,46 +784,80 @@ void render_transient_flags(cairo_t* cr,
     cairo_text_extents_t uniform_ext;
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
+    // Brief Y.5: collect-then-reverse-paint, mirroring render_flags.
+    // Transient flags have no editor and thus no widening-text case, so
+    // visually this is a no-op today (all bg-fills are kBackground; all
+    // text rects are non-overlapping). Structurally it keeps every flag /
+    // popup paint loop on the same leftmost-wins discipline so future
+    // edits don't have to reason about which loop is which.
+    struct TransientEmit {
+        int                  i;
+        double               text_left;
+        double               baseline_y;
+        std::string          text;
+        cairo_text_extents_t ext;
+    };
+    std::vector<TransientEmit> emits;
     iterate_visible_transient_flags(cr, top_strip_area, transients,
                                     viewport_start_sample, viewport_end_sample,
                                     sample_rate,
         [&](int i, double text_left, double baseline_y,
             const std::string& text, const cairo_text_extents_t& ext) {
-            const bool is_selected = selected_set.count(i) > 0;
-            const bool out_of_trim =
-                marker_out_of_trim(transients[i].effective_frame(), trim);
-
-            const int marker_col_px = static_cast<int>(std::round(text_left));
-            const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
-            const bool is_playhead_on =
-                playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
-
-            if (is_selected || is_playhead_on) {
-                const GuiColor stroke_col =
-                    out_of_trim ? dim(kMarker) : kMarker;
-                cairo_set_source_rgb(cr,
-                    stroke_col.r, stroke_col.g, stroke_col.b);
-                const double rx = std::round(text_left) + 0.5;
-                const double ry = std::round(
-                    baseline_y + uniform_ext.y_bearing
-                  - hl_pad - kVPadExtraPx) + 0.5;
-                const int rw = static_cast<int>(std::round(
-                    hl_pad + ext.x_bearing + ext.width + hl_pad));
-                const int rh = static_cast<int>(std::round(
-                    uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
-                cairo_set_line_width(cr, 1.0);
-                cairo_rectangle(cr, rx, ry,
-                                static_cast<double>(rw),
-                                static_cast<double>(rh));
-                cairo_stroke(cr);
-            }
-
-            const GuiColor txt = out_of_trim ? dim(kText) : kText;
-            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
-            cairo_move_to(cr, text_left + hl_pad, baseline_y);
-            cairo_show_text(cr, text.c_str());
-            if constexpr (kDebugPerf) perf_counters::flag_drawn++;
+            emits.push_back({i, text_left, baseline_y, text, ext});
         });
+
+    auto paint_one = [&](const TransientEmit& e) {
+        const bool is_selected = selected_set.count(e.i) > 0;
+        const bool out_of_trim =
+            marker_out_of_trim(transients[e.i].effective_frame(), trim);
+
+        const int marker_col_px = static_cast<int>(std::round(e.text_left));
+        const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
+        const bool is_playhead_on =
+            playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
+
+        // Brief Y.4 sub-bug A: opaque canvas-bg fill under the text.
+        // Transient flags have no editor (no growing pending text),
+        // but the fill is added for symmetry with warp flags — in the
+        // static states it sits under identical-color canvas pixels
+        // and is visually invisible.
+        const double bg_top =
+            e.baseline_y + uniform_ext.y_bearing - hl_pad - kVPadExtraPx;
+        const double bg_h_full =
+            uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx;
+        render_flag_text_bg_fill(cr,
+            e.text_left + hl_pad, e.ext.x_advance, bg_top, bg_h_full);
+
+        if (is_selected || is_playhead_on) {
+            const GuiColor stroke_col =
+                out_of_trim ? dim(kMarker) : kMarker;
+            cairo_set_source_rgb(cr,
+                stroke_col.r, stroke_col.g, stroke_col.b);
+            const double rx = std::round(e.text_left) + 0.5;
+            const double ry = std::round(
+                e.baseline_y + uniform_ext.y_bearing
+              - hl_pad - kVPadExtraPx) + 0.5;
+            const int rw = static_cast<int>(std::round(
+                hl_pad + e.ext.x_bearing + e.ext.width + hl_pad));
+            const int rh = static_cast<int>(std::round(
+                uniform_ext.height + 2 * hl_pad + 2 * kVPadExtraPx));
+            cairo_set_line_width(cr, 1.0);
+            cairo_rectangle(cr, rx, ry,
+                            static_cast<double>(rw),
+                            static_cast<double>(rh));
+            cairo_stroke(cr);
+        }
+
+        const GuiColor txt = out_of_trim ? dim(kText) : kText;
+        cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
+        cairo_move_to(cr, e.text_left + hl_pad, e.baseline_y);
+        cairo_show_text(cr, e.text.c_str());
+        if constexpr (kDebugPerf) perf_counters::flag_drawn++;
+    };
+
+    for (auto it = emits.rbegin(); it != emits.rend(); ++it) {
+        paint_one(*it);
+    }
 
     cairo_restore(cr);
 }

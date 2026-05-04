@@ -160,6 +160,17 @@ inline std::vector<IterPopupHit> compute_iter_popup_hits(
     cairo_text_extents(cr, "[+0.00,+0.00]", &uniform_ext);
     const double hl_pad = kFlagInnerPadPx;
 
+    // Greedy left-to-right elision over popup positions. Brief Y.4 sub-bug
+    // B: collision is computed against the popup's actual painted-text
+    // width plus 2 * kFlagInnerPadPx — i.e., the on-screen extent of the
+    // bg-fill rect, not the uniform [+0.00,+0.00] hit_rect.w. The hit_rect
+    // stays uniform-width so click targets are stable as values change;
+    // pack and paint are separate concerns. With this rule, two adjacent
+    // owning markers whose painted popup texts (e.g. "[ ]") don't actually
+    // overlap will both render, even if their uniform hit rects do — which
+    // matches the flag pack in iterate_visible_flags. No editor exemption.
+    const double pop_pad = 4.0;
+    double rightmost_right_edge = -1e18;
     for (const auto& r : rects) {
         const int idx = r.marker_index;
         if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
@@ -182,6 +193,14 @@ inline std::vector<IterPopupHit> compute_iter_popup_hits(
             popup_h;
         h.hit_rect.w = popup_w;
         h.hit_rect.h = popup_h;
+
+        // Pack collision uses the painted-extent width (matches the bg-
+        // fill rect from sub-bug A), not h.hit_rect.w. By construction
+        // the pack rule and the visual occlusion rule agree.
+        const double pack_w = ext.x_advance + 2.0 * hl_pad;
+        const double left = static_cast<double>(h.hit_rect.x);
+        if (left < rightmost_right_edge + pop_pad) continue;
+        rightmost_right_edge = left + pack_w;
         out.push_back(h);
     }
     cairo_restore(cr);
@@ -331,8 +350,8 @@ struct DragState {
     double              delta_max =  std::numeric_limits<double>::infinity();
     bool                moved = false;
     // Full pre-drag marker state. Captured at button-press so commit_drag
-    // can push it onto the undo stack. Escape-cancel discards it implicitly
-    // (DragState is reset wholesale there).
+    // can push it onto the undo stack when motion landed; discarded on
+    // commit when no motion occurred (DragState is reset wholesale there).
     std::vector<GuiMarker>    pre_drag_snapshot;
     std::vector<GuiTransient> pre_drag_transient_snapshot;
     // Pre-drag last_selected for the undo hint; carried onto the entry at commit.
@@ -341,11 +360,14 @@ struct DragState {
     // the playhead during motion so the audio cursor follows the grabbed
     // marker as it moves.
     int                    hit_marker           = -1;
-    // Playhead sample at drag start, restored on Escape-cancel.
-    int64_t                pre_drag_playhead_sample = 0;
+    // True when begin_drag found the hit marker outside the current
+    // selection. The selection-collapse-to-{hit} mutation is deferred until
+    // motion is actually observed, so a Ctrl+click without drag leaves the
+    // selection untouched. Cleared on the first moved transition.
+    bool                   pending_collapse_to_hit = false;
     // Which list this drag operates on (chunk S.2.2). The motion / commit
-    // / cancel handlers dispatch on this so a drag started in transient
-    // mode mutates the transient list.
+    // handlers dispatch on this so a drag started in transient mode
+    // mutates the transient list.
     char                   drag_mode = 'W';
 };
 
@@ -673,9 +695,9 @@ struct AppState {
     // fire while a prompt is up).
     std::string queue_progress_text;
 
-    // Chunk W: in-memory queue of pending renders. Ctrl+Alt+E pushes a
+    // Chunk W: in-memory queue of pending renders. Ctrl+E pushes a
     // snapshot of the current authoring state onto the back of this list;
-    // Ctrl+Alt+R consumes it, materializing one batch folder per execution
+    // Ctrl+Alt+E consumes it, materializing one batch folder per execution
     // with one rendered output per queued entry. The list is session-only:
     // discarded on app close, never written to disk between sessions.
     // Settings are not snapshotted per-entry — all entries render against
@@ -1794,7 +1816,17 @@ int main(int argc, char** argv) {
                             gui_text_editor::is_active(app.top_flag_editor) &&
                             app.top_flag_editor.kind ==
                                 gui_text_editor::Kind::IterationBracket;
-                        for (const auto& h : hits) {
+                        // Brief Y.5: paint hits in REVERSE so the leftmost
+                        // popup paints last (on top). The compute_iter_popup
+                        // _hits pack walks left-to-right and elides right-of-
+                        // collision popups; reverse paint makes the editor's
+                        // widening pending text occlude its right neighbor
+                        // rather than vice-versa, matching the leftmost-wins
+                        // pack rule. In static (non-edit) states the bg-fills
+                        // are kBackground and text rects don't overlap, so
+                        // the pixels are identical to the previous order.
+                        for (auto it = hits.rbegin(); it != hits.rend(); ++it) {
+                            const auto& h = *it;
                             // Anchor for gui_text_display: x at the flag's
                             // text-origin (flag.x + kFlagInnerPadPx, mirrors
                             // hover popup), y/w/h from the flag rect itself.
@@ -1838,6 +1870,15 @@ int main(int argc, char** argv) {
                                     static_cast<double>(h.hit_rect.y);
                                 const double bg_h =
                                     static_cast<double>(h.hit_rect.h);
+                                // Brief Y.4 sub-bug A: opaque canvas-bg
+                                // fill under the popup text, drawn before
+                                // the colored outline below. Width tracks
+                                // pending text + 2 * kFlagInnerPadPx, so
+                                // it occludes neighbor popup text once
+                                // pending widens past the original [ ].
+                                render_flag_text_bg_fill(cr,
+                                    static_cast<double>(anchor.x),
+                                    pext.x_advance, bg_y, bg_h);
                                 GuiColor bg_col = app.top_flag_editor.red
                                     ? kAccent : kMarker;
                                 if (oot) bg_col = dim(bg_col);
@@ -1886,6 +1927,28 @@ int main(int argc, char** argv) {
                                 }
                                 cairo_restore(cr);
                             } else {
+                                // Brief Y.4 sub-bug A: paint the canvas-bg
+                                // fill under the popup text before the
+                                // text is drawn. In the static (non-edit)
+                                // case the fill matches strip-clear
+                                // exactly, so pixels are identical to
+                                // today; the fill does the occlusion
+                                // work only when an adjacent popup is
+                                // being edited and grows over this one.
+                                cairo_save(cr);
+                                cairo_select_font_face(cr, "monospace",
+                                    CAIRO_FONT_SLANT_NORMAL,
+                                    CAIRO_FONT_WEIGHT_NORMAL);
+                                cairo_set_font_size(cr, kFlagFontSize);
+                                cairo_text_extents_t hext;
+                                cairo_text_extents(cr, h.text.c_str(), &hext);
+                                render_flag_text_bg_fill(cr,
+                                    static_cast<double>(anchor.x),
+                                    hext.x_advance,
+                                    static_cast<double>(h.hit_rect.y),
+                                    static_cast<double>(h.hit_rect.h));
+                                cairo_restore(cr);
+
                                 gui_text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = h.text;
@@ -4748,12 +4811,18 @@ int main(int argc, char** argv) {
         }
     };
 
-    // Begin a Ctrl+drag. Expects caller to have already applied the initial
-    // selection change (ctrl semantics). Returns true if drag was started.
-    // Mode-aware: dragging applies to the active list (warp markers or
-    // transients). Internally `original_times` is in seconds for both modes;
-    // for transients it is `src_frame / sample_rate`, and motion is mapped
-    // back to the integer src_frame at apply time.
+    // Begin a Ctrl+drag. Computes the drag set from the current selection
+    // and the hit marker: if hit is already selected, the drag operates on
+    // the full selection; otherwise the drag operates on {hit} alone and
+    // the collapse-to-{hit} selection mutation is deferred until motion is
+    // actually observed (recorded as `pending_collapse_to_hit` on the
+    // DragState). A Ctrl+press that releases before motion crosses sample
+    // threshold therefore leaves the selection untouched. Returns true if
+    // drag was started. Mode-aware: dragging applies to the active list
+    // (warp markers or transients). Internally `original_times` is in
+    // seconds for both modes; for transients it is `src_frame /
+    // sample_rate`, and motion is mapped back to the integer src_frame at
+    // apply time.
     auto begin_drag = [&](int hit, int mouse_x) -> bool {
         if (hit < 0) return false;
         const int sr = audio.sample_rate();
@@ -4774,24 +4843,20 @@ int main(int argc, char** argv) {
         };
 
         // Drag target: entire selection if hit is in it, else just the hit.
-        // In the single-drag case, also collapse the selection to that marker
-        // so the visible selection matches what's actually being dragged.
+        // In the single-drag case the selection collapse to {hit} is
+        // deferred until motion is observed (see pending_collapse_to_hit).
         std::set<int> drag_set;
+        bool pending_collapse = false;
         if (app.selected_markers.count(hit)) {
             drag_set = app.selected_markers;
         } else {
-            const std::set<int> old = app.selected_markers;
-            app.selected_markers.clear();
-            app.selected_markers.insert(hit);
-            app.last_selected_marker = hit;
-            invalidate_markers_columns(old);
-            invalidate_marker_column(hit);
-            invalidate_top_strip();
             drag_set.insert(hit);
+            pending_collapse = true;
         }
 
         // First-marker protection: refuse index 0 and any effective-time-0
-        // marker.
+        // marker. Runs before any selection mutation so a refused drag
+        // leaves selection genuinely unchanged.
         for (int idx : drag_set) {
             if (idx == 0 || t_of(idx) == 0.0) {
                 std::fprintf(stderr,
@@ -4848,7 +4913,7 @@ int main(int argc, char** argv) {
 
         d.moved = false;
         // Capture the pre-drag list state for undo. Commit pushes the
-        // active-mode snapshot if motion landed; Escape-cancel discards.
+        // active-mode snapshot if motion landed; otherwise it's discarded.
         if (transient) {
             d.pre_drag_transient_snapshot = app.transients.markers();
         } else {
@@ -4856,7 +4921,7 @@ int main(int argc, char** argv) {
         }
         d.pre_drag_last_selected = app.last_selected_marker;
         d.hit_marker             = hit;
-        d.pre_drag_playhead_sample = app.playhead_sample;
+        d.pending_collapse_to_hit = pending_collapse;
         app.drag = std::move(d);
         clear_hover_popup();
         return true;
@@ -4919,41 +4984,27 @@ int main(int argc, char** argv) {
             }
         }
         if (any_changed) {
+            const bool first_motion = !app.drag.moved;
             app.drag.moved = true;
+            // Apply the deferred selection collapse on the press-to-motion
+            // edge, only if begin_drag noted that the hit marker was not
+            // in the prior selection. After this point the drag is
+            // committed to being a real drag, so the visible selection
+            // should match what's being dragged.
+            if (first_motion && app.drag.pending_collapse_to_hit) {
+                const int hit = app.drag.hit_marker;
+                const std::set<int> old = app.selected_markers;
+                app.selected_markers.clear();
+                app.selected_markers.insert(hit);
+                app.last_selected_marker = hit;
+                invalidate_markers_columns(old);
+                invalidate_marker_column(hit);
+                app.drag.pending_collapse_to_hit = false;
+            }
             // Flag strip is at most ~top_strip_height px tall; repainting
             // the whole strip takes ~0.05 ms, so don't bother per-flag.
             invalidate_top_strip();
         }
-    };
-
-    // Restore each dragged marker's original time and clear drag state.
-    // Escape-cancel also restores the playhead to its pre-drag sample so
-    // the audio cursor and visible state match what the user saw before.
-    auto cancel_drag = [&]() {
-        if (!app.drag.active) return;
-        clear_hover_popup();
-        const bool transient = (app.drag.drag_mode == 'T');
-        const double sr_d = static_cast<double>(audio.sample_rate());
-        // Restore from the pre-drag snapshot rather than reverse-deriving
-        // from original_times — for D entries, that requires reverting both
-        // src_frame, has_displacement, and displaced_frame at once.
-        if (transient) {
-            const auto& snap = app.drag.pre_drag_transient_snapshot;
-            if (!snap.empty()) {
-                app.transients.markers_mut() = snap;
-            }
-        } else {
-            for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
-                const int idx = app.drag.dragging_markers[k];
-                GuiMarker* m = app.markers.marker_mut(idx);
-                if (m) m->time_seconds = app.drag.original_times[k];
-            }
-        }
-        (void)sr_d;
-        const int64_t restore_ph = app.drag.pre_drag_playhead_sample;
-        app.drag = DragState{};
-        move_playhead_to(restore_ph);
-        invalidate_waveform_area();
     };
 
     // Commit the current drag. Caller ensures drag was active. Sets dirty
@@ -5605,8 +5656,13 @@ int main(int argc, char** argv) {
 
         app.queue_running          = false;
         app.queue_cancel_requested = false;
-        app.queue_progress_text.clear();
+        // Invalidate the wide bottom-strip rect before clearing the
+        // progress text. bottom_strip_wide() reads queue_progress_text;
+        // clearing first would shrink the invalidated rect to the narrow
+        // timestamp width, leaving the trailing pixels of the final
+        // "rendering N of N..." string undamaged.
         invalidate_dirty_and_timestamp();
+        app.queue_progress_text.clear();
 
         return result;
     };
@@ -5752,12 +5808,6 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Escape during a Ctrl+drag cancels the drag.
-        if (keysym == XK_Escape && app.drag.active) {
-            cancel_drag();
-            return;
-        }
-
         // Escape during a playhead drag ends the gesture at its current
         // position (no restore — the drag already committed its visible
         // progress per motion event, so there's nothing to revert).
@@ -5778,12 +5828,12 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Ctrl+Alt+E: snapshot current authoring state into the in-memory
+        // Ctrl+E: snapshot current authoring state into the in-memory
         // render queue. No disk writes; on-disk authoring files are untouched.
         // Settings are not snapshotted per-entry — the queue walker uses
         // the live settings_passthrough at execution time, mirroring the
         // chunk-U convention. (Chunk W: snapshots moved from disk to memory.)
-        if (ctrl && alt && !shift &&
+        if (ctrl && !alt && !shift &&
             (keysym == XK_e || keysym == XK_E)) {
             if (app.source_audio_path.empty()) return;
             AppState::QueuedRender q;
@@ -5823,7 +5873,7 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Ctrl+Alt+Shift+E: render the in-memory queue as one batch. Each
+        // Ctrl+Alt+E: render the in-memory queue as one batch. Each
         // queued entry produces a sibling .wav (+ .warpmarkers /
         // .transientmarkers when non-empty / .peaks sidecars) inside a fresh
         // batch folder `<source_parent>/renders/<index>_render_all_in_queue/`.
@@ -5842,7 +5892,7 @@ int main(int argc, char** argv) {
         // partial batches just contain fewer files than the queue had.
         // The in-memory queue is cleared after execution whether all
         // entries ran or Esc cut it short.
-        if (ctrl && alt && shift &&
+        if (ctrl && alt && !shift &&
             (keysym == XK_e || keysym == XK_E)) {
             if (app.source_audio_path.empty()) return;
             if (app.queued_renders.empty()) return;

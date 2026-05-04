@@ -3,6 +3,7 @@
 #include "gui_transients.h"
 
 #include <cairo/cairo.h>
+#include <cmath>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -68,6 +69,46 @@ constexpr GuiColor dim(GuiColor c) {
         c.g * 0.5 + kBackground.g * 0.5,
         c.b * 0.5 + kBackground.b * 0.5,
     };
+}
+
+// Brief Y.4 sub-bug A: paints an opaque kBackground-colored rect under
+// flag and iter popup text glyphs so the editor's growing pending text
+// occludes neighbor text rather than blending with it. Without this fill,
+// static flag/popup text paints directly on the canvas, and a widening
+// edit shares pixels with adjacent flags' glyphs (both sets are visible
+// blended). The fill matches the strip-clear color exactly, so in every
+// non-edit state nothing changes visually; during an edit it does the
+// occlusion work once pending text widens past the original flag width.
+//
+// Drawn before any outline (selection purple, editor parse-fail red) and
+// before the text glyphs. Applies symmetrically to top-strip flags and
+// iter popups (the symmetry is the architectural target — pack collision
+// in compute_iter_popup_hits uses the same x_advance + 2 * kFlagInnerPadPx
+// width by construction, so the pack rule and the visual occlusion rule
+// agree).
+//
+// `text_left` is the actual text painting x — i.e., where cairo_move_to
+// would place the cursor for cairo_show_text. The helper subtracts
+// kFlagInnerPadPx itself to derive the fill rect's left edge. `bg_top`
+// and `bg_height` reuse the existing outline/highlight rect math at the
+// caller, so the fill aligns with the outline that gets painted on top.
+inline void render_flag_text_bg_fill(cairo_t* cr,
+                                     double text_left,
+                                     double text_x_advance,
+                                     double bg_top,
+                                     double bg_height) {
+    const double pad = kFlagInnerPadPx;
+    const double x = std::round(text_left - pad);
+    const double y = std::round(bg_top);
+    const double w = std::round(text_x_advance + 2.0 * pad);
+    const double h = std::round(bg_height);
+    if (w <= 0.0 || h <= 0.0) return;
+    cairo_save(cr);
+    cairo_set_source_rgb(cr,
+        kBackground.r, kBackground.g, kBackground.b);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+    cairo_restore(cr);
 }
 
 // Out-of-trim predicate. Caller computes source-frame position from its
