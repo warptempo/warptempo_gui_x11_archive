@@ -155,6 +155,7 @@ bool run_ffmpeg_alimiter(const std::string& in_path,
         + "level_in=0dB:limit=" + limit_buf
         + ":level_out=0dB:attack=10:release=20";
     return run_subprocess("ffmpeg", {
+        "-hide_banner", "-loglevel", "error",
         "-y", "-i", in_path,
         "-c:a", "pcm_s24le",
         "-af",  af,

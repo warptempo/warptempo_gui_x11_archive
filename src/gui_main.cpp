@@ -2528,22 +2528,24 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (elapsed_ms > app.stats_max_redraw_ms)
-            app.stats_max_redraw_ms = elapsed_ms;
-        if (elapsed_ms > 1.0) app.stats_over_1ms_count++;
-        const double since_last = std::chrono::duration<double>(
-            t_end - app.stats_last_report).count();
-        if (since_last >= 1.0) {
-            if (app.stats_max_redraw_ms > 1.0) {
-                std::fprintf(stderr,
-                    "[warptempo_gui] redraw max=%.2fms in last %.1fs "
-                    "(%d redraws > 1ms)\n",
-                    app.stats_max_redraw_ms, since_last,
-                    app.stats_over_1ms_count);
+        if constexpr (kDebugPerf) {
+            if (elapsed_ms > app.stats_max_redraw_ms)
+                app.stats_max_redraw_ms = elapsed_ms;
+            if (elapsed_ms > 1.0) app.stats_over_1ms_count++;
+            const double since_last = std::chrono::duration<double>(
+                t_end - app.stats_last_report).count();
+            if (since_last >= 1.0) {
+                if (app.stats_max_redraw_ms > 1.0) {
+                    std::fprintf(stderr,
+                        "[warptempo_gui] redraw max=%.2fms in last %.1fs "
+                        "(%d redraws > 1ms)\n",
+                        app.stats_max_redraw_ms, since_last,
+                        app.stats_over_1ms_count);
+                }
+                app.stats_max_redraw_ms = 0.0;
+                app.stats_over_1ms_count = 0;
+                app.stats_last_report = t_end;
             }
-            app.stats_max_redraw_ms = 0.0;
-            app.stats_over_1ms_count = 0;
-            app.stats_last_report = t_end;
         }
     });
 

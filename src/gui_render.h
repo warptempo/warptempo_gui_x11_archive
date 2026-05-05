@@ -327,7 +327,7 @@ double measure_timestamp_width(cairo_t* cr, double seconds);
 // One-line toggle for the render-path perf instrumentation (chunk M). When
 // false, all perf_counters increments and [dbg perf] stderr emissions in
 // the redraw path are compiled out.
-constexpr bool kDebugPerf = true;
+constexpr bool kDebugPerf = false;
 
 // Hot-loop counters for perf instrumentation. Incremented by the render
 // helpers on every relevant inner-loop step; the caller zeroes them with
