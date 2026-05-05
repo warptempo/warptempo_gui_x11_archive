@@ -116,6 +116,81 @@ inline bool iter_popup_eligible_marker(const GuiMarker& m) {
     return !m.tempo_inherits && m.label_ref.empty();
 }
 
+// Brief X.2 BPM mode: same eligibility shape as iter (owning marker, no
+// label_ref). Defined separately so the two predicates can diverge later
+// without cascading edits.
+inline bool bpm_popup_eligible_marker(const GuiMarker& m) {
+    return !m.tempo_inherits && m.label_ref.empty();
+}
+
+// Brief X.2 BPM mode: format the popup's bracket text for marker `m`.
+// "[]" when bpm_has_value is false (matches iter's empty form exactly),
+// or when bpm_has_value is true with sentinel-zero values (owner-but-
+// blank — set by the `m`-toggle-on transition before any commit). The
+// non-empty form is the strict syntax `<beats>@[<lo>,<hi>]`.
+inline std::string format_bpm_bracket_text(const GuiMarker& m) {
+    if (!m.bpm_has_value ||
+        m.bpm_beats <= 0 || m.bpm_lo <= 0 || m.bpm_hi <= 0) {
+        return "[]";
+    }
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%d@[%d,%d]",
+                  m.bpm_beats, m.bpm_lo, m.bpm_hi);
+    return buf;
+}
+
+// Brief X.2 BPM mode: strict parser for "<beats>@[<lo>,<hi>]". All three
+// values must be positive integers; lo <= hi (degenerate lo=hi is valid);
+// no whitespace, no decimals, no missing fields, no alternate forms. On
+// failure returns false and leaves out-params unchanged.
+inline bool parse_bpm_bracket(const std::string& s,
+                              int& beats, int& lo, int& hi) {
+    if (s.empty()) return false;
+    const auto at_pos = s.find('@');
+    if (at_pos == std::string::npos) return false;
+    if (s.find('@', at_pos + 1) != std::string::npos) return false;
+    const std::string left  = s.substr(0, at_pos);
+    const std::string right = s.substr(at_pos + 1);
+    if (left.empty() || right.empty()) return false;
+    if (right.front() != '[' || right.back() != ']') return false;
+    const std::string inner = right.substr(1, right.size() - 2);
+    if (inner.empty()) return false;
+    const auto comma = inner.find(',');
+    if (comma == std::string::npos) return false;
+    if (inner.find(',', comma + 1) != std::string::npos) return false;
+    const std::string lo_s = inner.substr(0, comma);
+    const std::string hi_s = inner.substr(comma + 1);
+    if (lo_s.empty() || hi_s.empty()) return false;
+    auto digits_only = [](const std::string& v) {
+        for (char c : v) {
+            if (c < '0' || c > '9') return false;
+        }
+        return !v.empty();
+    };
+    if (!digits_only(left) || !digits_only(lo_s) || !digits_only(hi_s)) {
+        return false;
+    }
+    auto parse_pos_int = [](const std::string& v, int& out) -> bool {
+        long long acc = 0;
+        for (char c : v) {
+            acc = acc * 10 + (c - '0');
+            if (acc > std::numeric_limits<int>::max()) return false;
+        }
+        if (acc <= 0) return false;
+        out = static_cast<int>(acc);
+        return true;
+    };
+    int b = 0, l = 0, h = 0;
+    if (!parse_pos_int(left, b))  return false;
+    if (!parse_pos_int(lo_s, l))  return false;
+    if (!parse_pos_int(hi_s, h))  return false;
+    if (l > h) return false;
+    beats = b;
+    lo    = l;
+    hi    = h;
+    return true;
+}
+
 // On-screen popup geometry for one iteration popup. `flag_rect` is the
 // underlying flag's rect (used to anchor); `hit_rect` is the clickable
 // region; `text` is the current popup text (for paint and seed-on-edit).
@@ -197,6 +272,79 @@ inline std::vector<IterPopupHit> compute_iter_popup_hits(
         // Pack collision uses the painted-extent width (matches the bg-
         // fill rect from sub-bug A), not h.hit_rect.w. By construction
         // the pack rule and the visual occlusion rule agree.
+        const double pack_w = ext.x_advance + 2.0 * hl_pad;
+        const double left = static_cast<double>(h.hit_rect.x);
+        if (left < rightmost_right_edge + pop_pad) continue;
+        rightmost_right_edge = left + pack_w;
+        out.push_back(h);
+    }
+    cairo_restore(cr);
+    return out;
+}
+
+// Brief X.2 BPM popup geometry. Mirrors IterPopupHit.
+struct BpmPopupHit {
+    int          marker_index;
+    GuiRect      flag_rect;
+    GuiRect      hit_rect;
+    std::string  text;
+};
+
+// Brief X.2: compute BPM popup hit-rects for visible owning markers that
+// carry a stored BPM value. Mirrors compute_iter_popup_hits in shape:
+// uniform hit_rect.w sized to "99@[999,999]" so click targets are stable
+// as values change; pack collision uses the painted-text width so static
+// states pixel-match neighbors.
+inline std::vector<BpmPopupHit> compute_bpm_popup_hits(
+    cairo_t* cr,
+    GuiRect top_strip_area,
+    const std::vector<GuiMarker>& markers,
+    long long viewport_start_sample,
+    long long viewport_end_sample,
+    int sample_rate,
+    double font_size) {
+    std::vector<BpmPopupHit> out;
+    auto rects = compute_flag_hit_rects(
+        cr, top_strip_area, markers,
+        viewport_start_sample, viewport_end_sample,
+        sample_rate, font_size);
+    if (rects.empty()) return out;
+
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+                           CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, font_size);
+    cairo_text_extents_t uniform_ext;
+    cairo_text_extents(cr, "99@[999,999]", &uniform_ext);
+    const double hl_pad = kFlagInnerPadPx;
+
+    const double pop_pad = 4.0;
+    double rightmost_right_edge = -1e18;
+    for (const auto& r : rects) {
+        const int idx = r.marker_index;
+        if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
+        if (!bpm_popup_eligible_marker(markers[idx])) continue;
+        if (!markers[idx].bpm_has_value) continue;
+        BpmPopupHit h;
+        h.marker_index = idx;
+        h.flag_rect.x = static_cast<int>(std::lround(r.x));
+        h.flag_rect.y = static_cast<int>(std::lround(r.y));
+        h.flag_rect.w = static_cast<int>(std::lround(r.w));
+        h.flag_rect.h = static_cast<int>(std::lround(r.h));
+        h.text = format_bpm_bracket_text(markers[idx]);
+        cairo_text_extents_t ext;
+        cairo_text_extents(cr, h.text.c_str(), &ext);
+        const int popup_w =
+            static_cast<int>(std::ceil(uniform_ext.x_advance + 2 * hl_pad));
+        const int popup_h = h.flag_rect.h;
+        h.hit_rect.x = h.flag_rect.x;
+        h.hit_rect.y = h.flag_rect.y -
+            static_cast<int>(std::lround(kIterPopupVerticalGapPx)) -
+            popup_h;
+        h.hit_rect.w = popup_w;
+        h.hit_rect.h = popup_h;
+
         const double pack_w = ext.x_advance + 2.0 * hl_pad;
         const double left = static_cast<double>(h.hit_rect.x);
         if (left < rightmost_right_edge + pop_pad) continue;
@@ -717,6 +865,13 @@ struct AppState {
     // marker's flag rect.
     bool iteration_mode_enabled = false;
 
+    // Brief X.2 BPM mode. Toggled by plain `m` in warp mode. Mutually
+    // exclusive with iteration_mode_enabled (toggling one ON forces the
+    // other OFF). Session-only. The popup owner is identified at runtime
+    // by walking markers for bpm_has_value=true; at most one marker holds
+    // the flag at a time, maintained as an invariant by the toggle.
+    bool bpm_mode_enabled = false;
+
     // Chunk W: render analysis mode. Plain `r` toggles between source-view
     // (authoring) and render-view (read-only auditioning of rendered
     // outputs from <source_parent>/renders/). All authoring state above
@@ -1104,6 +1259,31 @@ bool parse_settings_file(const std::string& path, ParsedSettings& out) {
         }
     }
     return true;
+}
+
+// First-open default `.settings` template. Line ordering must match
+// write_settings_file's output (passthrough fields first, then follow=,
+// then the tab_a_* / tab_b_* triplets) — keep these in sync if either
+// side changes.
+std::string format_default_settings_template(const std::string& stem,
+                                             const std::string& ext_no_dot) {
+    std::string s;
+    s += "title=";       s += stem; s += "-rendered\n";
+    s += "audio_input="; s += stem; s += '.'; s += ext_no_dot; s += '\n';
+    s += "scale=1.000000\n";
+    s += "engine=warptempo\n";
+    s += "N=4096\n";
+    s += "fftw_threads=16\n";
+    s += "transients_tau_back_ms=30.0\n";
+    s += "limiter_enabled=false\n";
+    s += "follow=true\n";
+    s += "tab_a_viewport_start=0\n";
+    s += "tab_a_zoom=0\n";
+    s += "tab_a_playhead=0\n";
+    s += "tab_b_viewport_start=0\n";
+    s += "tab_b_zoom=0\n";
+    s += "tab_b_playhead=0\n";
+    return s;
 }
 
 // Atomic write: pass-through lines first in their original order, then the
@@ -1733,6 +1913,15 @@ int main(int argc, char** argv) {
                                    gui_text_editor::Kind::IterationBracket) {
                         overlay.iter_editor_target =
                             app.top_flag_editor.target;
+                    } else if (gui_text_editor::is_active(app.top_flag_editor) &&
+                               app.top_flag_editor.kind ==
+                                   gui_text_editor::Kind::BpmBracket) {
+                        // Brief X.2: same flag-rect highlight suppression
+                        // as iter — the popup above owns the highlight.
+                        // Modes are mutually exclusive so reusing the
+                        // iter_editor_target channel is safe.
+                        overlay.iter_editor_target =
+                            app.top_flag_editor.target;
                     }
                     render_flags(cr, top_strip, app.markers.markers(),
                                  vp_start, vp_end, sr,
@@ -1935,6 +2124,137 @@ int main(int argc, char** argv) {
                                 // today; the fill does the occlusion
                                 // work only when an adjacent popup is
                                 // being edited and grows over this one.
+                                cairo_save(cr);
+                                cairo_select_font_face(cr, "monospace",
+                                    CAIRO_FONT_SLANT_NORMAL,
+                                    CAIRO_FONT_WEIGHT_NORMAL);
+                                cairo_set_font_size(cr, kFlagFontSize);
+                                cairo_text_extents_t hext;
+                                cairo_text_extents(cr, h.text.c_str(), &hext);
+                                render_flag_text_bg_fill(cr,
+                                    static_cast<double>(anchor.x),
+                                    hext.x_advance,
+                                    static_cast<double>(h.hit_rect.y),
+                                    static_cast<double>(h.hit_rect.h));
+                                cairo_restore(cr);
+
+                                gui_text_display::State td;
+                                td.anchor   = anchor;
+                                td.content  = h.text;
+                                td.visible  = true;
+                                td.color    = oot ? dim(kText) : kText;
+                                td.position =
+                                    gui_text_display::Position::Top;
+                                gui_text_display::render(cr, td,
+                                                         kFlagFontSize);
+                            }
+                        }
+                    }
+
+                    // Brief X.2 BPM popups. Parallel to the iter block
+                    // above; mutually exclusive with iteration mode (only
+                    // one mode's popups paint at a time). At most one
+                    // marker has bpm_has_value=true so hits is normally
+                    // a single entry, but the reverse-paint and
+                    // bg-fill-under-text patterns mirror iter for
+                    // consistency.
+                    if (app.bpm_mode_enabled) {
+                        const auto& mv = app.markers.markers();
+                        auto hits = compute_bpm_popup_hits(
+                            cr, top_strip, mv,
+                            vp_start, vp_end, sr, kFlagFontSize);
+                        const bool editor_on_bpm =
+                            gui_text_editor::is_active(app.top_flag_editor) &&
+                            app.top_flag_editor.kind ==
+                                gui_text_editor::Kind::BpmBracket;
+                        for (auto it = hits.rbegin(); it != hits.rend(); ++it) {
+                            const auto& h = *it;
+                            GuiRect anchor{
+                                h.flag_rect.x +
+                                    static_cast<int>(kFlagInnerPadPx),
+                                h.flag_rect.y,
+                                h.flag_rect.w,
+                                h.flag_rect.h
+                            };
+                            const int64_t pos = static_cast<int64_t>(
+                                std::llround(
+                                    mv[h.marker_index].time_seconds *
+                                    static_cast<double>(sr)));
+                            const bool oot =
+                                marker_out_of_trim(pos, trim_struct);
+                            if (editor_on_bpm &&
+                                app.top_flag_editor.target == h.marker_index) {
+                                const std::string& pending =
+                                    app.top_flag_editor.pending;
+                                cairo_save(cr);
+                                cairo_select_font_face(cr, "monospace",
+                                    CAIRO_FONT_SLANT_NORMAL,
+                                    CAIRO_FONT_WEIGHT_NORMAL);
+                                cairo_set_font_size(cr, kFlagFontSize);
+                                cairo_text_extents_t pext;
+                                cairo_text_extents(cr, pending.c_str(), &pext);
+                                cairo_text_extents_t uext;
+                                cairo_text_extents(cr, "99@[999,999]", &uext);
+                                const double hl_pad = kFlagInnerPadPx;
+                                const double bg_w =
+                                    pext.x_advance + 2.0 * hl_pad;
+                                const double bg_x =
+                                    static_cast<double>(anchor.x) - hl_pad;
+                                const double bg_y =
+                                    static_cast<double>(h.hit_rect.y);
+                                const double bg_h =
+                                    static_cast<double>(h.hit_rect.h);
+                                render_flag_text_bg_fill(cr,
+                                    static_cast<double>(anchor.x),
+                                    pext.x_advance, bg_y, bg_h);
+                                GuiColor bg_col = app.top_flag_editor.red
+                                    ? kAccent : kMarker;
+                                if (oot) bg_col = dim(bg_col);
+                                cairo_set_source_rgb(cr,
+                                    bg_col.r, bg_col.g, bg_col.b);
+                                const double sx = std::round(bg_x) + 0.5;
+                                const double sy = std::round(bg_y) + 0.5;
+                                const int sw = static_cast<int>(
+                                    std::round(bg_w));
+                                const int sh = static_cast<int>(
+                                    std::round(bg_h));
+                                cairo_set_line_width(cr, 1.0);
+                                cairo_rectangle(cr, sx, sy,
+                                    static_cast<double>(sw),
+                                    static_cast<double>(sh));
+                                cairo_stroke(cr);
+
+                                const double baseline_y =
+                                    static_cast<double>(anchor.y)
+                                  - kIterPopupVerticalGapPx
+                                  - kIterPopupVPadExtraPx
+                                  - (uext.height + uext.y_bearing);
+                                const GuiColor txt = oot ? dim(kText) : kText;
+                                cairo_set_source_rgb(cr,
+                                    txt.r, txt.g, txt.b);
+                                cairo_move_to(cr,
+                                    static_cast<double>(anchor.x), baseline_y);
+                                cairo_show_text(cr, pending.c_str());
+
+                                if (gui_text_editor::cursor_visible_now(
+                                        app.top_flag_editor)) {
+                                    std::string left = pending.substr(
+                                        0, static_cast<size_t>(
+                                            app.top_flag_editor.cursor_pos));
+                                    cairo_text_extents_t lext;
+                                    cairo_text_extents(cr, left.c_str(), &lext);
+                                    const double cx =
+                                        static_cast<double>(anchor.x) +
+                                        lext.x_advance;
+                                    cairo_set_source_rgb(cr,
+                                        txt.r, txt.g, txt.b);
+                                    cairo_set_line_width(cr, 1.0);
+                                    cairo_move_to(cr, cx, bg_y);
+                                    cairo_line_to(cr, cx, bg_y + bg_h);
+                                    cairo_stroke(cr);
+                                }
+                                cairo_restore(cr);
+                            } else {
                                 cairo_save(cr);
                                 cairo_select_font_face(cr, "monospace",
                                     CAIRO_FONT_SLANT_NORMAL,
@@ -2830,6 +3150,188 @@ int main(int argc, char** argv) {
             m.iter_end   = std::numeric_limits<double>::quiet_NaN();
         }
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
+        invalidate_top_strip();
+    };
+
+    // -- Brief X.2 BPM popup edit helpers ------------------------------------
+
+    // Open a BPM popup edit on `idx`. Seed pending is the current popup
+    // text (`"[]"` when blank, else `"<beats>@[<lo>,<hi>]"`). Reuses
+    // top_flag_editor with Kind::BpmBracket so the keyboard vocabulary
+    // swaps to digits + `@`/`,`/`[`/`]`.
+    auto enter_bpm_edit = [&](int idx) {
+        if (idx < 0) return;
+        if (!app.bpm_mode_enabled) return;
+        const auto& mv = app.markers.markers();
+        if (idx >= static_cast<int>(mv.size())) return;
+        if (!bpm_popup_eligible_marker(mv[idx])) return;
+        if (gui_text_editor::is_active(app.top_flag_editor) &&
+            app.top_flag_editor.target != idx) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+        }
+        gui_text_editor::enter(
+            app.top_flag_editor, idx,
+            /*locked_prefix=*/"",
+            /*initial_pending=*/format_bpm_bracket_text(mv[idx]),
+            gui_text_editor::Kind::BpmBracket);
+        clear_hover_popup();
+        invalidate_top_strip();
+    };
+
+    // Commit the BPM popup's pending buffer. Strict syntax via
+    // parse_bpm_bracket. On parse failure the editor stays open with
+    // a red outline; on success the parsed values are stored on the
+    // marker and bpm_has_value is set. Brief X.2: no undo entry — BPM
+    // values are session-only, treated like view state.
+    auto commit_bpm_edit = [&]() {
+        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        if (app.top_flag_editor.kind !=
+                gui_text_editor::Kind::BpmBracket) return;
+        const int idx = app.top_flag_editor.target;
+        const auto& mv_const = app.markers.markers();
+        if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+            invalidate_top_strip();
+            return;
+        }
+        const std::string& s = app.top_flag_editor.pending;
+        int beats = 0, lo = 0, hi = 0;
+        if (!parse_bpm_bracket(s, beats, lo, hi)) {
+            app.top_flag_editor.red = true;
+            invalidate_top_strip();
+            std::fprintf(stderr,
+                "warptempo_gui: bpm edit rejected: invalid syntax: %s\n",
+                s.c_str());
+            return;
+        }
+        GuiMarker* m = app.markers.marker_mut(idx);
+        if (!m) {
+            gui_text_editor::deactivate(app.top_flag_editor);
+            invalidate_top_strip();
+            return;
+        }
+        // Single-owner invariant: clear bpm_has_value on every other
+        // marker before stamping this one. The toggle handler maintains
+        // the invariant on mode entry, but the editor can target a
+        // different marker than the one originally stamped (via click
+        // -switching across popups), so reassert it here.
+        auto& mv = app.markers.markers_mut();
+        for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+            if (i == idx) continue;
+            if (mv[i].bpm_has_value) {
+                mv[i].bpm_has_value = false;
+                mv[i].bpm_beats     = 0;
+                mv[i].bpm_lo        = 0;
+                mv[i].bpm_hi        = 0;
+            }
+        }
+        m->bpm_has_value = true;
+        m->bpm_beats     = beats;
+        m->bpm_lo        = lo;
+        m->bpm_hi        = hi;
+        gui_text_editor::deactivate(app.top_flag_editor);
+        invalidate_top_strip();
+    };
+
+    // Bulk-clear every marker's BPM values. Triggered by Shift+M
+    // (regardless of mode state). Brief X.2: no undo entry; in-memory
+    // only, no .warpmarkers write.
+    auto bulk_clear_bpm_values = [&]() {
+        if (app.active_mode != 'W') return;
+        auto& mv = app.markers.markers_mut();
+        bool any = false;
+        for (const auto& m : mv) {
+            if (m.bpm_has_value) { any = true; break; }
+        }
+        if (!any) return;
+        for (auto& m : mv) {
+            m.bpm_has_value = false;
+            m.bpm_beats     = 0;
+            m.bpm_lo        = 0;
+            m.bpm_hi        = 0;
+        }
+        invalidate_top_strip();
+    };
+
+    // Brief X.2 effective-disabled cascade replicated here (the
+    // gui_render.cpp version is in an anonymous namespace). For the
+    // BPM endpoint auto-select, only owning markers are ever queried —
+    // they have empty label_ref so the cascade leg never fires — but
+    // keep the full rule for clarity and future-proofing.
+    auto bpm_effective_disabled = [&](const std::vector<GuiMarker>& markers,
+                                      int idx) -> bool {
+        if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
+        const auto& m = markers[idx];
+        if (m.disabled) return true;
+        if (!m.label_ref.empty()) {
+            for (const auto& other : markers) {
+                if (!other.label_def.empty() &&
+                    other.label_def == m.label_ref) {
+                    return other.disabled;
+                }
+            }
+        }
+        return false;
+    };
+
+    // Brief X.2: full mode-on transition for BPM mode. Validates the
+    // activation gate, toggles iter mode off if active, maintains the
+    // single-owner invariant, marks the selected marker as the popup
+    // owner (preserving prior values when re-toggling on the same
+    // owner), auto-selects the next eligible+enabled marker as the
+    // visual endpoint cue, and flips the mode flag.
+    auto enter_bpm_mode = [&]() {
+        if (app.bpm_mode_enabled) return;
+        if (app.active_mode != 'W') return;
+        if (app.selected_markers.size() != 1) return;
+        const int owner = *app.selected_markers.begin();
+        const auto& mv_const = app.markers.markers();
+        if (owner < 0 || owner >= static_cast<int>(mv_const.size())) return;
+        if (!bpm_popup_eligible_marker(mv_const[owner])) return;
+
+        if (app.iteration_mode_enabled) {
+            app.iteration_mode_enabled = false;
+        }
+
+        auto& mv = app.markers.markers_mut();
+        for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+            if (i == owner) continue;
+            if (mv[i].bpm_has_value) {
+                mv[i].bpm_has_value = false;
+                mv[i].bpm_beats     = 0;
+                mv[i].bpm_lo        = 0;
+                mv[i].bpm_hi        = 0;
+            }
+        }
+        // Tag owner with bpm_has_value=true if not already set so the
+        // popup-walk in compute_bpm_popup_hits picks it up. Sentinel-zero
+        // values stay zero; format_bpm_bracket_text renders "[]" for
+        // that state. Re-toggling on the same owner preserves any
+        // previously-committed values (the flag stays true and the
+        // values aren't touched).
+        if (!mv[owner].bpm_has_value) {
+            mv[owner].bpm_has_value = true;
+            mv[owner].bpm_beats     = 0;
+            mv[owner].bpm_lo        = 0;
+            mv[owner].bpm_hi        = 0;
+        }
+
+        // Auto-select endpoint: next eligible+enabled marker after owner.
+        for (int i = owner + 1; i < static_cast<int>(mv.size()); ++i) {
+            if (!bpm_popup_eligible_marker(mv[i])) continue;
+            if (bpm_effective_disabled(mv, i)) continue;
+            app.selected_markers.insert(i);
+            break;
+        }
+
+        app.bpm_mode_enabled = true;
+        clear_hover_popup();
+        invalidate_top_strip();
+    };
+
+    auto exit_bpm_mode = [&]() {
+        if (!app.bpm_mode_enabled) return;
+        app.bpm_mode_enabled = false;
         invalidate_top_strip();
     };
 
@@ -4757,6 +5259,37 @@ int main(int argc, char** argv) {
         return -1;
     };
 
+    // Brief X.2: BPM popup hit-test. Mirrors hit_test_iter_popup. The
+    // two modes are mutually exclusive so at most one of these returns
+    // a positive index for a given (x, y).
+    auto hit_test_bpm_popup = [&](int mouse_x, int mouse_y) -> int {
+        if (!app.bpm_mode_enabled) return -1;
+        if (app.active_mode != 'W') return -1;
+        const GuiRect area = waveform_area(app);
+        const GuiRect top  = top_strip_area(app);
+        cairo_surface_t* scratch_s = cairo_image_surface_create(
+            CAIRO_FORMAT_ARGB32, 1, 1);
+        cairo_t* scratch_cr = cairo_create(scratch_s);
+        const double spp = current_samples_per_pixel(app, audio);
+        const int64_t vp_start = app.viewport_start_sample;
+        const int64_t vp_end = vp_start +
+            static_cast<int64_t>(std::llround(spp * area.w));
+        auto hits = compute_bpm_popup_hits(
+            scratch_cr, top, app.markers.markers(),
+            vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
+        cairo_destroy(scratch_cr);
+        cairo_surface_destroy(scratch_s);
+        for (const auto& h : hits) {
+            if (mouse_x >= h.hit_rect.x &&
+                mouse_x < h.hit_rect.x + h.hit_rect.w &&
+                mouse_y >= h.hit_rect.y &&
+                mouse_y < h.hit_rect.y + h.hit_rect.h) {
+                return h.marker_index;
+            }
+        }
+        return -1;
+    };
+
     // V.A3b Addendum 3: re-evaluate hover at the cursor's last on_motion
     // coordinates. Called after viewport mutations (zoom, scroll, center,
     // playhead-driven viewport shift) so a stationary cursor's hover state
@@ -5725,6 +6258,9 @@ int main(int argc, char** argv) {
                 if (app.top_flag_editor.kind ==
                         gui_text_editor::Kind::IterationBracket) {
                     commit_iter_edit();
+                } else if (app.top_flag_editor.kind ==
+                        gui_text_editor::Kind::BpmBracket) {
+                    commit_bpm_edit();
                 } else {
                     commit_top_flag_edit();
                 }
@@ -6373,6 +6909,12 @@ int main(int argc, char** argv) {
         // so iteration popups appear or vanish in one frame.
         if (keysym == XK_i && !ctrl && !shift && !alt) {
             if (app.active_mode == 'W') {
+                // Brief X.2: mutual exclusion. Toggling iter ON forces
+                // BPM mode off; toggling iter OFF leaves BPM untouched.
+                const bool turning_on = !app.iteration_mode_enabled;
+                if (turning_on && app.bpm_mode_enabled) {
+                    app.bpm_mode_enabled = false;
+                }
                 app.iteration_mode_enabled = !app.iteration_mode_enabled;
                 clear_hover_popup();
                 invalidate_top_strip();
@@ -6384,6 +6926,28 @@ int main(int argc, char** argv) {
         if (keysym == XK_i && !ctrl && shift && !alt) {
             if (app.active_mode == 'W' && app.iteration_mode_enabled) {
                 bulk_clear_iter_values();
+            }
+            return;
+        }
+
+        // Brief X.2 `m` (no modifiers): toggle BPM mode in warp. Silent
+        // no-op in transient mode. Mutual exclusion with iter mode is
+        // handled inside enter_bpm_mode.
+        if (keysym == XK_m && !ctrl && !shift && !alt) {
+            if (app.active_mode == 'W') {
+                if (app.bpm_mode_enabled) {
+                    exit_bpm_mode();
+                } else {
+                    enter_bpm_mode();
+                }
+            }
+            return;
+        }
+        // Brief X.2 Shift+M bulk-clears every marker's BPM values.
+        // Fires regardless of mode state. Silent no-op outside warp.
+        if (keysym == XK_m && !ctrl && shift && !alt) {
+            if (app.active_mode == 'W') {
+                bulk_clear_bpm_values();
             }
             return;
         }
@@ -6447,6 +7011,11 @@ int main(int argc, char** argv) {
                 app.render_view_src_total = audio.total_frames();
                 app.render_view_list      = std::move(list);
                 app.iteration_mode_enabled = false;
+                // Brief X.2: BPM mode is force-off on render-view entry,
+                // mirroring iter. Stored values persist (in-memory only,
+                // never serialized) and re-appear if the user toggles
+                // BPM mode back on after exiting render-view.
+                app.bpm_mode_enabled       = false;
                 app.render_view_enabled    = true;
                 // Brief J.2: render-view shares the global active_mode
                 // flag, so the user's chosen mode carries across the
@@ -6826,6 +7395,16 @@ int main(int argc, char** argv) {
                         enter_iter_edit(iter_hit);
                         return;
                     }
+                    const int bpm_hit = hit_test_bpm_popup(x, y);
+                    if (bpm_hit >= 0) {
+                        if (app.top_flag_editor.kind ==
+                                gui_text_editor::Kind::BpmBracket &&
+                            bpm_hit == app.top_flag_editor.target) {
+                            return; // no-op on same popup
+                        }
+                        enter_bpm_edit(bpm_hit);
+                        return;
+                    }
                     const int hit_now = hit_test_flag(x, y);
                     if (app.top_flag_editor.kind ==
                             gui_text_editor::Kind::FlagPayload &&
@@ -6896,6 +7475,11 @@ int main(int argc, char** argv) {
                 const int iter_hit = hit_test_iter_popup(x, y);
                 if (iter_hit >= 0) {
                     enter_iter_edit(iter_hit);
+                    return;
+                }
+                const int bpm_hit = hit_test_bpm_popup(x, y);
+                if (bpm_hit >= 0) {
+                    enter_bpm_edit(bpm_hit);
                     return;
                 }
             }
@@ -7356,15 +7940,16 @@ int main(int argc, char** argv) {
         // are parsed so the initial playhead has the final trim-begin.
         app.playback_speed = 1.0f;
 
-        // Companion files: discover paths, create <basename>.warpmarkers if
-        // missing. `.settings` is GUI-owned now — not pre-created on load;
-        // first save materializes it. Companion file convention is
+        // Companion files: discover paths, create <basename>.warpmarkers
+        // and <basename>.settings if missing. Companion file convention is
         // <source_dir>/<source_basename>.<ext> (sibling, basename-prefixed),
         // not the legacy hidden `./.warpmarkers` form.
         std::filesystem::path apath(path);
         std::filesystem::path parent = apath.parent_path();
         if (parent.empty()) parent = std::filesystem::path(".");
         const std::string stem = apath.stem().string();
+        const std::string ext = apath.extension().string();
+        const std::string ext_no_dot = ext.empty() ? "" : ext.substr(1);
         const std::filesystem::path wm_path  = parent / (stem + ".warpmarkers");
         const std::filesystem::path tm_path  = parent / (stem + ".transientmarkers");
         const std::filesystem::path set_path = parent / (stem + ".settings");
@@ -7374,6 +7959,8 @@ int main(int argc, char** argv) {
         app.source_audio_path     = path;
 
         create_if_missing(wm_path, "00:00.000|1.00\n");
+        create_if_missing(set_path,
+                          format_default_settings_template(stem, ext_no_dot));
 
         // Load the markers file. Parse failures are non-fatal: we log each
         // error to stderr and leave app.markers empty. The GUI still works

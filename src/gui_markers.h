@@ -44,6 +44,16 @@ struct GuiMarker {
     // set, both are non-NaN and iter_start <= iter_end.
     double iter_start = std::numeric_limits<double>::quiet_NaN();
     double iter_end   = std::numeric_limits<double>::quiet_NaN();
+
+    // Brief X.2 BPM mode. Session-only authoring state for basetempo-scale
+    // sweeps; never serialized, lost on app close. At most one marker at a
+    // time has bpm_has_value=true (the popup owner; invariant maintained by
+    // the `m` toggle handler). The value form is "<beats>@[<lo>,<hi>]"
+    // with positive integers and lo <= hi. Math/render is X.3.
+    bool bpm_has_value = false;
+    int  bpm_beats     = 0;
+    int  bpm_lo        = 0;
+    int  bpm_hi        = 0;
 };
 
 struct GuiMarkerError {

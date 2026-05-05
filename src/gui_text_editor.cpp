@@ -13,15 +13,20 @@ namespace {
 // prefix). Letters lowercase only — uppercase swallowed. Map an X11
 // keysym (paired with mods) to the literal char to insert; returns 0
 // for "not a printable in this vocabulary". `kind` selects between the
-// flag-payload alphabet and the iteration-bracket alphabet.
+// flag-payload, iteration-bracket, and BPM-bracket alphabets.
 char keysym_to_char(unsigned long keysym, unsigned int mods, Kind kind) {
     const bool shift = (mods & ShiftMask) != 0;
 
-    // Digits and decimal point are common to both kinds.
+    // Digits are common to all kinds.
     if (keysym >= XK_0 && keysym <= XK_9 && !shift) {
+        // Brief X.2: Shift+2 → '@' for BpmBracket only; the digit branch
+        // already filters out shift, so the BpmBracket-specific block
+        // below is what handles the shifted form.
         return static_cast<char>('0' + (keysym - XK_0));
     }
-    if (keysym == XK_period && !shift) return '.';
+    // Decimal point is accepted by FlagPayload and IterationBracket but
+    // NOT BpmBracket (strict integer-only).
+    if (keysym == XK_period && !shift && kind != Kind::BpmBracket) return '.';
 
     if (kind == Kind::IterationBracket) {
         // Brackets, comma, signed-number prefixes. No letters, no `*`,
@@ -34,6 +39,18 @@ char keysym_to_char(unsigned long keysym, unsigned int mods, Kind kind) {
         if (keysym == XK_plus)                   return '+';
         // US layout: Shift+= produces +.
         if (keysym == XK_equal && shift)         return '+';
+        return 0;
+    }
+
+    if (kind == Kind::BpmBracket) {
+        // Brief X.2: digits, `@`, `,`, `[`, `]`. No letters, no signs,
+        // no decimals.
+        if (keysym == XK_bracketleft  && !shift) return '[';
+        if (keysym == XK_bracketright && !shift) return ']';
+        if (keysym == XK_comma        && !shift) return ',';
+        if (keysym == XK_at)                     return '@';
+        // US layout: Shift+2 produces @.
+        if (keysym == XK_2 && shift)             return '@';
         return 0;
     }
 
@@ -129,10 +146,14 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
         return KeyAction::Consumed;
     }
 
-    // Printable insertion (length-capped).
+    // Printable insertion (length-capped). BpmBracket gets a tighter cap
+    // than the default (brief X.2): the strict format `<beats>@[<lo>,<hi>]`
+    // tops out at 12 chars, so 13 leaves one char of typo slack.
     const char ch = keysym_to_char(keysym, mods, s.kind);
     if (ch != 0) {
-        if (static_cast<int>(s.pending.size()) >= kMaxPendingChars) {
+        const int cap = (s.kind == Kind::BpmBracket)
+            ? kMaxPendingCharsBpm : kMaxPendingChars;
+        if (static_cast<int>(s.pending.size()) >= cap) {
             // Silent swallow at cap.
             return KeyAction::Consumed;
         }

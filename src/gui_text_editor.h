@@ -23,15 +23,20 @@ namespace gui_text_editor {
 // remain available so an over-cap pending (loaded from a hand-edited
 // file) can be trimmed back to canonical form.
 constexpr int kMaxPendingChars = 16;
+// Brief X.2 BPM popup. Cap matches the brief's per-Kind tightening for
+// `<beats>@[<lo>,<hi>]` editing.
+constexpr int kMaxPendingCharsBpm = 13;
 
 // Vocabulary the editor accepts on the keyboard. Different call sites
 // edit different payload shapes; the kind selects which keys produce a
 // printable character. V.A1's flag editor uses FlagPayload (digits,
 // letters, `.`, `*`, `:`); V.B's iteration popup uses IterationBracket
-// (digits, `.`, `+`, `-`, `,`, `[`, `]`).
+// (digits, `.`, `+`, `-`, `,`, `[`, `]`); brief X.2's BPM popup uses
+// BpmBracket (digits, `@`, `,`, `[`, `]`).
 enum class Kind {
     FlagPayload,
     IterationBracket,
+    BpmBracket,
 };
 
 // State for a single editable rect.
