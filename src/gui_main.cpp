@@ -124,13 +124,14 @@ inline bool bpm_popup_eligible_marker(const GuiMarker& m) {
 }
 
 // Brief X.2 BPM mode: format the popup's bracket text for marker `m`.
-// "[]" when bpm_has_value is false (matches iter's empty form exactly),
-// or when bpm_has_value is true with sentinel-zero values (owner-but-
-// blank — set by the `m`-toggle-on transition before any commit). The
-// non-empty form is the strict syntax `<beats>@[<lo>,<hi>]`.
+// "[]" when this marker is not the popup owner (matches iter's empty form
+// exactly), or when it is the owner with bpm_beats == 0 (owner-but-blank,
+// set by the `m`-toggle-on transition before any commit; bpm_beats > 0 is
+// the implicit "committed" sentinel — the parser sets all three of
+// bpm_beats/bpm_lo/bpm_hi together, mirroring iter's NaN convention).
+// The non-empty form is the strict syntax `<beats>@[<lo>,<hi>]`.
 inline std::string format_bpm_bracket_text(const GuiMarker& m) {
-    if (!m.bpm_has_value ||
-        m.bpm_beats <= 0 || m.bpm_lo <= 0 || m.bpm_hi <= 0) {
+    if (!m.bpm_is_popup_owner || m.bpm_beats == 0) {
         return "[]";
     }
     char buf[48];
@@ -325,7 +326,7 @@ inline std::vector<BpmPopupHit> compute_bpm_popup_hits(
         const int idx = r.marker_index;
         if (idx < 0 || idx >= static_cast<int>(markers.size())) continue;
         if (!bpm_popup_eligible_marker(markers[idx])) continue;
-        if (!markers[idx].bpm_has_value) continue;
+        if (!markers[idx].bpm_is_popup_owner) continue;
         BpmPopupHit h;
         h.marker_index = idx;
         h.flag_rect.x = static_cast<int>(std::lround(r.x));
@@ -868,7 +869,7 @@ struct AppState {
     // Brief X.2 BPM mode. Toggled by plain `m` in warp mode. Mutually
     // exclusive with iteration_mode_enabled (toggling one ON forces the
     // other OFF). Session-only. The popup owner is identified at runtime
-    // by walking markers for bpm_has_value=true; at most one marker holds
+    // by walking markers for bpm_is_popup_owner=true; at most one marker holds
     // the flag at a time, maintained as an invariant by the toggle.
     bool bpm_mode_enabled = false;
 
@@ -1911,16 +1912,16 @@ int main(int argc, char** argv) {
                     } else if (gui_text_editor::is_active(app.top_flag_editor) &&
                                app.top_flag_editor.kind ==
                                    gui_text_editor::Kind::IterationBracket) {
-                        overlay.iter_editor_target =
+                        overlay.popup_editor_target =
                             app.top_flag_editor.target;
                     } else if (gui_text_editor::is_active(app.top_flag_editor) &&
                                app.top_flag_editor.kind ==
                                    gui_text_editor::Kind::BpmBracket) {
                         // Brief X.2: same flag-rect highlight suppression
                         // as iter — the popup above owns the highlight.
-                        // Modes are mutually exclusive so reusing the
-                        // iter_editor_target channel is safe.
-                        overlay.iter_editor_target =
+                        // Modes are mutually exclusive so the shared
+                        // popup_editor_target channel is safe.
+                        overlay.popup_editor_target =
                             app.top_flag_editor.target;
                     }
                     render_flags(cr, top_strip, app.markers.markers(),
@@ -2154,7 +2155,7 @@ int main(int argc, char** argv) {
                     // Brief X.2 BPM popups. Parallel to the iter block
                     // above; mutually exclusive with iteration mode (only
                     // one mode's popups paint at a time). At most one
-                    // marker has bpm_has_value=true so hits is normally
+                    // marker has bpm_is_popup_owner=true so hits is normally
                     // a single entry, but the reverse-paint and
                     // bg-fill-under-text patterns mirror iter for
                     // consistency.
@@ -3181,8 +3182,8 @@ int main(int argc, char** argv) {
     // Commit the BPM popup's pending buffer. Strict syntax via
     // parse_bpm_bracket. On parse failure the editor stays open with
     // a red outline; on success the parsed values are stored on the
-    // marker and bpm_has_value is set. Brief X.2: no undo entry — BPM
-    // values are session-only, treated like view state.
+    // marker (the marker is already the popup owner). Brief X.2: no
+    // undo entry — BPM values are session-only, treated like view state.
     auto commit_bpm_edit = [&]() {
         if (!gui_text_editor::is_active(app.top_flag_editor)) return;
         if (app.top_flag_editor.kind !=
@@ -3210,7 +3211,7 @@ int main(int argc, char** argv) {
             invalidate_top_strip();
             return;
         }
-        // Single-owner invariant: clear bpm_has_value on every other
+        // Single-owner invariant: clear bpm_is_popup_owner on every other
         // marker before stamping this one. The toggle handler maintains
         // the invariant on mode entry, but the editor can target a
         // different marker than the one originally stamped (via click
@@ -3218,14 +3219,14 @@ int main(int argc, char** argv) {
         auto& mv = app.markers.markers_mut();
         for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
             if (i == idx) continue;
-            if (mv[i].bpm_has_value) {
-                mv[i].bpm_has_value = false;
-                mv[i].bpm_beats     = 0;
-                mv[i].bpm_lo        = 0;
-                mv[i].bpm_hi        = 0;
+            if (mv[i].bpm_is_popup_owner) {
+                mv[i].bpm_is_popup_owner = false;
+                mv[i].bpm_beats          = 0;
+                mv[i].bpm_lo             = 0;
+                mv[i].bpm_hi             = 0;
             }
         }
-        m->bpm_has_value = true;
+        m->bpm_is_popup_owner = true;
         m->bpm_beats     = beats;
         m->bpm_lo        = lo;
         m->bpm_hi        = hi;
@@ -3241,37 +3242,16 @@ int main(int argc, char** argv) {
         auto& mv = app.markers.markers_mut();
         bool any = false;
         for (const auto& m : mv) {
-            if (m.bpm_has_value) { any = true; break; }
+            if (m.bpm_is_popup_owner) { any = true; break; }
         }
         if (!any) return;
         for (auto& m : mv) {
-            m.bpm_has_value = false;
-            m.bpm_beats     = 0;
-            m.bpm_lo        = 0;
-            m.bpm_hi        = 0;
+            m.bpm_is_popup_owner = false;
+            m.bpm_beats          = 0;
+            m.bpm_lo             = 0;
+            m.bpm_hi             = 0;
         }
         invalidate_top_strip();
-    };
-
-    // Brief X.2 effective-disabled cascade replicated here (the
-    // gui_render.cpp version is in an anonymous namespace). For the
-    // BPM endpoint auto-select, only owning markers are ever queried —
-    // they have empty label_ref so the cascade leg never fires — but
-    // keep the full rule for clarity and future-proofing.
-    auto bpm_effective_disabled = [&](const std::vector<GuiMarker>& markers,
-                                      int idx) -> bool {
-        if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
-        const auto& m = markers[idx];
-        if (m.disabled) return true;
-        if (!m.label_ref.empty()) {
-            for (const auto& other : markers) {
-                if (!other.label_def.empty() &&
-                    other.label_def == m.label_ref) {
-                    return other.disabled;
-                }
-            }
-        }
-        return false;
     };
 
     // Brief X.2: full mode-on transition for BPM mode. Validates the
@@ -3296,30 +3276,30 @@ int main(int argc, char** argv) {
         auto& mv = app.markers.markers_mut();
         for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
             if (i == owner) continue;
-            if (mv[i].bpm_has_value) {
-                mv[i].bpm_has_value = false;
-                mv[i].bpm_beats     = 0;
-                mv[i].bpm_lo        = 0;
-                mv[i].bpm_hi        = 0;
+            if (mv[i].bpm_is_popup_owner) {
+                mv[i].bpm_is_popup_owner = false;
+                mv[i].bpm_beats          = 0;
+                mv[i].bpm_lo             = 0;
+                mv[i].bpm_hi             = 0;
             }
         }
-        // Tag owner with bpm_has_value=true if not already set so the
+        // Tag owner with bpm_is_popup_owner=true if not already set so the
         // popup-walk in compute_bpm_popup_hits picks it up. Sentinel-zero
         // values stay zero; format_bpm_bracket_text renders "[]" for
         // that state. Re-toggling on the same owner preserves any
         // previously-committed values (the flag stays true and the
         // values aren't touched).
-        if (!mv[owner].bpm_has_value) {
-            mv[owner].bpm_has_value = true;
-            mv[owner].bpm_beats     = 0;
-            mv[owner].bpm_lo        = 0;
-            mv[owner].bpm_hi        = 0;
+        if (!mv[owner].bpm_is_popup_owner) {
+            mv[owner].bpm_is_popup_owner = true;
+            mv[owner].bpm_beats          = 0;
+            mv[owner].bpm_lo             = 0;
+            mv[owner].bpm_hi             = 0;
         }
 
         // Auto-select endpoint: next eligible+enabled marker after owner.
         for (int i = owner + 1; i < static_cast<int>(mv.size()); ++i) {
             if (!bpm_popup_eligible_marker(mv[i])) continue;
-            if (bpm_effective_disabled(mv, i)) continue;
+            if (effective_disabled(mv, i)) continue;
             app.selected_markers.insert(i);
             break;
         }

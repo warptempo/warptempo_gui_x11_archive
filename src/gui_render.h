@@ -200,19 +200,20 @@ void render_markers(cairo_t* cr,
 // `pending`). `cursor_visible` toggles the bar on/off for blink. Pass
 // marker_index = -1 to disable the overlay (normal rendering).
 //
-// V.B Addendum 2: `iter_editor_target` carries the marker index whose
-// iteration popup (drawn above the flag strip) currently owns the
-// IterationBracket-kind editor. The flag rect for that marker must
-// suppress its last-selected background highlight so only the focused
-// element (the iter popup) shows the highlight. -1 means "no iteration
-// popup is being edited".
+// V.B Addendum 2 / Brief X.2: `popup_editor_target` carries the marker
+// index whose above-strip popup (iter or BPM) currently owns the
+// IterationBracket- or BpmBracket-kind editor. The flag rect for that
+// marker must suppress its last-selected background highlight so only
+// the focused element (the popup) shows the highlight. -1 means "no
+// popup is being edited". Iter and BPM modes are mutually exclusive, so
+// at most one of them populates this field at a time.
 struct FlagEditorOverlay {
-    int         marker_index       = -1;
-    int         iter_editor_target = -1;
+    int         marker_index        = -1;
+    int         popup_editor_target = -1;
     std::string pending;
-    int         cursor_pos         = 0;
-    bool        is_red             = false;
-    bool        cursor_visible     = false;
+    int         cursor_pos          = 0;
+    bool        is_red              = false;
+    bool        cursor_visible      = false;
 };
 
 // Draws flag annotations in `top_strip_area` above visible markers. Iterates
@@ -231,9 +232,9 @@ struct FlagEditorOverlay {
 // Markers whose source-frame position lies outside `trim` wrap every
 // color in `dim()` uniformly — no element of the flag escapes the dim.
 //
-// V.B Addendum 2: when `editor.iter_editor_target == i`, that flag's
-// selection fill is suppressed so the iter popup above it owns the
-// highlight exclusively.
+// V.B Addendum 2 / Brief X.2: when `editor.popup_editor_target == i`,
+// that flag's selection fill is suppressed so the above-strip popup
+// (iter or BPM) owns the highlight exclusively.
 //
 // Disabled markers render identically to enabled markers in the top strip;
 // the only disabled signal lives in the marker stem (handled by

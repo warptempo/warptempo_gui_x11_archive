@@ -841,3 +841,20 @@ void GuiMarkers::remove_marker(int index) {
     if (index < 0 || index >= static_cast<int>(markers_.size())) return;
     markers_.erase(markers_.begin() + index);
 }
+
+bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
+    if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
+    const auto& m = markers[idx];
+    if (m.disabled) return true;
+    if (!m.label_ref.empty()) {
+        // Walk all markers to find the definition. O(N^2) across the list
+        // but N is small (hundreds max).
+        for (const auto& other : markers) {
+            if (!other.label_def.empty() &&
+                other.label_def == m.label_ref) {
+                return other.disabled;
+            }
+        }
+    }
+    return false;
+}

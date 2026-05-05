@@ -30,28 +30,6 @@ constexpr double kMarkerConnectorRows  = 11.0;
 
 namespace {
 
-// True if the marker at `idx` should render as disabled. Per chunk U
-// patch 3, `disabled` is allowed on any marker — a locally set flag
-// always counts. For an active (non-locally-disabled) `label_ref`, the
-// cascade rule applies: the ref inherits its target label_def's
-// disabled state.
-bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
-    if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
-    const auto& m = markers[idx];
-    if (m.disabled) return true;
-    if (!m.label_ref.empty()) {
-        // Walk all markers to find the definition. O(N^2) across the list
-        // but N is small (hundreds max).
-        for (const auto& other : markers) {
-            if (!other.label_def.empty() &&
-                other.label_def == m.label_ref) {
-                return other.disabled;
-            }
-        }
-    }
-    return false;
-}
-
 // Flag text mirrors the canonical line's PAYLOAD (post-pipe). All
 // metadata (b=/e=/#) is invisible in the rect; the `|` separator sits to
 // the left of the rect, anchoring it to the marker column. Disabled state
@@ -485,12 +463,13 @@ void render_flags(cairo_t* cr,
         });
 
     auto paint_one = [&](const FlagEmit& e) {
-        // V.B Addendum 2: when the iter popup above this flag owns
-        // the editor, suppress the flag's selection fill so the
-        // focused element (the iter popup) is the only one filled.
-        const bool is_iter_focus = (e.i == editor.iter_editor_target);
-        const bool is_selected   =
-            !is_iter_focus && selected_set.count(e.i) > 0;
+        // V.B Addendum 2 / Brief X.2: when the above-strip popup (iter
+        // or BPM) anchored on this flag owns the editor, suppress the
+        // flag's selection fill so the focused element (the popup) is
+        // the only one filled.
+        const bool is_popup_focus = (e.i == editor.popup_editor_target);
+        const bool is_selected    =
+            !is_popup_focus && selected_set.count(e.i) > 0;
         const bool is_editing    = (e.i == editor.marker_index);
         const bool is_parse_fail = is_editing && editor.is_red;
 

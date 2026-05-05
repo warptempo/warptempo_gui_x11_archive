@@ -47,13 +47,16 @@ struct GuiMarker {
 
     // Brief X.2 BPM mode. Session-only authoring state for basetempo-scale
     // sweeps; never serialized, lost on app close. At most one marker at a
-    // time has bpm_has_value=true (the popup owner; invariant maintained by
-    // the `m` toggle handler). The value form is "<beats>@[<lo>,<hi>]"
-    // with positive integers and lo <= hi. Math/render is X.3.
-    bool bpm_has_value = false;
-    int  bpm_beats     = 0;
-    int  bpm_lo        = 0;
-    int  bpm_hi        = 0;
+    // time has bpm_is_popup_owner=true (invariant maintained by the `m`
+    // toggle handler). "Committed" is implicit: bpm_beats > 0 means the
+    // owner has authored a value (parser guarantees all three of bpm_beats,
+    // bpm_lo, bpm_hi are set together). The value form is
+    // "<beats>@[<lo>,<hi>]" with positive integers and lo <= hi.
+    // Math/render is X.3.
+    bool bpm_is_popup_owner = false;
+    int  bpm_beats          = 0;
+    int  bpm_lo             = 0;
+    int  bpm_hi             = 0;
 };
 
 struct GuiMarkerError {
@@ -119,6 +122,13 @@ private:
     std::vector<GuiMarkerError>  errors_;
     bool                         had_nonstandard_content_ = false;
 };
+
+// True if the marker at `idx` should render as disabled. Per chunk U
+// patch 3, `disabled` is allowed on any marker — a locally set flag
+// always counts. For an active (non-locally-disabled) `label_ref`, the
+// cascade rule applies: the ref inherits its target label_def's
+// disabled state.
+bool effective_disabled(const std::vector<GuiMarker>& markers, int idx);
 
 namespace gui_markers_internal {
 
