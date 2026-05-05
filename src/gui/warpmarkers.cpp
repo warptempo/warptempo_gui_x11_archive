@@ -1,4 +1,4 @@
-#include "gui_markers.h"
+#include "warpmarkers.h"
 
 #include <algorithm>
 #include <cctype>
@@ -163,17 +163,17 @@ std::string normalize_scale_string(const std::string& s) {
 }
 
 // Parse a new-format payload (the part after the pipe) into a partly-
-// populated GuiMarker — sets tempo/label fields only. Cross-marker checks
+// populated GuiWarpMarker — sets tempo/label fields only. Cross-marker checks
 // (label_ref existence, label_def uniqueness) are the caller's job.
 //
-// On success, returns true and the GuiMarker carries the parsed payload.
+// On success, returns true and the GuiWarpMarker carries the parsed payload.
 // On failure, returns false and `error_out` is set.
 //
 // `disabled_in` is plumbed through so the caller can attach a metadata
 // flag (`#`) that came from outside the payload. Time and trim flags
 // are not handled here.
 bool parse_new_payload(const std::string& payload,
-                       GuiMarker& m,
+                       GuiWarpMarker& m,
                        std::string& error_out) {
     if (payload.empty()) {
         error_out = "empty payload";
@@ -233,7 +233,7 @@ bool parse_new_payload(const std::string& payload,
         return true;
     }
 
-    // Two parts: (TEMPO[*SCALE] | pass) : label_def. The three GuiMarker
+    // Two parts: (TEMPO[*SCALE] | pass) : label_def. The three GuiWarpMarker
     // state axes (tempo source, label relationship, disabled) are
     // independent; `pass:LABEL` is the inheriting + label_def combination.
     const std::string tempo_with_scale = payload.substr(0, colon);
@@ -285,11 +285,11 @@ bool parse_new_payload(const std::string& payload,
 // undefined labels. Time monotonicity isn't checked (single line).
 //
 // Defined in the header as a free function for editor reuse.
-namespace gui_markers_internal {
+namespace warpmarkers_internal {
 
 bool parse_single_canonical_line(
     const std::string& raw_line,
-    GuiMarker& out,
+    GuiWarpMarker& out,
     std::string* error_out) {
 
     auto fail = [&](const char* msg) {
@@ -311,7 +311,7 @@ bool parse_single_canonical_line(
         }
     }
 
-    out = GuiMarker{};
+    out = GuiWarpMarker{};
 
     // [b=|e=]?  [#]?  MM:SS.SSS  |  PAYLOAD
     bool ib = false, ie = false;
@@ -339,9 +339,9 @@ bool parse_single_canonical_line(
     return parse_new_payload(t, out, *error_out);
 }
 
-} // namespace gui_markers_internal
+} // namespace warpmarkers_internal
 
-bool GuiMarkers::load(const std::string& path) {
+bool GuiWarpMarkers::load(const std::string& path) {
     markers_.clear();
     errors_.clear();
     had_nonstandard_content_ = false;
@@ -529,7 +529,7 @@ bool GuiMarkers::load(const std::string& path) {
                 continue;
             }
 
-            GuiMarker m;
+            GuiWarpMarker m;
             m.time_seconds  = final_time;
             m.is_begin_time = is_begin;
             m.is_end_time   = is_end;
@@ -677,7 +677,7 @@ bool GuiMarkers::load(const std::string& path) {
             continue;
         }
 
-        GuiMarker m;
+        GuiWarpMarker m;
         m.time_seconds  = final_time;
         m.is_begin_time = is_begin;
         m.is_end_time   = is_end;
@@ -730,12 +730,12 @@ bool GuiMarkers::load(const std::string& path) {
     return true;
 }
 
-bool GuiMarkers::save(const std::string& path) const {
+bool GuiWarpMarkers::save(const std::string& path) const {
     return save(path, markers_);
 }
 
-bool GuiMarkers::save(const std::string& path,
-                      const std::vector<GuiMarker>& markers_) {
+bool GuiWarpMarkers::save(const std::string& path,
+                      const std::vector<GuiWarpMarker>& markers_) {
     std::ostringstream out;
     for (const auto& m : markers_) {
         // Canonical new format, no whitespace anywhere on the line:
@@ -828,21 +828,21 @@ bool GuiMarkers::save(const std::string& path,
     return true;
 }
 
-int GuiMarkers::insert_marker(GuiMarker m) {
+int GuiWarpMarkers::insert_marker(GuiWarpMarker m) {
     auto it = std::lower_bound(
         markers_.begin(), markers_.end(), m.time_seconds,
-        [](const GuiMarker& a, double t) { return a.time_seconds < t; });
+        [](const GuiWarpMarker& a, double t) { return a.time_seconds < t; });
     const int idx = static_cast<int>(it - markers_.begin());
     markers_.insert(it, std::move(m));
     return idx;
 }
 
-void GuiMarkers::remove_marker(int index) {
+void GuiWarpMarkers::remove_marker(int index) {
     if (index < 0 || index >= static_cast<int>(markers_.size())) return;
     markers_.erase(markers_.begin() + index);
 }
 
-bool effective_disabled(const std::vector<GuiMarker>& markers, int idx) {
+bool effective_disabled(const std::vector<GuiWarpMarker>& markers, int idx) {
     if (idx < 0 || idx >= static_cast<int>(markers.size())) return false;
     const auto& m = markers[idx];
     if (m.disabled) return true;

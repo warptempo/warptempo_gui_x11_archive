@@ -1,4 +1,4 @@
-#include "gui_x11.h"
+#include "x11.h"
 
 #include "playhead_cursor_data.h"
 

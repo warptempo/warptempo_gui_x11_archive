@@ -1,4 +1,4 @@
-#include "gui_audio.h"
+#include "audio.h"
 
 #include <sndfile.h>
 

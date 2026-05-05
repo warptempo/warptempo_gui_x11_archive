@@ -1,12 +1,12 @@
-#include "gui_audio.h"
-#include "gui_markers.h"
-#include "gui_playback.h"
-#include "gui_render.h"
-#include "gui_render_pipeline.h"
-#include "gui_text_display.h"
-#include "gui_text_editor.h"
-#include "gui_transients.h"
-#include "gui_x11.h"
+#include "audio.h"
+#include "warpmarkers.h"
+#include "playback.h"
+#include "render.h"
+#include "render_pipeline.h"
+#include "text_display.h"
+#include "text_editor.h"
+#include "transientmarkers.h"
+#include "x11.h"
 
 #include <cairo/cairo.h>
 #include <X11/Xlib.h>
@@ -86,12 +86,12 @@ constexpr double kTabLetterGapPx          = 10.0;
 constexpr int kPlayheadHalfPx = 8;
 
 // Pixel gap between the popup's top edge and the flag rect's top edge
-// (mirrors gui_text_display::kVerticalGapPx). Used for iteration popup
+// (mirrors text_display::kVerticalGapPx). Used for iteration popup
 // hit-testing and vertical placement.
 constexpr double kIterPopupVerticalGapPx = 4.0;
 // V.B Addendum 2: extra inner padding on top/bottom of the iteration
-// popup's bg rect (mirrors gui_render.cpp::kVPadExtraPx and
-// gui_text_display.cpp::kVPadExtraPx). The flag hit-rect already grew by
+// popup's bg rect (mirrors render.cpp::kVPadExtraPx and
+// text_display.cpp::kVPadExtraPx). The flag hit-rect already grew by
 // 2*kVPadExtraPx vertically, so the iter popup's hit_rect inherits that
 // height and the gap to the flag rect is preserved automatically; the
 // edit-state text baseline is shifted up by kIterPopupVPadExtraPx so the
@@ -100,7 +100,7 @@ constexpr double kIterPopupVPadExtraPx = 1.0;
 
 // V.B iteration mode: format the popup's bracket text for marker `m`.
 // "[]" when both iter values are NaN; "[%+0.2f,%+0.2f]" when set.
-inline std::string format_iter_bracket_text(const GuiMarker& m) {
+inline std::string format_iter_bracket_text(const GuiWarpMarker& m) {
     if (std::isnan(m.iter_start) || std::isnan(m.iter_end)) {
         return "[]";
     }
@@ -113,14 +113,14 @@ inline std::string format_iter_bracket_text(const GuiMarker& m) {
 // V.B iteration mode: an owning marker (tempo_inherits=false AND no
 // label_ref) gets a persistent iteration popup. Pass markers and
 // label_ref markers are excluded; disabled status does not matter.
-inline bool iter_popup_eligible_marker(const GuiMarker& m) {
+inline bool iter_popup_eligible_marker(const GuiWarpMarker& m) {
     return !m.tempo_inherits && m.label_ref.empty();
 }
 
 // Brief X.2 BPM mode: same eligibility shape as iter (owning marker, no
 // label_ref). Defined separately so the two predicates can diverge later
 // without cascading edits.
-inline bool bpm_popup_eligible_marker(const GuiMarker& m) {
+inline bool bpm_popup_eligible_marker(const GuiWarpMarker& m) {
     return !m.tempo_inherits && m.label_ref.empty();
 }
 
@@ -131,7 +131,7 @@ inline bool bpm_popup_eligible_marker(const GuiMarker& m) {
 // the implicit "committed" sentinel — the parser sets all three of
 // bpm_beats/bpm_lo/bpm_hi together, mirroring iter's NaN convention).
 // The non-empty form is the strict syntax `<beats>@[<lo>,<hi>]`.
-inline std::string format_bpm_bracket_text(const GuiMarker& m) {
+inline std::string format_bpm_bracket_text(const GuiWarpMarker& m) {
     if (!m.bpm_is_popup_owner || m.bpm_beats == 0) {
         return "[]";
     }
@@ -257,7 +257,7 @@ struct IterPopupHit {
 inline std::vector<IterPopupHit> compute_iter_popup_hits(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiMarker>& markers,
+    const std::vector<GuiWarpMarker>& markers,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -344,7 +344,7 @@ struct BpmPopupHit {
 inline std::vector<BpmPopupHit> compute_bpm_popup_hits(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiMarker>& markers,
+    const std::vector<GuiWarpMarker>& markers,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -411,9 +411,9 @@ inline std::vector<BpmPopupHit> compute_bpm_popup_hits(
 // `multiplier`, rendered at 4 decimals. Returns "" when the marker
 // doesn't qualify for a hover popup (owning, missing def, malformed).
 inline std::string compute_hover_popup_text(
-    const std::vector<GuiMarker>& mv, int idx, int sample_rate) {
+    const std::vector<GuiWarpMarker>& mv, int idx, int sample_rate) {
     if (idx < 0 || idx >= static_cast<int>(mv.size())) return "";
-    const GuiMarker& m = mv[idx];
+    const GuiWarpMarker& m = mv[idx];
 
     if (m.tempo_inherits) {
         // resolve_inherited_tempo walks backward from `walk-1`. Starting
@@ -453,7 +453,7 @@ inline std::string compute_hover_popup_text(
             (mv[def_idx + 1].time_seconds - mv[def_idx].time_seconds) * sr_d;
         if (def_src_dist <= 0.0 || lr_src_dist <= 0.0) return "";
 
-        const GuiMarker& def = mv[def_idx];
+        const GuiWarpMarker& def = mv[def_idx];
         double      def_base;
         std::string def_scale_str;
         bool        def_has_typed_scale;
@@ -516,8 +516,8 @@ enum class OpKind { Create, Destroy, Move, Other };
 // which list the op actually touched. `op_mode` lets undo flip the active
 // mode as a side effect — visual feedback for what's being undone.
 struct UndoEntry {
-    std::vector<GuiMarker>    snapshot;
-    std::vector<GuiTransient> transient_snapshot;
+    std::vector<GuiWarpMarker>    snapshot;
+    std::vector<GuiTransientMarker> transient_snapshot;
     char                      op_mode              = 'W';
     OpKind                    op_kind              = OpKind::Other;
     int                       hint_last_selected   = -1;
@@ -546,8 +546,8 @@ struct DragState {
     // Full pre-drag marker state. Captured at button-press so commit_drag
     // can push it onto the undo stack when motion landed; discarded on
     // commit when no motion occurred (DragState is reset wholesale there).
-    std::vector<GuiMarker>    pre_drag_snapshot;
-    std::vector<GuiTransient> pre_drag_transient_snapshot;
+    std::vector<GuiWarpMarker>    pre_drag_snapshot;
+    std::vector<GuiTransientMarker> pre_drag_transient_snapshot;
     // Pre-drag last_selected for the undo hint; carried onto the entry at commit.
     int                    pre_drag_last_selected = -1;
     // Index of the marker that was clicked to start the drag. Used to track
@@ -759,11 +759,11 @@ struct AppState {
 
     // Parsed warp markers for the currently loaded audio. Empty on load
     // failure or before the first audio load.
-    GuiMarkers  markers;
+    GuiWarpMarkers  markers;
 
     // Parsed transient markers (chunk S.2.2). Authored by the GUI but not
     // yet consumed by the render pipeline (S.3 will wire that up).
-    GuiTransients transients;
+    GuiTransientMarkers transients;
 
     // Multi-selection set + focus. `last_selected_marker` is either -1 or
     // a member of `selected_markers`; keyed operations (Tab cycling, `j`)
@@ -869,7 +869,7 @@ struct AppState {
     // Top-flag text editor (V.A1). Active only when editing a flag rect
     // in warp mode. The editor owns the keyboard while active and
     // overlays a custom rect + cursor on top of render_flags.
-    gui_text_editor::State top_flag_editor;
+    text_editor::State top_flag_editor;
     // Last-painted cursor visibility, so the tick can detect a flip and
     // invalidate the top strip without redundant repaints.
     bool top_flag_editor_blink_last = false;
@@ -899,8 +899,8 @@ struct AppState {
     // the chunk-U convention.
     struct QueuedRender {
         std::string                source_audio_path;
-        std::vector<GuiMarker>     markers;
-        std::vector<GuiTransient>  transients;
+        std::vector<GuiWarpMarker>     markers;
+        std::vector<GuiTransientMarker>  transients;
     };
     std::vector<QueuedRender> queued_renders;
 
@@ -954,8 +954,8 @@ struct AppState {
     // The current render's loaded markers + transients, parsed from
     // sibling `<basename>.renderwarpmarkers` /
     // `<basename>.rendertransientmarkers`.
-    std::vector<GuiMarker>       render_view_markers;
-    std::vector<GuiTransient>    render_view_transients;
+    std::vector<GuiWarpMarker>       render_view_markers;
+    std::vector<GuiTransientMarker>    render_view_transients;
     // Source-frame mapping of the current render: F_begin..F_end (source
     // sample-rate frames) is what the render's full audio covers. When the
     // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
@@ -1034,8 +1034,8 @@ GuiRect top_strip_area(const AppState& a) {
 // the same flag (only reachable via hand-edit), the warp-side value wins
 // for determinism and a one-line stderr warning is emitted.
 std::pair<long long, long long> compute_trim_samples(
-    const std::vector<GuiMarker>& warp_markers,
-    const std::vector<GuiTransient>& transients,
+    const std::vector<GuiWarpMarker>& warp_markers,
+    const std::vector<GuiTransientMarker>& transients,
     int sample_rate, long long total_frames) {
     long long begin = 0;
     long long end   = total_frames;
@@ -1908,14 +1908,14 @@ int main(int argc, char** argv) {
                                         static_cast<double>(sr)));
                                 const bool oot =
                                     marker_out_of_trim(pos, trim_struct);
-                                gui_text_display::State td;
+                                text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = app.hover_popup.cached_text;
                                 td.visible  = true;
                                 td.color    = oot ? dim(kText) : kText;
                                 td.position =
-                                    gui_text_display::Position::Top;
-                                gui_text_display::render(cr, td,
+                                    text_display::Position::Top;
+                                text_display::render(cr, td,
                                                          kFlagFontSize);
                             }
                         }
@@ -1945,24 +1945,24 @@ int main(int argc, char** argv) {
                     // alone. When the iter popup is the focused editor
                     // target, the flag rect below must suppress its
                     // last-selected highlight (V.B Addendum 2).
-                    if (gui_text_editor::is_active(app.top_flag_editor) &&
+                    if (text_editor::is_active(app.top_flag_editor) &&
                         app.top_flag_editor.kind ==
-                            gui_text_editor::Kind::FlagPayload) {
+                            text_editor::Kind::FlagPayload) {
                         overlay.marker_index   = app.top_flag_editor.target;
                         overlay.pending        = app.top_flag_editor.pending;
                         overlay.cursor_pos     = app.top_flag_editor.cursor_pos;
                         overlay.is_red         = app.top_flag_editor.red;
                         overlay.cursor_visible =
-                            gui_text_editor::cursor_visible_now(
+                            text_editor::cursor_visible_now(
                                 app.top_flag_editor);
-                    } else if (gui_text_editor::is_active(app.top_flag_editor) &&
+                    } else if (text_editor::is_active(app.top_flag_editor) &&
                                app.top_flag_editor.kind ==
-                                   gui_text_editor::Kind::IterationBracket) {
+                                   text_editor::Kind::IterationBracket) {
                         overlay.popup_editor_target =
                             app.top_flag_editor.target;
-                    } else if (gui_text_editor::is_active(app.top_flag_editor) &&
+                    } else if (text_editor::is_active(app.top_flag_editor) &&
                                app.top_flag_editor.kind ==
-                                   gui_text_editor::Kind::BpmBracket) {
+                                   text_editor::Kind::BpmBracket) {
                         // Brief X.2: same flag-rect highlight suppression
                         // as iter — the popup above owns the highlight.
                         // Modes are mutually exclusive so the shared
@@ -2021,14 +2021,14 @@ int main(int argc, char** argv) {
                                         static_cast<double>(sr)));
                                 const bool oot =
                                     marker_out_of_trim(pos, trim_struct);
-                                gui_text_display::State td;
+                                text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = app.hover_popup.cached_text;
                                 td.visible  = true;
                                 td.color    = oot ? dim(kText) : kText;
                                 td.position =
-                                    gui_text_display::Position::Top;
-                                gui_text_display::render(cr, td,
+                                    text_display::Position::Top;
+                                text_display::render(cr, td,
                                                          kFlagFontSize);
                             }
                         }
@@ -2049,9 +2049,9 @@ int main(int argc, char** argv) {
                             cr, top_strip, mv,
                             vp_start, vp_end, sr, kFlagFontSize);
                         const bool editor_on_iter =
-                            gui_text_editor::is_active(app.top_flag_editor) &&
+                            text_editor::is_active(app.top_flag_editor) &&
                             app.top_flag_editor.kind ==
-                                gui_text_editor::Kind::IterationBracket;
+                                text_editor::Kind::IterationBracket;
                         // Brief Y.5: paint hits in REVERSE so the leftmost
                         // popup paints last (on top). The compute_iter_popup
                         // _hits pack walks left-to-right and elides right-of-
@@ -2063,7 +2063,7 @@ int main(int argc, char** argv) {
                         // the pixels are identical to the previous order.
                         for (auto it = hits.rbegin(); it != hits.rend(); ++it) {
                             const auto& h = *it;
-                            // Anchor for gui_text_display: x at the flag's
+                            // Anchor for text_display: x at the flag's
                             // text-origin (flag.x + kFlagInnerPadPx, mirrors
                             // hover popup), y/w/h from the flag rect itself.
                             GuiRect anchor{
@@ -2144,7 +2144,7 @@ int main(int argc, char** argv) {
                                     static_cast<double>(anchor.x), baseline_y);
                                 cairo_show_text(cr, pending.c_str());
 
-                                if (gui_text_editor::cursor_visible_now(
+                                if (text_editor::cursor_visible_now(
                                         app.top_flag_editor)) {
                                     std::string left = pending.substr(
                                         0, static_cast<size_t>(
@@ -2185,14 +2185,14 @@ int main(int argc, char** argv) {
                                     static_cast<double>(h.hit_rect.h));
                                 cairo_restore(cr);
 
-                                gui_text_display::State td;
+                                text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = h.text;
                                 td.visible  = true;
                                 td.color    = oot ? dim(kText) : kText;
                                 td.position =
-                                    gui_text_display::Position::Top;
-                                gui_text_display::render(cr, td,
+                                    text_display::Position::Top;
+                                text_display::render(cr, td,
                                                          kFlagFontSize);
                             }
                         }
@@ -2211,9 +2211,9 @@ int main(int argc, char** argv) {
                             cr, top_strip, mv,
                             vp_start, vp_end, sr, kFlagFontSize);
                         const bool editor_on_bpm =
-                            gui_text_editor::is_active(app.top_flag_editor) &&
+                            text_editor::is_active(app.top_flag_editor) &&
                             app.top_flag_editor.kind ==
-                                gui_text_editor::Kind::BpmBracket;
+                                text_editor::Kind::BpmBracket;
                         for (auto it = hits.rbegin(); it != hits.rend(); ++it) {
                             const auto& h = *it;
                             GuiRect anchor{
@@ -2283,7 +2283,7 @@ int main(int argc, char** argv) {
                                     static_cast<double>(anchor.x), baseline_y);
                                 cairo_show_text(cr, pending.c_str());
 
-                                if (gui_text_editor::cursor_visible_now(
+                                if (text_editor::cursor_visible_now(
                                         app.top_flag_editor)) {
                                     std::string left = pending.substr(
                                         0, static_cast<size_t>(
@@ -2316,14 +2316,14 @@ int main(int argc, char** argv) {
                                     static_cast<double>(h.hit_rect.h));
                                 cairo_restore(cr);
 
-                                gui_text_display::State td;
+                                text_display::State td;
                                 td.anchor   = anchor;
                                 td.content  = h.text;
                                 td.visible  = true;
                                 td.color    = oot ? dim(kText) : kText;
                                 td.position =
-                                    gui_text_display::Position::Top;
-                                gui_text_display::render(cr, td,
+                                    text_display::Position::Top;
+                                text_display::render(cr, td,
                                                          kFlagFontSize);
                             }
                         }
@@ -2780,7 +2780,7 @@ int main(int argc, char** argv) {
     // hint; the transient pre-state is captured here from the live
     // AppState (warp ops don't touch transients, so post-mutation ==
     // pre-mutation for that list).
-    auto push_undo = [&](std::vector<GuiMarker> pre_state, OpKind op_kind,
+    auto push_undo = [&](std::vector<GuiWarpMarker> pre_state, OpKind op_kind,
                          int hint_last) {
         UndoEntry e;
         e.snapshot           = std::move(pre_state);
@@ -2795,7 +2795,7 @@ int main(int argc, char** argv) {
     // Transient counterpart. Symmetric: caller passes the transient pre-
     // state; warp pre-state is captured from live AppState (transient ops
     // don't touch warp markers).
-    auto push_undo_transient = [&](std::vector<GuiTransient> pre_state,
+    auto push_undo_transient = [&](std::vector<GuiTransientMarker> pre_state,
                                    OpKind op_kind, int hint_last) {
         UndoEntry e;
         e.snapshot           = app.markers.markers();
@@ -2809,8 +2809,8 @@ int main(int argc, char** argv) {
 
     // Cross-file undo: both pre-states explicit. Used by the b/e toggle
     // helpers, which may mutate either or both lists in a single op.
-    auto push_undo_both = [&](std::vector<GuiMarker> warp_pre,
-                              std::vector<GuiTransient> trans_pre,
+    auto push_undo_both = [&](std::vector<GuiWarpMarker> warp_pre,
+                              std::vector<GuiTransientMarker> trans_pre,
                               char op_mode, OpKind op_kind, int hint_last) {
         UndoEntry e;
         e.snapshot           = std::move(warp_pre);
@@ -2829,7 +2829,7 @@ int main(int argc, char** argv) {
     // included. The editor renders this prefix outside the editable rect
     // (left-anchored at the marker column); the pipe is part of the
     // prefix but visually anchors to the marker line.
-    auto build_locked_prefix = [&](const GuiMarker& m) -> std::string {
+    auto build_locked_prefix = [&](const GuiWarpMarker& m) -> std::string {
         std::string out;
         if (m.is_begin_time)    out = "b=";
         else if (m.is_end_time) out = "e=";
@@ -2850,8 +2850,8 @@ int main(int argc, char** argv) {
     };
 
     auto exit_top_flag_edit_no_commit = [&]() {
-        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
-        gui_text_editor::deactivate(app.top_flag_editor);
+        if (!text_editor::is_active(app.top_flag_editor)) return;
+        text_editor::deactivate(app.top_flag_editor);
         invalidate_top_strip();
     };
 
@@ -2860,11 +2860,11 @@ int main(int argc, char** argv) {
         const auto& mv = app.markers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         // Discard any prior edit silently before switching targets.
-        if (gui_text_editor::is_active(app.top_flag_editor) &&
+        if (text_editor::is_active(app.top_flag_editor) &&
             app.top_flag_editor.target != idx) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
         }
-        gui_text_editor::enter(
+        text_editor::enter(
             app.top_flag_editor, idx,
             build_locked_prefix(mv[idx]),
             flag_text_for_marker(mv, idx));
@@ -2880,7 +2880,7 @@ int main(int argc, char** argv) {
     // On failure: sets `red`, leaves pending/cursor intact, leaves the
     // editor active.
     auto commit_top_flag_edit = [&]() {
-        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        if (!text_editor::is_active(app.top_flag_editor)) return;
         const int idx = app.top_flag_editor.target;
         const auto& mv_const = app.markers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
@@ -2892,9 +2892,9 @@ int main(int argc, char** argv) {
         const std::string candidate =
             app.top_flag_editor.locked_prefix + app.top_flag_editor.pending;
 
-        GuiMarker parsed;
+        GuiWarpMarker parsed;
         std::string err;
-        bool ok = gui_markers_internal::parse_single_canonical_line(
+        bool ok = warpmarkers_internal::parse_single_canonical_line(
             candidate, parsed, &err);
 
         // Cross-marker checks (edit target excluded).
@@ -2932,13 +2932,13 @@ int main(int argc, char** argv) {
         }
 
         // Capture pre-state for undo BEFORE mutating.
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
 
         const std::string old_def = mv_const[idx].label_def;
         const std::string new_def = parsed.label_def;
 
-        GuiMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.markers.marker_mut(idx);
         if (!m) {
             exit_top_flag_edit_no_commit();
             return;
@@ -2996,7 +2996,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
 
-        gui_text_editor::deactivate(app.top_flag_editor);
+        text_editor::deactivate(app.top_flag_editor);
 
         invalidate_waveform_area();
         invalidate_dirty_and_timestamp();
@@ -3015,15 +3015,15 @@ int main(int argc, char** argv) {
         const auto& mv = app.markers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         if (!iter_popup_eligible_marker(mv[idx])) return;
-        if (gui_text_editor::is_active(app.top_flag_editor) &&
+        if (text_editor::is_active(app.top_flag_editor) &&
             app.top_flag_editor.target != idx) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
         }
-        gui_text_editor::enter(
+        text_editor::enter(
             app.top_flag_editor, idx,
             /*locked_prefix=*/"",
             /*initial_pending=*/format_iter_bracket_text(mv[idx]),
-            gui_text_editor::Kind::IterationBracket);
+            text_editor::Kind::IterationBracket);
         clear_hover_popup();
         invalidate_top_strip();
     };
@@ -3038,13 +3038,13 @@ int main(int argc, char** argv) {
     // pushes one undo entry. Only case 4 affects the on-disk dirty flag
     // (iter values are session-only and never serialized).
     auto commit_iter_edit = [&]() {
-        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        if (!text_editor::is_active(app.top_flag_editor)) return;
         if (app.top_flag_editor.kind !=
-                gui_text_editor::Kind::IterationBracket) return;
+                text_editor::Kind::IterationBracket) return;
         const int idx = app.top_flag_editor.target;
         const auto& mv_const = app.markers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
             return;
         }
@@ -3133,12 +3133,12 @@ int main(int argc, char** argv) {
             return;
         }
 
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
 
-        GuiMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.markers.marker_mut(idx);
         if (!m) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
             return;
         }
@@ -3172,7 +3172,7 @@ int main(int argc, char** argv) {
             invalidate_dirty_and_timestamp();
         }
 
-        gui_text_editor::deactivate(app.top_flag_editor);
+        text_editor::deactivate(app.top_flag_editor);
         invalidate_top_strip();
     };
 
@@ -3192,7 +3192,7 @@ int main(int argc, char** argv) {
             }
         }
         if (!any) return;
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         for (auto& m : mv) {
             m.iter_start = std::numeric_limits<double>::quiet_NaN();
@@ -3214,15 +3214,15 @@ int main(int argc, char** argv) {
         const auto& mv = app.markers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         if (!bpm_popup_eligible_marker(mv[idx])) return;
-        if (gui_text_editor::is_active(app.top_flag_editor) &&
+        if (text_editor::is_active(app.top_flag_editor) &&
             app.top_flag_editor.target != idx) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
         }
-        gui_text_editor::enter(
+        text_editor::enter(
             app.top_flag_editor, idx,
             /*locked_prefix=*/"",
             /*initial_pending=*/format_bpm_bracket_text(mv[idx]),
-            gui_text_editor::Kind::BpmBracket);
+            text_editor::Kind::BpmBracket);
         clear_hover_popup();
         invalidate_top_strip();
     };
@@ -3233,13 +3233,13 @@ int main(int argc, char** argv) {
     // marker (the marker is already the popup owner). Brief X.2: no
     // undo entry — BPM values are session-only, treated like view state.
     auto commit_bpm_edit = [&]() {
-        if (!gui_text_editor::is_active(app.top_flag_editor)) return;
+        if (!text_editor::is_active(app.top_flag_editor)) return;
         if (app.top_flag_editor.kind !=
-                gui_text_editor::Kind::BpmBracket) return;
+                text_editor::Kind::BpmBracket) return;
         const int idx = app.top_flag_editor.target;
         const auto& mv_const = app.markers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
             return;
         }
@@ -3253,9 +3253,9 @@ int main(int argc, char** argv) {
                 s.c_str());
             return;
         }
-        GuiMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.markers.marker_mut(idx);
         if (!m) {
-            gui_text_editor::deactivate(app.top_flag_editor);
+            text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
             return;
         }
@@ -3278,7 +3278,7 @@ int main(int argc, char** argv) {
         m->bpm_beats     = beats;
         m->bpm_lo        = lo;
         m->bpm_hi        = hi;
-        gui_text_editor::deactivate(app.top_flag_editor);
+        text_editor::deactivate(app.top_flag_editor);
         invalidate_top_strip();
     };
 
@@ -3460,7 +3460,7 @@ int main(int argc, char** argv) {
     // Viewport recenters on the new playhead only if it would be offscreen
     // after the jump; the `c`-key centering math is reused.
     auto apply_post_restore_rules_warp = [&](const UndoEntry& entry,
-                                             const std::vector<GuiMarker>& before) {
+                                             const std::vector<GuiWarpMarker>& before) {
         const auto& after = app.markers.markers();
         constexpr double kEps = 1e-9;
 
@@ -3516,7 +3516,7 @@ int main(int argc, char** argv) {
     // transient vector pre-restoration; `after` is taken live from
     // app.transients.
     auto apply_post_restore_rules_transient = [&](const UndoEntry& entry,
-                                                  const std::vector<GuiTransient>& before) {
+                                                  const std::vector<GuiTransientMarker>& before) {
         const auto& after = app.transients.markers();
 
         std::set<int> target_set;
@@ -3592,8 +3592,8 @@ int main(int argc, char** argv) {
         redo_entry.op_kind            = entry.op_kind;
         redo_entry.op_mode            = entry.op_mode;
         redo_entry.hint_last_selected = entry.hint_last_selected;
-        std::vector<GuiMarker>    before_w = redo_entry.snapshot;
-        std::vector<GuiTransient> before_t = redo_entry.transient_snapshot;
+        std::vector<GuiWarpMarker>    before_w = redo_entry.snapshot;
+        std::vector<GuiTransientMarker> before_t = redo_entry.transient_snapshot;
 
         app.history.redo_stack.push_back(std::move(redo_entry));
         if (app.history.redo_stack.size() > UndoHistory::kCap) {
@@ -3653,8 +3653,8 @@ int main(int argc, char** argv) {
         undo_entry.op_kind            = entry.op_kind;
         undo_entry.op_mode            = entry.op_mode;
         undo_entry.hint_last_selected = entry.hint_last_selected;
-        std::vector<GuiMarker>    before_w = undo_entry.snapshot;
-        std::vector<GuiTransient> before_t = undo_entry.transient_snapshot;
+        std::vector<GuiWarpMarker>    before_w = undo_entry.snapshot;
+        std::vector<GuiTransientMarker> before_t = undo_entry.transient_snapshot;
 
         app.history.undo_stack.push_back(std::move(undo_entry));
         if (app.history.undo_stack.size() > UndoHistory::kCap) {
@@ -3820,9 +3820,9 @@ int main(int argc, char** argv) {
         }
         // Snapshot pre-mutation state for undo. Captured after the dup
         // check so rejected drops don't leave a no-op entry on the stack.
-        std::vector<GuiMarker> pre_state = mv;
+        std::vector<GuiWarpMarker> pre_state = mv;
         const int              hint_last = app.last_selected_marker;
-        GuiMarker nm;
+        GuiWarpMarker nm;
         nm.time_seconds    = time_seconds;
         nm.tempo_inherits  = inherit;
         // pass markers carry inert defaults; their effective tempo is
@@ -3920,7 +3920,7 @@ int main(int argc, char** argv) {
 
         // All validations passed — capture snapshot and selection hint
         // before mutating so the undo can restore the pre-delete selection.
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         // Delete in descending order so earlier indices stay valid.
         for (auto it = app.selected_markers.rbegin();
@@ -3973,7 +3973,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         for (auto it = expanded.rbegin(); it != expanded.rend(); ++it) {
             app.markers.remove_marker(*it);
@@ -3996,12 +3996,12 @@ int main(int argc, char** argv) {
     // The first marker is silently skipped (it must own its tempo).
     auto toggle_inherits = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         const auto& mv_const = app.markers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             if (idx == 0) continue;
             if (!m->label_ref.empty()) {
@@ -4036,11 +4036,11 @@ int main(int argc, char** argv) {
     // toggled marker is a label_def).
     auto toggle_disabled = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             m->disabled = !m->disabled;
             changed = true;
@@ -4070,8 +4070,8 @@ int main(int argc, char** argv) {
         const int64_t m_frame = static_cast<int64_t>(std::llround(
             mv[idx].time_seconds * static_cast<double>(sr)));
 
-        std::vector<GuiMarker>    warp_pre  = mv;
-        std::vector<GuiTransient> trans_pre = app.transients.markers();
+        std::vector<GuiWarpMarker>    warp_pre  = mv;
+        std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_begin_time) {
@@ -4138,8 +4138,8 @@ int main(int argc, char** argv) {
         const int64_t m_frame = static_cast<int64_t>(std::llround(
             mv[idx].time_seconds * static_cast<double>(sr)));
 
-        std::vector<GuiMarker>    warp_pre  = mv;
-        std::vector<GuiTransient> trans_pre = app.transients.markers();
+        std::vector<GuiWarpMarker>    warp_pre  = mv;
+        std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_end_time) {
@@ -4199,12 +4199,12 @@ int main(int argc, char** argv) {
     // Clamps to [0.01, 9.99]. Only dirties / invalidates on real change.
     auto adjust_tempo = [&](double delta) {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         const auto& mv_const = app.markers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             if (!m->label_ref.empty()) continue;
             double      start_tempo;
@@ -4236,7 +4236,7 @@ int main(int argc, char** argv) {
     // Clear any b= / e= flags so the whole file becomes editable again.
     // No-op if no marker carries either flag.
     auto clear_trim = [&]() {
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
         for (auto& m : app.markers.markers_mut()) {
@@ -4266,9 +4266,9 @@ int main(int argc, char** argv) {
         if (sr <= 0) return;
         const int64_t frame = static_cast<int64_t>(std::llround(
             time_seconds * static_cast<double>(sr)));
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
-        GuiTransient nm;
+        GuiTransientMarker nm;
         nm.src_frame   = frame;
         nm.is_inserted = true;
         int new_idx = app.transients.insert_marker(std::move(nm));
@@ -4276,7 +4276,7 @@ int main(int argc, char** argv) {
         // frame 0, insert one. The companion always lands at index 0,
         // so the user's marker shifts up by one.
         if (app.transients.markers().front().effective_frame() != 0) {
-            GuiTransient zero;
+            GuiTransientMarker zero;
             zero.src_frame   = 0;
             zero.is_inserted = true;
             app.transients.insert_marker(std::move(zero));
@@ -4324,7 +4324,7 @@ int main(int argc, char** argv) {
                 return;
             }
         }
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
         for (auto it = app.selected_markers.rbegin();
              it != app.selected_markers.rend(); ++it) {
@@ -4342,11 +4342,11 @@ int main(int argc, char** argv) {
     // transients have no label-def gating like warp markers do.
     auto toggle_transient_disabled = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiTransient* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transients.marker_mut(idx);
             if (!m) continue;
             m->disabled = !m->disabled;
             changed = true;
@@ -4403,7 +4403,7 @@ int main(int argc, char** argv) {
     //                     back on the anchor src_frame, revert the
     //                     displacement.
     // Caller is responsible for delta != 0; this is a noop on delta == 0.
-    auto apply_transient_position_delta = [](GuiTransient& m, int64_t delta) {
+    auto apply_transient_position_delta = [](GuiTransientMarker& m, int64_t delta) {
         if (delta == 0) return;
         if (m.is_inserted) {
             m.src_frame += delta;
@@ -4440,10 +4440,10 @@ int main(int argc, char** argv) {
         if (delta > d_max) delta = d_max;
         if (delta == 0) return;
 
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiTransient* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transients.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
@@ -4473,10 +4473,10 @@ int main(int argc, char** argv) {
                 "marker ordering\n");
             return;
         }
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiTransient* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transients.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
@@ -4497,8 +4497,8 @@ int main(int argc, char** argv) {
         const auto& tv = app.transients.markers();
         if (idx >= static_cast<int>(tv.size())) return;
 
-        std::vector<GuiMarker>    warp_pre  = app.markers.markers();
-        std::vector<GuiTransient> trans_pre = tv;
+        std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
+        std::vector<GuiTransientMarker> trans_pre = tv;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_begin_time) {
@@ -4559,8 +4559,8 @@ int main(int argc, char** argv) {
         const auto& tv = app.transients.markers();
         if (idx >= static_cast<int>(tv.size())) return;
 
-        std::vector<GuiMarker>    warp_pre  = app.markers.markers();
-        std::vector<GuiTransient> trans_pre = tv;
+        std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
+        std::vector<GuiTransientMarker> trans_pre = tv;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_end_time) {
@@ -4997,21 +4997,21 @@ int main(int argc, char** argv) {
     // merged list is sorted by effective_frame() and the frame-0 invariant
     // is restored. Does NOT push undo — detection is destructive by spec.
     auto merge_detection = [&](const std::vector<int64_t>& fresh_src_frames) {
-        std::map<int64_t, GuiTransient> old_d_by_src;
-        std::vector<GuiTransient> old_i;
+        std::map<int64_t, GuiTransientMarker> old_d_by_src;
+        std::vector<GuiTransientMarker> old_i;
         for (const auto& m : app.transients.markers()) {
             if (m.is_inserted) old_i.push_back(m);
             else               old_d_by_src.emplace(m.src_frame, m);
         }
 
-        std::vector<GuiTransient> merged;
+        std::vector<GuiTransientMarker> merged;
         merged.reserve(fresh_src_frames.size() + old_i.size() + 1);
         for (int64_t f : fresh_src_frames) {
             auto it = old_d_by_src.find(f);
             if (it != old_d_by_src.end()) {
                 merged.push_back(it->second);
             } else {
-                GuiTransient m;
+                GuiTransientMarker m;
                 m.src_frame   = f;
                 m.is_inserted = false;
                 merged.push_back(m);
@@ -5020,12 +5020,12 @@ int main(int argc, char** argv) {
         for (auto& m : old_i) merged.push_back(std::move(m));
 
         std::sort(merged.begin(), merged.end(),
-            [](const GuiTransient& a, const GuiTransient& b) {
+            [](const GuiTransientMarker& a, const GuiTransientMarker& b) {
                 return a.effective_frame() < b.effective_frame();
             });
 
         if (merged.empty() || merged.front().effective_frame() > 0) {
-            GuiTransient zero;
+            GuiTransientMarker zero;
             zero.src_frame   = 0;
             zero.is_inserted = true;
             merged.insert(merged.begin(), zero);
@@ -5117,7 +5117,7 @@ int main(int argc, char** argv) {
     auto clear_all_transients = [&]() {
         if (app.transients.markers().empty()) return;
 
-        std::vector<GuiTransient> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
         const int pre_last = app.last_selected_marker;
 
         app.transients.clear();
@@ -5335,7 +5335,7 @@ int main(int argc, char** argv) {
         if (app.prompt.active ||
             app.drag.active ||
             app.playhead_drag.active ||
-            gui_text_editor::is_active(app.top_flag_editor) ||
+            text_editor::is_active(app.top_flag_editor) ||
             app.queue_running) {
             clear_hover_popup();
             return;
@@ -5522,7 +5522,7 @@ int main(int argc, char** argv) {
             const double new_t = app.drag.original_times[k] + delta;
             double old_t;
             if (transient) {
-                GuiTransient* m = app.transients.marker_mut(idx);
+                GuiTransientMarker* m = app.transients.marker_mut(idx);
                 if (!m) continue;
                 old_t = static_cast<double>(m->effective_frame()) / sr_d;
                 const int64_t new_frame = static_cast<int64_t>(
@@ -5531,7 +5531,7 @@ int main(int argc, char** argv) {
                 if (cur_frame == new_frame) continue;
                 apply_transient_position_delta(*m, new_frame - cur_frame);
             } else {
-                GuiMarker* m = app.markers.marker_mut(idx);
+                GuiWarpMarker* m = app.markers.marker_mut(idx);
                 if (!m) continue;
                 old_t = m->time_seconds;
                 if (old_t == new_t) continue;
@@ -5577,9 +5577,9 @@ int main(int argc, char** argv) {
         if (!app.drag.active) return;
         const bool moved = app.drag.moved;
         const bool transient = (app.drag.drag_mode == 'T');
-        std::vector<GuiMarker>    snap_w =
+        std::vector<GuiWarpMarker>    snap_w =
             std::move(app.drag.pre_drag_snapshot);
-        std::vector<GuiTransient> snap_t =
+        std::vector<GuiTransientMarker> snap_t =
             std::move(app.drag.pre_drag_transient_snapshot);
         const int                 hint_last = app.drag.pre_drag_last_selected;
         app.drag = DragState{};
@@ -5648,7 +5648,7 @@ int main(int argc, char** argv) {
         if (delta > d_max) delta = d_max;
         if (delta == 0.0) return false;
         for (int idx : app.selected_markers) {
-            GuiMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             m->time_seconds += delta;
         }
@@ -5669,7 +5669,7 @@ int main(int argc, char** argv) {
         const double delta_s =
             static_cast<double>(direction) * spp / static_cast<double>(sr);
         if (delta_s == 0.0) return;
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         if (apply_selection_shift(delta_s)) {
             push_undo(std::move(pre_state), OpKind::Move, hint_last);
@@ -5705,10 +5705,10 @@ int main(int argc, char** argv) {
                 "ordering\n");
             return;
         }
-        std::vector<GuiMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
         const int              hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.markers.marker_mut(idx);
             if (!m) continue;
             m->time_seconds += delta;
         }
@@ -5988,14 +5988,14 @@ int main(int argc, char** argv) {
         // positions match the rendered audio's time axis. The source-domain
         // pair (.warpmarkers / .transientmarkers) is what Ctrl+Alt+C commit
         // reloads when promoting a render's markers into authoring memory.
-        std::vector<GuiMarker>     loaded_warp;
-        std::vector<GuiTransient>  loaded_trans;
+        std::vector<GuiWarpMarker>     loaded_warp;
+        std::vector<GuiTransientMarker>  loaded_trans;
         {
             const std::filesystem::path wmd =
                 e.batch_folder / (e.basename + ".renderwarpmarkers");
             std::error_code ec;
             if (std::filesystem::exists(wmd, ec)) {
-                GuiMarkers m;
+                GuiWarpMarkers m;
                 m.load(wmd.string());
                 loaded_warp = m.markers();
             } else {
@@ -6010,7 +6010,7 @@ int main(int argc, char** argv) {
                 e.batch_folder / (e.basename + ".rendertransientmarkers");
             std::error_code ec;
             if (std::filesystem::exists(tmd, ec)) {
-                GuiTransients t;
+                GuiTransientMarkers t;
                 t.load(tmd.string());
                 loaded_trans = t.markers();
             }
@@ -6280,27 +6280,27 @@ int main(int argc, char** argv) {
         // V.A1 top-flag editor owns the keyboard while active. Routes here
         // BEFORE queue/drag/playhead Esc handlers so Esc cancels the edit
         // first; Esc with no active edit falls through to the rest.
-        if (gui_text_editor::is_active(app.top_flag_editor)) {
+        if (text_editor::is_active(app.top_flag_editor)) {
             (void)ctrl; (void)alt; // Modifiers swallowed except Shift→colon.
-            const auto action = gui_text_editor::handle_key(
+            const auto action = text_editor::handle_key(
                 app.top_flag_editor, keysym, mods);
-            if (action == gui_text_editor::KeyAction::CommitRequested) {
+            if (action == text_editor::KeyAction::CommitRequested) {
                 if (app.top_flag_editor.kind ==
-                        gui_text_editor::Kind::IterationBracket) {
+                        text_editor::Kind::IterationBracket) {
                     commit_iter_edit();
                 } else if (app.top_flag_editor.kind ==
-                        gui_text_editor::Kind::BpmBracket) {
+                        text_editor::Kind::BpmBracket) {
                     commit_bpm_edit();
                 } else {
                     commit_top_flag_edit();
                 }
                 return;
             }
-            if (action == gui_text_editor::KeyAction::CancelRequested) {
+            if (action == text_editor::KeyAction::CancelRequested) {
                 exit_top_flag_edit_no_commit();
                 return;
             }
-            if (action == gui_text_editor::KeyAction::Consumed) {
+            if (action == text_editor::KeyAction::Consumed) {
                 invalidate_top_strip();
                 return;
             }
@@ -6570,20 +6570,20 @@ int main(int argc, char** argv) {
             if (app.source_audio_path.empty()) return;
             if (!app.iteration_mode_enabled) return;
 
-            // Snapshot markers in timeline order (GuiMarkers guarantees
+            // Snapshot markers in timeline order (GuiWarpMarkers guarantees
             // strict-monotonic by time_seconds). For each owning marker
             // build its per-cell delta list: a single 0.0 when no iter
             // range is authored, otherwise integer-cents enumeration from
             // iter_start to iter_end inclusive. Integer-cents avoids the
             // float-accumulation drift a naive `for (d=start; d<=end;
             // d+=0.01)` would suffer across many steps.
-            const std::vector<GuiMarker> base_markers =
+            const std::vector<GuiWarpMarker> base_markers =
                 app.markers.markers();
             std::vector<int>                 eligible_indices;
             std::vector<std::vector<double>> per_marker_deltas;
             std::vector<bool>                is_swept;
             for (int i = 0; i < static_cast<int>(base_markers.size()); ++i) {
-                const GuiMarker& m = base_markers[i];
+                const GuiWarpMarker& m = base_markers[i];
                 if (!iter_popup_eligible_marker(m)) continue;
                 eligible_indices.push_back(i);
                 const bool swept =
@@ -6676,7 +6676,7 @@ int main(int argc, char** argv) {
             // Snapshot transients once — every cell shares the same
             // transient configuration, only marker tempo_base values
             // differ across cells.
-            const std::vector<GuiTransient> base_transients =
+            const std::vector<GuiTransientMarker> base_transients =
                 app.transients.markers();
             std::vector<int64_t> base_transient_frames;
             for (const auto& t : base_transients) {
@@ -6711,7 +6711,7 @@ int main(int argc, char** argv) {
                 basename += '_';
                 basename += delta_csv;
 
-                std::vector<GuiMarker> cell_markers = base_markers;
+                std::vector<GuiWarpMarker> cell_markers = base_markers;
                 for (size_t k = 0; k < num_dims; ++k) {
                     const int mi = eligible_indices[k];
                     cell_markers[mi].tempo_base =
@@ -6777,7 +6777,7 @@ int main(int argc, char** argv) {
             if (audio.sample_rate() <= 0) return;
             if (audio.total_frames() <= 0) return;
 
-            const std::vector<GuiMarker> base_markers =
+            const std::vector<GuiWarpMarker> base_markers =
                 app.markers.markers();
             int owner_idx = -1;
             for (int i = 0; i < static_cast<int>(base_markers.size()); ++i) {
@@ -6787,7 +6787,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (owner_idx < 0) return;
-            const GuiMarker& owner = base_markers[owner_idx];
+            const GuiWarpMarker& owner = base_markers[owner_idx];
             if (owner.bpm_beats <= 0) return;
             if (owner.bpm_lo    <= 0) return;
             if (owner.bpm_hi    <= 0) return;
@@ -6853,7 +6853,7 @@ int main(int argc, char** argv) {
                  n >= 10; n /= 10) ++pad_width;
             if (pad_width > 9) pad_width = 9;
 
-            const std::vector<GuiTransient> base_transients =
+            const std::vector<GuiTransientMarker> base_transients =
                 app.transients.markers();
             std::vector<int64_t> base_transient_frames;
             for (const auto& t : base_transients) {
@@ -6875,7 +6875,7 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                std::vector<GuiMarker> cell_markers = base_markers;
+                std::vector<GuiWarpMarker> cell_markers = base_markers;
                 cell_markers[owner_idx].tempo_base  = computed->base_tempo;
                 cell_markers[owner_idx].tempo_scale.clear();
 
@@ -6974,12 +6974,12 @@ int main(int argc, char** argv) {
             // the source coordinate system.
             const auto& cur_e =
                 app.render_view_list[app.render_view_index];
-            std::vector<GuiMarker>    src_warp;
-            std::vector<GuiTransient> src_trans;
+            std::vector<GuiWarpMarker>    src_warp;
+            std::vector<GuiTransientMarker> src_trans;
             {
                 const std::filesystem::path wm =
                     cur_e.batch_folder / (cur_e.basename + ".warpmarkers");
-                GuiMarkers m;
+                GuiWarpMarkers m;
                 if (!m.load(wm.string())) {
                     std::fprintf(stderr,
                         "warptempo_gui: render-view: commit aborted, failed "
@@ -6993,7 +6993,7 @@ int main(int argc, char** argv) {
                     (cur_e.basename + ".transientmarkers");
                 std::error_code ec;
                 if (std::filesystem::exists(tm, ec)) {
-                    GuiTransients t;
+                    GuiTransientMarkers t;
                     if (t.load(tm.string())) {
                         src_trans = t.markers();
                     }
@@ -7002,8 +7002,8 @@ int main(int argc, char** argv) {
                 }
             }
 
-            std::vector<GuiMarker>    warp_pre  = app.markers.markers();
-            std::vector<GuiTransient> trans_pre = app.transients.markers();
+            std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
+            std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
             const int                 hint_last = app.last_selected_marker;
 
             app.markers.markers_mut()    = std::move(src_warp);
@@ -7670,12 +7670,12 @@ int main(int argc, char** argv) {
             //     iteration mode is on)
             //   click anywhere else: exit edit (no commit), then fall
             //     through so the click routes through normal handling.
-            if (gui_text_editor::is_active(app.top_flag_editor)) {
+            if (text_editor::is_active(app.top_flag_editor)) {
                 if (inside_top) {
                     const int iter_hit = hit_test_iter_popup(x, y);
                     if (iter_hit >= 0) {
                         if (app.top_flag_editor.kind ==
-                                gui_text_editor::Kind::IterationBracket &&
+                                text_editor::Kind::IterationBracket &&
                             iter_hit == app.top_flag_editor.target) {
                             return; // no-op on same popup
                         }
@@ -7685,7 +7685,7 @@ int main(int argc, char** argv) {
                     const int bpm_hit = hit_test_bpm_popup(x, y);
                     if (bpm_hit >= 0) {
                         if (app.top_flag_editor.kind ==
-                                gui_text_editor::Kind::BpmBracket &&
+                                text_editor::Kind::BpmBracket &&
                             bpm_hit == app.top_flag_editor.target) {
                             return; // no-op on same popup
                         }
@@ -7694,7 +7694,7 @@ int main(int argc, char** argv) {
                     }
                     const int hit_now = hit_test_flag(x, y);
                     if (app.top_flag_editor.kind ==
-                            gui_text_editor::Kind::FlagPayload &&
+                            text_editor::Kind::FlagPayload &&
                         hit_now == app.top_flag_editor.target) {
                         return; // no-op on same flag
                     }
@@ -8089,7 +8089,7 @@ int main(int argc, char** argv) {
             // an eligible rect; the on_tick handler flips visibility.
             if (app.active_mode == 'W' &&
                 !app.iteration_mode_enabled &&
-                !gui_text_editor::is_active(app.top_flag_editor) &&
+                !text_editor::is_active(app.top_flag_editor) &&
                 !app.queue_running) {
                 const int hit = hit_test_flag(mouse_x, mouse_y);
                 if (hit != app.hover_popup.marker_index) {
@@ -8451,9 +8451,9 @@ int main(int argc, char** argv) {
         // Blink the editor cursor independently of playback. Compare the
         // current visibility against the last painted state and invalidate
         // the top strip when it flips. Cheap: top_strip is small.
-        if (gui_text_editor::is_active(app.top_flag_editor)) {
+        if (text_editor::is_active(app.top_flag_editor)) {
             const bool now_visible =
-                gui_text_editor::cursor_visible_now(app.top_flag_editor);
+                text_editor::cursor_visible_now(app.top_flag_editor);
             if (now_visible != app.top_flag_editor_blink_last) {
                 app.top_flag_editor_blink_last = now_visible;
                 invalidate_top_strip();
@@ -8511,7 +8511,7 @@ int main(int argc, char** argv) {
         // While the top-flag editor is active, wake periodically so the
         // cursor blink can flip. ~125ms gives ample resolution on a
         // 500ms half-period without burning CPU.
-        if (gui_text_editor::is_active(app.top_flag_editor)) return 125;
+        if (text_editor::is_active(app.top_flag_editor)) return 125;
         // V.A3b: while a hover is pending (dwell timer running but popup
         // not yet visible), wake periodically so the tick-driven check
         // can flip visibility on time. Once visible, no extra wake is

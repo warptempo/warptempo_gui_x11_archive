@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gui_render.h"
+#include "render.h"
 
 #include <cairo/cairo.h>
 #include <string>
@@ -14,7 +14,7 @@
 // First use: V.A3b's hover popup over pass / label_ref flag rects. Future
 // uses include settings dialogs and other hover hints.
 
-namespace gui_text_display {
+namespace text_display {
 
 // Note: not named Above/Below because X11's Xlib.h pollutes the global
 // namespace with `#define Above` / `#define Below` (stack-mode constants),
@@ -51,4 +51,4 @@ struct State {
 // can rely on no leakage of font face / source color.
 void render(cairo_t* cr, const State& s, double font_size);
 
-} // namespace gui_text_display
+} // namespace text_display

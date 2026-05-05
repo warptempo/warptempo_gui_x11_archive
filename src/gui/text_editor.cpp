@@ -1,11 +1,11 @@
-#include "gui_text_editor.h"
+#include "text_editor.h"
 
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 
 #include <algorithm>
 
-namespace gui_text_editor {
+namespace text_editor {
 
 namespace {
 
@@ -182,4 +182,4 @@ bool blink_period_milliseconds(int& out_ms) {
     return true;
 }
 
-} // namespace gui_text_editor
+} // namespace text_editor

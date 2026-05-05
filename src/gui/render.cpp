@@ -1,5 +1,5 @@
-#include "gui_render.h"
-#include "gui_audio.h"
+#include "render.h"
+#include "audio.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,8 +15,8 @@ namespace perf_counters {
     int flag_elided          = 0;
 }
 
-// kVPadExtraPx and kFlagBottomLiftPx now live in gui_render.h so the
-// iteration popup in gui_main.cpp can reference the same values.
+// kVPadExtraPx and kFlagBottomLiftPx now live in render.h so the
+// iteration popup in main.cpp can reference the same values.
 
 // Brief J: lift the flag rect's bottom edge above the strip-boundary row by
 // kFlagBottomLiftPx pixels. The boundary row coincides with the waveform
@@ -43,7 +43,7 @@ namespace {
 //   owning, with scale     → "1.23*1.2345"
 //   def, no scale          → "1.23:a.03"
 //   def, with scale        → "1.23*1.2345:a.03"
-std::string flag_text(const std::vector<GuiMarker>& markers, int idx) {
+std::string flag_text(const std::vector<GuiWarpMarker>& markers, int idx) {
     const auto& m = markers[idx];
 
     if (!m.label_ref.empty()) {
@@ -71,12 +71,12 @@ std::string flag_text(const std::vector<GuiMarker>& markers, int idx) {
 
 } // namespace
 
-std::string flag_text_for_marker(const std::vector<GuiMarker>& markers, int idx) {
+std::string flag_text_for_marker(const std::vector<GuiWarpMarker>& markers, int idx) {
     if (idx < 0 || idx >= static_cast<int>(markers.size())) return {};
     return flag_text(markers, idx);
 }
 
-double resolve_inherited_tempo(const std::vector<GuiMarker>& markers, int index) {
+double resolve_inherited_tempo(const std::vector<GuiWarpMarker>& markers, int index) {
     for (int i = index - 1; i >= 0; --i) {
         const auto& m = markers[i];
         if (!m.tempo_inherits && m.label_ref.empty()) {
@@ -87,7 +87,7 @@ double resolve_inherited_tempo(const std::vector<GuiMarker>& markers, int index)
 }
 
 std::string resolve_inherited_tempo_scale(
-    const std::vector<GuiMarker>& markers, int index) {
+    const std::vector<GuiWarpMarker>& markers, int index) {
     for (int i = index - 1; i >= 0; --i) {
         const auto& m = markers[i];
         if (!m.tempo_inherits && m.label_ref.empty()) {
@@ -138,7 +138,7 @@ void render_waveform(cairo_t* cr,
                                             viewport_start_sample);
     const double samples_per_pixel = span / static_cast<double>(area.w);
 
-    // Cache layout (must match gui_audio.cpp): level 0 = raw samples;
+    // Cache layout (must match audio.cpp): level 0 = raw samples;
     // levels 1, 2, 3 = stride 32, 1024, 32768. Pick the coarsest cache
     // level whose stride is <= spp; below stride 32, fall through to raw.
     int level;
@@ -174,7 +174,7 @@ void render_waveform(cairo_t* cr,
                 perf_counters::wf_pyramid_samples +=
                     static_cast<int>(s1 - s0);
             } else {
-                // Strides match gui_audio.cpp's kStrides[].
+                // Strides match audio.cpp's kStrides[].
                 constexpr long long kCacheStrides[] = { 0, 32, 1024, 32768 };
                 const long long stride = kCacheStrides[level];
                 const long long i0 = s0 / stride;
@@ -286,7 +286,7 @@ void render_timestamp(cairo_t* cr,
 
 void render_markers(cairo_t* cr,
                     GuiRect waveform_area,
-                    const std::vector<GuiMarker>& markers,
+                    const std::vector<GuiWarpMarker>& markers,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
@@ -348,7 +348,7 @@ namespace {
 template <typename Emit>
 void iterate_visible_flags(cairo_t* cr,
                            GuiRect top_strip_area,
-                           const std::vector<GuiMarker>& markers,
+                           const std::vector<GuiWarpMarker>& markers,
                            long long viewport_start_sample,
                            long long viewport_end_sample,
                            int sample_rate,
@@ -411,7 +411,7 @@ void iterate_visible_flags(cairo_t* cr,
 
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
-                  const std::vector<GuiMarker>& markers,
+                  const std::vector<GuiWarpMarker>& markers,
                   long long viewport_start_sample,
                   long long viewport_end_sample,
                   int sample_rate,
@@ -562,7 +562,7 @@ void render_flags(cairo_t* cr,
 std::vector<FlagHitRect> compute_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiMarker>& markers,
+    const std::vector<GuiWarpMarker>& markers,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -608,7 +608,7 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
 
 namespace {
 
-std::string transient_flag_text(const GuiTransient& m) {
+std::string transient_flag_text(const GuiTransientMarker& m) {
     std::string text;
     if (m.is_begin_time)    text = "b=";
     else if (m.is_end_time) text = "e=";
@@ -626,7 +626,7 @@ template <typename Emit>
 void iterate_visible_transient_flags(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransient>& transients,
+    const std::vector<GuiTransientMarker>& transients,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -688,7 +688,7 @@ void iterate_visible_transient_flags(
 
 void render_transient_markers(cairo_t* cr,
                               GuiRect waveform_area,
-                              const std::vector<GuiTransient>& transients,
+                              const std::vector<GuiTransientMarker>& transients,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
@@ -740,7 +740,7 @@ void render_transient_markers(cairo_t* cr,
 
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
-                            const std::vector<GuiTransient>& transients,
+                            const std::vector<GuiTransientMarker>& transients,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
@@ -844,7 +844,7 @@ void render_transient_flags(cairo_t* cr,
 std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransient>& transients,
+    const std::vector<GuiTransientMarker>& transients,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,

@@ -1,9 +1,9 @@
-#include "gui_render_pipeline.h"
+#include "render_pipeline.h"
 
 #include "engine/engine.h"
-#include "gui_audio.h"
-#include "gui_render.h"
-#include "gui_transients.h"
+#include "audio.h"
+#include "render.h"
+#include "transientmarkers.h"
 #include "timemap.h"
 
 #include <algorithm>
@@ -164,7 +164,7 @@ bool run_ffmpeg_alimiter(const std::string& in_path,
     });
 }
 
-// Resolve each GuiMarker to a MarkerForRender. Filters out markers that are:
+// Resolve each GuiWarpMarker to a MarkerForRender. Filters out markers that are:
 //   - references to disabled-defined labels
 //   - disabled label-definition markers (and thereby all refs to them)
 // EXCEPT: a disabled-cascade marker that carries an `is_begin_time` /
@@ -174,7 +174,7 @@ bool run_ffmpeg_alimiter(const std::string& in_path,
 // The inherit walk-back is applied here so MarkerForRender carries a
 // concrete tempo_base / tempo_scale — same rule as resolve_inherited_tempo.
 std::vector<MarkerForRender> resolve_markers_for_render(
-    const std::vector<GuiMarker>& src) {
+    const std::vector<GuiWarpMarker>& src) {
 
     // First pass: collect disabled label names.
     std::vector<std::string> disabled;
@@ -568,7 +568,7 @@ bool do_render(const RenderRequest& req) {
         const std::filesystem::path bf(req.batch_folder);
         const std::string wm_path =
             (bf / (req.batch_basename + ".warpmarkers")).string();
-        if (!GuiMarkers::save(wm_path, req.markers)) {
+        if (!GuiWarpMarkers::save(wm_path, req.markers)) {
             std::fprintf(stderr,
                 "warptempo_gui: render warning: failed to write '%s'\n",
                 wm_path.c_str());
@@ -576,7 +576,7 @@ bool do_render(const RenderRequest& req) {
         if (!req.transients.empty()) {
             const std::string tm_path =
                 (bf / (req.batch_basename + ".transientmarkers")).string();
-            if (!GuiTransients::save(tm_path, req.transients)) {
+            if (!GuiTransientMarkers::save(tm_path, req.transients)) {
                 std::fprintf(stderr,
                     "warptempo_gui: render warning: failed to write '%s'\n",
                     tm_path.c_str());
@@ -609,13 +609,13 @@ bool do_render(const RenderRequest& req) {
                     disabled_label_defs.insert(m.label_def);
                 }
             }
-            auto is_cascade_disabled_ref = [&](const GuiMarker& m) {
+            auto is_cascade_disabled_ref = [&](const GuiWarpMarker& m) {
                 return !m.disabled && !m.label_ref.empty() &&
                        disabled_label_defs.count(m.label_ref) > 0;
             };
 
             size_t seg_idx = 0;
-            std::vector<GuiMarker> warped_markers;
+            std::vector<GuiWarpMarker> warped_markers;
             warped_markers.reserve(req.markers.size());
             for (const auto& g : req.markers) {
                 const bool eff_disabled =
@@ -639,7 +639,7 @@ bool do_render(const RenderRequest& req) {
                 // is not display-eligible in render-view (locked design).
                 if (eff_disabled) continue;
 
-                GuiMarker w     = g;
+                GuiWarpMarker w     = g;
                 w.time_seconds  = static_cast<double>(s.tgt_frame) / sr_d;
                 w.is_begin_time = false;
                 w.is_end_time   = false;
@@ -647,7 +647,7 @@ bool do_render(const RenderRequest& req) {
             }
             const std::string wmd_path =
                 (bf / (req.batch_basename + ".renderwarpmarkers")).string();
-            if (!GuiMarkers::save(wmd_path, warped_markers)) {
+            if (!GuiWarpMarkers::save(wmd_path, warped_markers)) {
                 std::fprintf(stderr,
                     "warptempo_gui: render warning: failed to write '%s'\n",
                     wmd_path.c_str());
@@ -659,7 +659,7 @@ bool do_render(const RenderRequest& req) {
             // Drop out-of-trim and disabled. Stripping displacement is
             // intentional — the user-visible position lands in src_frame.
             if (!req.transients.empty()) {
-                std::vector<GuiTransient> warped_transients;
+                std::vector<GuiTransientMarker> warped_transients;
                 warped_transients.reserve(req.transients.size());
                 for (const auto& t : req.transients) {
                     if (t.disabled) continue;
@@ -682,7 +682,7 @@ bool do_render(const RenderRequest& req) {
                     const int64_t render_frame =
                         static_cast<int64_t>(m) *
                         static_cast<int64_t>(engine_R_s);
-                    GuiTransient w;
+                    GuiTransientMarker w;
                     w.src_frame        = render_frame;
                     w.is_inserted      = t.is_inserted;
                     w.disabled         = false;
@@ -695,7 +695,7 @@ bool do_render(const RenderRequest& req) {
                 const std::string tmd_path =
                     (bf / (req.batch_basename + ".rendertransientmarkers"))
                     .string();
-                if (!GuiTransients::save(tmd_path, warped_transients)) {
+                if (!GuiTransientMarkers::save(tmd_path, warped_transients)) {
                     std::fprintf(stderr,
                         "warptempo_gui: render warning: failed to write '%s'\n",
                         tmd_path.c_str());

@@ -15,7 +15,7 @@ public:
     using ProgressCallback = std::function<void(float)>;
 
     // Implementation detail of the peak cache. Public only so the cache
-    // reader/writer free functions in gui_audio.cpp can name the type.
+    // reader/writer free functions in audio.cpp can name the type.
     // Each PyramidLevel holds a fixed stride, the number of (min,max) pairs
     // covering the source, and per-channel flat int16 storage interleaved as
     // (min0, max0, min1, max1, ...). Quantization: clamp(v,-1,1) * 32767.

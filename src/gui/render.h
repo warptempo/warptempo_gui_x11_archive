@@ -1,6 +1,6 @@
 #pragma once
-#include "gui_markers.h"
-#include "gui_transients.h"
+#include "warpmarkers.h"
+#include "transientmarkers.h"
 
 #include <cairo/cairo.h>
 #include <cmath>
@@ -27,14 +27,14 @@ struct GuiColor {
 // Trim boundaries in source-frame samples. Threaded through the marker /
 // flag renderers so they can apply uniform out-of-trim dimming under the
 // brief H palette consolidation. Values match the convention in
-// compute_trim_samples (gui_main.cpp).
+// compute_trim_samples (main.cpp).
 struct TrimRange {
     int64_t begin;
     int64_t end;
 };
 
 // Brief H palette: bases shared across the renderer module and
-// gui_main.cpp. kPlayhead is the foreground reference and must never be
+// main.cpp. kPlayhead is the foreground reference and must never be
 // passed to dim() — preserve that invariant in subsequent phases.
 inline constexpr GuiColor kBackground = {0.10, 0.10, 0.12};
 inline constexpr GuiColor kWaveform   = {0.55, 0.75, 0.90};
@@ -47,13 +47,13 @@ inline constexpr GuiColor kText       = {0.99, 0.99, 0.99};
 // applied symmetrically (horizontal and vertical). Brief Q raised this from
 // 2 to 3 for breathing room. The single source of truth — both render and
 // hit-rect computation must use this value, and so must the iteration popup
-// in gui_main.cpp.
+// in main.cpp.
 constexpr double kFlagInnerPadPx = 3.0;
 
 // Extra vertical inner padding added on top of kFlagInnerPadPx on each side.
 // (V.B Addendum 2: rects grow by 2*kVPadExtraPx in height; the horizontal
-// pad is unaffected.) Was previously file-private to gui_render.cpp; moved
-// here in Brief Q to share with gui_main.cpp's iteration popup.
+// pad is unaffected.) Was previously file-private to render.cpp; moved
+// here in Brief Q to share with main.cpp's iteration popup.
 constexpr double kVPadExtraPx = 1.0;
 
 // Brief J/K: the flag rect's painted bottom edge sits this many pixels above
@@ -112,8 +112,8 @@ inline void render_flag_text_bg_fill(cairo_t* cr,
 }
 
 // Out-of-trim predicate. Caller computes source-frame position from its
-// own native field (time_seconds*sample_rate for GuiMarker,
-// effective_frame() for GuiTransient) and passes it through here.
+// own native field (time_seconds*sample_rate for GuiWarpMarker,
+// effective_frame() for GuiTransientMarker) and passes it through here.
 // The trim is treated as the closed interval [begin, end] for the dim-
 // vs-active flag-color decision, so a marker landing exactly on the end
 // boundary (the e=-marker itself) renders active, not dimmed. Other
@@ -186,7 +186,7 @@ void render_timestamp(cairo_t* cr,
 // brief H palette rules.
 void render_markers(cairo_t* cr,
                     GuiRect waveform_area,
-                    const std::vector<GuiMarker>& markers,
+                    const std::vector<GuiWarpMarker>& markers,
                     long long viewport_start_sample,
                     long long viewport_end_sample,
                     int sample_rate,
@@ -241,7 +241,7 @@ struct FlagEditorOverlay {
 // `render_markers`).
 void render_flags(cairo_t* cr,
                   GuiRect top_strip_area,
-                  const std::vector<GuiMarker>& markers,
+                  const std::vector<GuiWarpMarker>& markers,
                   long long viewport_start_sample,
                   long long viewport_end_sample,
                   int sample_rate,
@@ -258,7 +258,7 @@ void render_flags(cairo_t* cr,
 std::vector<FlagHitRect> compute_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiMarker>& markers,
+    const std::vector<GuiWarpMarker>& markers,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -270,7 +270,7 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
 // directly from each transient (no label-cascade like warp markers).
 void render_transient_markers(cairo_t* cr,
                               GuiRect waveform_area,
-                              const std::vector<GuiTransient>& transients,
+                              const std::vector<GuiTransientMarker>& transients,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
@@ -286,7 +286,7 @@ void render_transient_markers(cairo_t* cr,
 // `dim()` uniformly.
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
-                            const std::vector<GuiTransient>& transients,
+                            const std::vector<GuiTransientMarker>& transients,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
@@ -298,7 +298,7 @@ void render_transient_flags(cairo_t* cr,
 std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransient>& transients,
+    const std::vector<GuiTransientMarker>& transients,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -307,18 +307,18 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
 // Returns the text that render_flags would draw for `markers[idx]`. Used
 // by the GUI text editor to seed the editable payload (the on-screen rect
 // content) when entering edit mode on a flag.
-std::string flag_text_for_marker(const std::vector<GuiMarker>& markers, int idx);
+std::string flag_text_for_marker(const std::vector<GuiWarpMarker>& markers, int idx);
 
 // Walks backward from `index` through `markers` to find the nearest marker
 // that owns its tempo (tempo_inherits == false and not a label reference).
 // Returns 1.0 if no such marker exists (shouldn't happen given the time-0
 // invariant, but defensive for edge cases during authoring).
-double resolve_inherited_tempo(const std::vector<GuiMarker>& markers, int index);
+double resolve_inherited_tempo(const std::vector<GuiWarpMarker>& markers, int index);
 
 // Companion to resolve_inherited_tempo: returns the scale string of the
 // inherited source, or "" if none.
 std::string resolve_inherited_tempo_scale(
-    const std::vector<GuiMarker>& markers, int index);
+    const std::vector<GuiWarpMarker>& markers, int index);
 
 // Returns the pixel width of the baseline-style monospace timestamp at the
 // size used by render_timestamp. Needed so callers can position adjacent UI.

@@ -17,7 +17,7 @@ struct TempomapEntry {
     double multiplier;
 };
 
-// Minimal POD the timemap math needs. The GUI's `GuiMarker` resolves into
+// Minimal POD the timemap math needs. The GUI's `GuiWarpMarker` resolves into
 // this: tempo_inherits markers are walked back to their nearest owning
 // ancestor and their effective tempo_base / tempo_scale are copied forward.
 // Disabled markers (and any references to disabled-defined labels) are

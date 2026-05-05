@@ -1,7 +1,7 @@
 #pragma once
 
-#include "gui_markers.h"
-#include "gui_transients.h"
+#include "warpmarkers.h"
+#include "transientmarkers.h"
 
 #include <cstdint>
 #include <string>
@@ -9,11 +9,11 @@
 #include <vector>
 
 // Self-contained view of the AppState fields do_render reads. Constructed by
-// the Ctrl+Alt+R handler in gui_main.cpp so do_render stays decoupled from
+// the Ctrl+Alt+R handler in main.cpp so do_render stays decoupled from
 // AppState's (anonymous-namespace) shape.
 struct RenderRequest {
     std::string            source_audio_path;
-    std::vector<GuiMarker> markers;
+    std::vector<GuiWarpMarker> markers;
     std::vector<std::pair<std::string, std::string>> settings_passthrough;
 
     // User-curated transient frame list (source-frame domain). When non-empty
@@ -30,7 +30,7 @@ struct RenderRequest {
     // .transientmarkers sidecar is written. The single-transient sidecar
     // path used by the source-directory render branch (Ctrl+Alt+R) does not
     // read this field.
-    std::vector<GuiTransient> transients;
+    std::vector<GuiTransientMarker> transients;
 
     // Batch render output. When `batch_folder` is non-empty, do_render
     // writes its final output to `<batch_folder>/<batch_basename>.wav` (or
@@ -60,7 +60,7 @@ bool do_render(const RenderRequest& req);
 // and returns false.
 struct DetectionRequest {
     std::string            source_audio_path;
-    std::vector<GuiMarker> markers;
+    std::vector<GuiWarpMarker> markers;
     std::vector<std::pair<std::string, std::string>> settings_passthrough;
 };
 

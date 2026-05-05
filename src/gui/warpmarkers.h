@@ -23,7 +23,7 @@
 //      are also treated as disabled (cascade). The cascade rule applies
 //      only to label_def markers; a disabled non-label-def is locally
 //      disabled and does not propagate.
-struct GuiMarker {
+struct GuiWarpMarker {
     double time_seconds = 0.0;
 
     bool        tempo_inherits = false;
@@ -59,12 +59,12 @@ struct GuiMarker {
     int  bpm_hi             = 0;
 };
 
-struct GuiMarkerError {
+struct GuiWarpMarkerError {
     int         line_number;   // 1-based; 0 means "file-level, no line"
     std::string message;
 };
 
-class GuiMarkers {
+class GuiWarpMarkers {
 public:
     // Parses `path`. On success, populates markers() and returns true. On
     // failure, errors() lists what went wrong (continues parsing after the
@@ -77,14 +77,14 @@ public:
     // uses 0644 if the file is new. Returns true on success.
     bool save(const std::string& path) const;
 
-    // Static variant for callers that hold a raw GuiMarker vector (e.g. the
+    // Static variant for callers that hold a raw GuiWarpMarker vector (e.g. the
     // render pipeline writing per-render sidecars). Same on-disk format as
     // the instance method.
     static bool save(const std::string& path,
-                     const std::vector<GuiMarker>& markers);
+                     const std::vector<GuiWarpMarker>& markers);
 
-    const std::vector<GuiMarker>&       markers() const { return markers_; }
-    const std::vector<GuiMarkerError>&  errors()  const { return errors_; }
+    const std::vector<GuiWarpMarker>&       markers() const { return markers_; }
+    const std::vector<GuiWarpMarkerError>&  errors()  const { return errors_; }
 
     // True if load() observed content that the canonical save() would
     // discard: comments, blank lines, indented lines, freeform trailing
@@ -93,14 +93,14 @@ public:
 
     // Inserts `m` at the position that preserves strict-monotonic order by
     // time_seconds. Returns the insertion index.
-    int insert_marker(GuiMarker m);
+    int insert_marker(GuiWarpMarker m);
 
     // Removes the marker at `index`. No-op if out of range.
     void remove_marker(int index);
 
     // Mutable accessor for keyboard/mouse toggles that edit a single marker
     // in place without changing its time (so list order is preserved).
-    GuiMarker* marker_mut(int index) {
+    GuiWarpMarker* marker_mut(int index) {
         if (index < 0 || index >= static_cast<int>(markers_.size())) return nullptr;
         return &markers_[index];
     }
@@ -109,7 +109,7 @@ public:
     // class assumes strict-monotonic order. Exposed for operations that
     // twiddle a flag across many markers at once (e.g. clearing all
     // is_begin_time/is_end_time markers).
-    std::vector<GuiMarker>& markers_mut() { return markers_; }
+    std::vector<GuiWarpMarker>& markers_mut() { return markers_; }
 
     void clear() {
         markers_.clear();
@@ -118,8 +118,8 @@ public:
     }
 
 private:
-    std::vector<GuiMarker>       markers_;
-    std::vector<GuiMarkerError>  errors_;
+    std::vector<GuiWarpMarker>       markers_;
+    std::vector<GuiWarpMarkerError>  errors_;
     bool                         had_nonstandard_content_ = false;
 };
 
@@ -128,11 +128,11 @@ private:
 // always counts. For an active (non-locally-disabled) `label_ref`, the
 // cascade rule applies: the ref inherits its target label_def's
 // disabled state.
-bool effective_disabled(const std::vector<GuiMarker>& markers, int idx);
+bool effective_disabled(const std::vector<GuiWarpMarker>& markers, int idx);
 
-namespace gui_markers_internal {
+namespace warpmarkers_internal {
 
-// Parse one canonical new-format line into a GuiMarker. Used by the GUI
+// Parse one canonical new-format line into a GuiWarpMarker. Used by the GUI
 // editor's commit path. Performs only line-local validation (format,
 // whitespace rejection, payload structure) — cross-marker rules (label_ref
 // existence, label_def uniqueness, time monotonicity) are the caller's
@@ -140,7 +140,7 @@ namespace gui_markers_internal {
 // inert defaults (1.0 / "1.0000") — there is no cache to preserve.
 bool parse_single_canonical_line(
     const std::string& raw_line,
-    GuiMarker& out,
+    GuiWarpMarker& out,
     std::string* error_out);
 
-} // namespace gui_markers_internal
+} // namespace warpmarkers_internal

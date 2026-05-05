@@ -21,7 +21,7 @@
 // cross-file trim flag system from S.1: a `b=` or `e=` flag may live on
 // either a warp marker or a transient marker, and the engine consumes one
 // of each across both files.
-struct GuiTransient {
+struct GuiTransientMarker {
     int64_t src_frame        = 0;     // anchor for D, position for I
     bool    is_inserted      = true;  // false = D, true = I
     bool    disabled         = false;
@@ -37,12 +37,12 @@ struct GuiTransient {
     }
 };
 
-struct GuiTransientError {
+struct GuiTransientMarkerError {
     int         line_number;   // 1-based; 0 means "file-level, no line"
     std::string message;
 };
 
-class GuiTransients {
+class GuiTransientMarkers {
 public:
     // Parses `path`. On success, populates markers() and returns true. On
     // failure, errors() lists what went wrong (continues parsing after the
@@ -58,19 +58,19 @@ public:
     // duplicate states, so we don't error in the GUI for them.
     bool save(const std::string& path) const;
 
-    // Static variant for callers that hold a raw GuiTransient vector (e.g.
+    // Static variant for callers that hold a raw GuiTransientMarker vector (e.g.
     // the render pipeline writing per-render sidecars). Same on-disk format
     // and dedup behavior as the instance method.
     static bool save(const std::string& path,
-                     const std::vector<GuiTransient>& markers);
+                     const std::vector<GuiTransientMarker>& markers);
 
     // Best-effort unlink. Returns true on success or if the file didn't
     // already exist; false on any other error. Used by the empty-list save
     // path so an emptied transient list removes the on-disk sibling file.
     bool delete_file(const std::string& path) const;
 
-    const std::vector<GuiTransient>&        markers() const { return markers_; }
-    const std::vector<GuiTransientError>&   errors()  const { return errors_; }
+    const std::vector<GuiTransientMarker>&        markers() const { return markers_; }
+    const std::vector<GuiTransientMarkerError>&   errors()  const { return errors_; }
 
     // True if load() observed content that the canonical save() would
     // discard: comments or blank lines.
@@ -81,17 +81,17 @@ public:
     // order. Returns the insertion index. Equal-frame collisions are
     // accepted at insert time (the user may transit through them via
     // nudge); save dedups them.
-    int insert_marker(GuiTransient m);
+    int insert_marker(GuiTransientMarker m);
 
     // Removes the marker at `index`. No-op if out of range.
     void remove_marker(int index);
 
-    GuiTransient* marker_mut(int index) {
+    GuiTransientMarker* marker_mut(int index) {
         if (index < 0 || index >= static_cast<int>(markers_.size())) return nullptr;
         return &markers_[index];
     }
 
-    std::vector<GuiTransient>& markers_mut() { return markers_; }
+    std::vector<GuiTransientMarker>& markers_mut() { return markers_; }
 
     void clear() {
         markers_.clear();
@@ -100,7 +100,7 @@ public:
     }
 
 private:
-    std::vector<GuiTransient>      markers_;
-    std::vector<GuiTransientError> errors_;
+    std::vector<GuiTransientMarker>      markers_;
+    std::vector<GuiTransientMarkerError> errors_;
     bool                           had_nonstandard_content_ = false;
 };

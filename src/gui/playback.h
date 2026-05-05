@@ -95,7 +95,7 @@ public:
     void shutdown();
 
     // Opaque to consumers, but public so the audio callback in
-    // gui_playback.cpp (a free function outside the class) can reach it.
+    // playback.cpp (a free function outside the class) can reach it.
     struct Impl;
 
 private:

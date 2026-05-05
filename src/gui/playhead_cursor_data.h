@@ -1,5 +1,5 @@
 // Embedded copy of assets/playhead-cursor.png. Regenerate with:
-//   xxd -i assets/playhead-cursor.png > src/playhead_cursor_data.h
+//   xxd -i assets/playhead-cursor.png > src/gui/playhead_cursor_data.h
 // then rename the array/length symbols below to
 //   playhead_cursor_png / playhead_cursor_png_len.
 // Committed alongside the source PNG so builds work without the

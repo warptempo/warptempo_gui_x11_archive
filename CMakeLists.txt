@@ -18,18 +18,18 @@ pkg_check_modules(CAIRO REQUIRED cairo)
 pkg_check_modules(JACK REQUIRED jack)
 
 add_executable(warptempo_gui
-    src/gui_main.cpp
-    src/gui_x11.cpp
-    src/gui_audio.cpp
-    src/gui_render.cpp
-    src/gui_markers.cpp
-    src/gui_text_editor.cpp
-    src/gui_text_display.cpp
-    src/gui_transients.cpp
-    src/gui_playback.cpp
-    src/gui_render_pipeline.cpp
-    src/timemap.cpp
-    src/miniaudio_impl.cpp
+    src/gui/main.cpp
+    src/gui/x11.cpp
+    src/gui/audio.cpp
+    src/gui/render.cpp
+    src/gui/warpmarkers.cpp
+    src/gui/text_editor.cpp
+    src/gui/text_display.cpp
+    src/gui/transientmarkers.cpp
+    src/gui/playback.cpp
+    src/gui/render_pipeline.cpp
+    src/gui/timemap.cpp
+    src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
     src/engine/transients.cpp
     src/engine/limiter.cpp
@@ -38,6 +38,7 @@ add_executable(warptempo_gui
 target_include_directories(warptempo_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/engine
+    ${CMAKE_SOURCE_DIR}/src/gui
     ${X11_INCLUDE_DIRS}
     ${CAIRO_INCLUDE_DIRS}
     ${SNDFILE_INCLUDE_DIRS}
@@ -59,7 +60,7 @@ target_link_libraries(warptempo_gui PRIVATE
 # miniaudio is vendored third-party C. Suppress the warnings that its macro
 # soup trips — only on its dedicated implementation TU, so our own code stays
 # under -Wall -Wextra.
-set_source_files_properties(src/miniaudio_impl.cpp PROPERTIES
+set_source_files_properties(src/gui/miniaudio_impl.cpp PROPERTIES
     COMPILE_FLAGS "-w")
 
 # --- Compiler Optimizations ---

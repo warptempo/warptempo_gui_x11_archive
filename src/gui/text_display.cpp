@@ -1,6 +1,6 @@
-#include "gui_text_display.h"
+#include "text_display.h"
 
-namespace gui_text_display {
+namespace text_display {
 
 namespace {
 // Pixel gap between the popup baseline and the anchor edge.
@@ -51,4 +51,4 @@ void render(cairo_t* cr, const State& s, double font_size) {
     cairo_restore(cr);
 }
 
-} // namespace gui_text_display
+} // namespace text_display

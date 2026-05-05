@@ -15,7 +15,7 @@
 // supply different validators and writers but reuse this state shape and
 // keystroke routing.
 
-namespace gui_text_editor {
+namespace text_editor {
 
 // Maximum characters allowed in `pending`. Mirrors the longest valid
 // payload `1.23*1.2345:a.aa` (16 chars). Insertions past this cap are
@@ -115,4 +115,4 @@ bool cursor_visible_now(const State& s);
 // change.
 bool blink_period_milliseconds(int& out_ms);
 
-} // namespace gui_text_editor
+} // namespace text_editor

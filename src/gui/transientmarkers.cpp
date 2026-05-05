@@ -1,4 +1,4 @@
-#include "gui_transients.h"
+#include "transientmarkers.h"
 
 #include <algorithm>
 #include <cctype>
@@ -68,10 +68,10 @@ bool parse_frame_token(const std::string& tok, int64_t& out,
     return true;
 }
 
-// Parse "[b=|e=][#]<frame> <I|D>[ <displaced_frame>]" into a GuiTransient.
+// Parse "[b=|e=][#]<frame> <I|D>[ <displaced_frame>]" into a GuiTransientMarker.
 // Returns true on success; on failure, fills `err_msg` with a one-line
 // diagnostic.
-bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg) {
+bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& err_msg) {
     std::string t = trim_ws(raw);
     if (t.empty()) {
         err_msg = "empty line";
@@ -145,7 +145,7 @@ bool parse_line(const std::string& raw, GuiTransient& out, std::string& err_msg)
 
 } // namespace
 
-bool GuiTransients::load(const std::string& path) {
+bool GuiTransientMarkers::load(const std::string& path) {
     markers_.clear();
     errors_.clear();
     had_nonstandard_content_ = false;
@@ -185,7 +185,7 @@ bool GuiTransients::load(const std::string& path) {
             continue;
         }
 
-        GuiTransient m;
+        GuiTransientMarker m;
         std::string err;
         if (!parse_line(t, m, err)) {
             errors_.push_back({line_number, err});
@@ -215,7 +215,7 @@ bool GuiTransients::load(const std::string& path) {
     // correct, so silently materialize the head if the on-disk file
     // omitted it. An empty file stays empty until the user authors.
     if (!markers_.empty() && markers_.front().effective_frame() > 0) {
-        GuiTransient zero;
+        GuiTransientMarker zero;
         zero.src_frame        = 0;
         zero.is_inserted      = true;
         zero.disabled         = false;
@@ -228,19 +228,19 @@ bool GuiTransients::load(const std::string& path) {
     return true;
 }
 
-bool GuiTransients::save(const std::string& path) const {
+bool GuiTransientMarkers::save(const std::string& path) const {
     return save(path, markers_);
 }
 
-bool GuiTransients::save(const std::string& path,
-                         const std::vector<GuiTransient>& markers_) {
+bool GuiTransientMarkers::save(const std::string& path,
+                         const std::vector<GuiTransientMarker>& markers_) {
     // Mid-edit nudge gestures may transit through equal-frame collisions.
     // Drop duplicates silently here (keep the first occurrence) and emit
     // a one-line stderr notice so the user sees that the on-disk content
     // diverges from the in-memory list. Dedup is keyed on effective_frame
     // — a D-with-displacement and an I at the same visible position would
     // both render at one column.
-    std::vector<GuiTransient> deduped;
+    std::vector<GuiTransientMarker> deduped;
     deduped.reserve(markers_.size());
     int64_t last_frame = std::numeric_limits<int64_t>::min();
     int dropped = 0;
@@ -312,24 +312,24 @@ bool GuiTransients::save(const std::string& path,
     return true;
 }
 
-bool GuiTransients::delete_file(const std::string& path) const {
+bool GuiTransientMarkers::delete_file(const std::string& path) const {
     if (path.empty()) return false;
     if (::unlink(path.c_str()) == 0) return true;
     if (errno == ENOENT) return true;
     return false;
 }
 
-int GuiTransients::insert_marker(GuiTransient m) {
+int GuiTransientMarkers::insert_marker(GuiTransientMarker m) {
     const int64_t eff = m.effective_frame();
     auto it = std::lower_bound(
         markers_.begin(), markers_.end(), eff,
-        [](const GuiTransient& a, int64_t f) { return a.effective_frame() < f; });
+        [](const GuiTransientMarker& a, int64_t f) { return a.effective_frame() < f; });
     const int idx = static_cast<int>(it - markers_.begin());
     markers_.insert(it, std::move(m));
     return idx;
 }
 
-void GuiTransients::remove_marker(int index) {
+void GuiTransientMarkers::remove_marker(int index) {
     if (index < 0 || index >= static_cast<int>(markers_.size())) return;
     markers_.erase(markers_.begin() + index);
 }
