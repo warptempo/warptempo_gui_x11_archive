@@ -32,7 +32,7 @@ void Synthesis::synthesize_full(
     std::vector<float> read_buf(N * channels, 0.0f);
     std::vector<float> write_buf(N * channels, 0.0f);
 
-    // Start-trim: the first N/2 samples are OLA ramp-up. Mirrors phase_vocoder.cpp.
+    // Start-trim: the first N/2 samples are OLA ramp-up. Mirrors the phase vocoder pass.
     int frames_to_skip = N / 2;
 
     // Progress reporting every ~1% of frames (or every 100 frames, whichever is rarer).

@@ -401,12 +401,12 @@ inline std::vector<BpmPopupHit> compute_bpm_popup_hits(
     return out;
 }
 
-// V.A3b hover-popup text. Replicates parser.cpp's resolution math so the
-// popup matches what the engine emits into the .timemap. Pass markers
-// emit "= TEMPO" or "= TEMPO*SCALE" (single equals; resolved tempo of
-// the nearest prior owning marker). Label_ref markers emit
-// "~= BASE*COMBINED_SCALE" (tilde-equals; mirrors parser.cpp lines
-// 612/651). BASE is rendered at 2 decimals; COMBINED_SCALE is
+// V.A3b hover-popup text. Computes the same resolution math the engine
+// uses when emitting the .timemap, so the popup matches what the engine
+// will produce. Pass markers emit "= TEMPO" or "= TEMPO*SCALE" (single
+// equals; resolved tempo of the nearest prior owning marker). Label_ref
+// markers emit "~= BASE*COMBINED_SCALE" (tilde-equals, mirroring engine
+// behavior). BASE is rendered at 2 decimals; COMBINED_SCALE is
 // `def_scale * multiplier` when the def has a typed scale, else just
 // `multiplier`, rendered at 4 decimals. Returns "" when the marker
 // doesn't qualify for a hover popup (owning, missing def, malformed).
@@ -477,7 +477,7 @@ inline std::string compute_hover_popup_text(
         const double def_eff_tempo = def_base * def_scale_val;
         if (def_base == 0.0 || def_eff_tempo == 0.0) return "";
 
-        // settings.scale cancels in parser.cpp's line 648 expression:
+        // settings.scale cancels in the engine's multiplier expression:
         //   multiplier = (lr_src_dist * def_eff_tempo)
         //              / (def_base * def_src_dist)
         const double multiplier =

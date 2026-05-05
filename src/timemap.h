@@ -4,9 +4,8 @@
 #include <string>
 #include <vector>
 
-// In-memory lift of the parser binary's timemap-generation math. The shape of
-// the math is identical (see parser.cpp Pass 1 / Pass 2 / trim post-pass);
-// log-sync, .log output, sox shellout, and the stdout protocol are gone.
+// In-memory timemap-generation used by the engine. Math is organized as
+// Pass 1, Pass 2, and a trim post-pass.
 
 struct TimemapSegment {
     size_t src_frame;
@@ -52,7 +51,7 @@ struct TimemapBuildResult {
 };
 
 // Returns true on success; false on any validation failure (message logged
-// to stderr). Failure conditions mirror parser.cpp: tempo > 9.99, tempo <= 0,
+// to stderr). Failure conditions: tempo > 9.99, tempo <= 0,
 // src_frame > total_frames, src_frame - prev_src_frame < 1, undefined label
 // reference, duplicate label definition, final_multiplier > 9.9999 on label
 // refs, begin_time at 00:00.000.

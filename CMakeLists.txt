@@ -31,11 +31,6 @@ target_link_libraries(warptempo_engine PRIVATE
     m
 )
 
-# --- 2. Build the Timemap Parser ---
-add_executable(parser src/parser.cpp)
-# (Assuming the parser is pure C++ and doesn't need external audio libs.
-# If it does, we can add a target_link_libraries block for it here.)
-
 # --- 3. Build the GUI (Xlib + Cairo) ---
 pkg_check_modules(X11 REQUIRED x11 xrandr)
 pkg_check_modules(CAIRO REQUIRED cairo)
@@ -91,6 +86,5 @@ set_source_files_properties(src/miniaudio_impl.cpp PROPERTIES
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
-    target_compile_options(parser PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(warptempo_gui PRIVATE -Wall -Wextra -O3 -march=native)
 endif()

@@ -80,7 +80,7 @@ inline double map_source_to_target(size_t src_frame, const std::vector<TimeMapSe
 }
 
 // --- Output sample timing convention ---
-// Both phase_vocoder.cpp (Pass 1) and synthesis.cpp (Pass 4) emit samples with the
+// Both the phase vocoder pass (Pass 1) and synthesis (Pass 4) emit samples with the
 // same OLA ramp-up trim: the first N/2 samples are dropped via `frames_to_skip = N/2`.
 // Consequences any downstream module must respect:
 //   - Output sample 0 in the final WAV corresponds to pre-trim OLA position N/2.
