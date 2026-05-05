@@ -3296,9 +3296,11 @@ int main(int argc, char** argv) {
             mv[owner].bpm_hi             = 0;
         }
 
-        // Auto-select endpoint: next eligible+enabled marker after owner.
+        // Auto-select endpoint: next non-disabled marker after owner.
+        // Endpoint is purely informational (visual span boundary); pass
+        // markers and label_refs are valid endpoints since the popup never
+        // lives there. Only effectively-disabled markers are skipped.
         for (int i = owner + 1; i < static_cast<int>(mv.size()); ++i) {
-            if (!bpm_popup_eligible_marker(mv[i])) continue;
             if (effective_disabled(mv, i)) continue;
             app.selected_markers.insert(i);
             break;
@@ -6901,11 +6903,14 @@ int main(int argc, char** argv) {
             }
             return;
         }
-        // V.B Shift+I bulk-clears every marker's iter values. Only fires
-        // while iteration mode is on; otherwise silent no-op.
+        // V.B Shift+I: bulk-clear every marker's iter values AND exit
+        // iteration mode in one keystroke ("stop authoring this mode").
+        // Only fires while iteration mode is on; otherwise silent no-op.
         if (keysym == XK_i && !ctrl && shift && !alt) {
             if (app.active_mode == 'W' && app.iteration_mode_enabled) {
                 bulk_clear_iter_values();
+                app.iteration_mode_enabled = false;
+                invalidate_top_strip();
             }
             return;
         }
@@ -6923,11 +6928,13 @@ int main(int argc, char** argv) {
             }
             return;
         }
-        // Brief X.2 Shift+M bulk-clears every marker's BPM values.
-        // Fires regardless of mode state. Silent no-op outside warp.
+        // Brief X.2 Shift+M: bulk-clear every marker's BPM values AND
+        // exit BPM mode in one keystroke ("stop authoring this mode").
+        // Only fires while BPM mode is on; otherwise silent no-op.
         if (keysym == XK_m && !ctrl && shift && !alt) {
-            if (app.active_mode == 'W') {
+            if (app.active_mode == 'W' && app.bpm_mode_enabled) {
                 bulk_clear_bpm_values();
+                exit_bpm_mode();
             }
             return;
         }
@@ -7049,8 +7056,8 @@ int main(int argc, char** argv) {
             toggle_inherits();
             return;
         }
-        // Shift+D: toggle disabled (warp + transient). Plain `d` is unbound.
-        if (keysym == XK_d && !ctrl && !alt && shift) {
+        // Ctrl+D: toggle disabled (warp + transient). Plain `d` and Shift+D are unbound.
+        if (keysym == XK_d && ctrl && !alt && !shift) {
             if (app.active_mode == 'T') toggle_transient_disabled();
             else                        toggle_disabled();
             return;
