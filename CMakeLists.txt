@@ -10,28 +10,7 @@ pkg_check_modules(SNDFILE REQUIRED sndfile)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
 find_library(FFTW3_THREADS_LIB fftw3_threads HINTS ${FFTW3_LIBRARY_DIRS} REQUIRED)
 
-# --- 1. Build the DSP Engine (Modular) ---
-add_executable(warptempo_engine
-    src/main.cpp
-    src/engine/engine.cpp
-    src/engine/transients.cpp
-    src/engine/limiter.cpp
-    src/engine/synthesis.cpp
-)
-target_include_directories(warptempo_engine PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/engine
-    ${SNDFILE_INCLUDE_DIRS}
-    ${FFTW3_INCLUDE_DIRS}
-)
-target_link_libraries(warptempo_engine PRIVATE
-    ${SNDFILE_LIBRARIES}
-    ${FFTW3_THREADS_LIB}
-    ${FFTW3_LIBRARIES}
-    m
-)
-
-# --- 3. Build the GUI (Xlib + Cairo) ---
+# --- Build the GUI (Xlib + Cairo) ---
 pkg_check_modules(X11 REQUIRED x11 xrandr)
 pkg_check_modules(CAIRO REQUIRED cairo)
 # JACK is required: miniaudio is initialized with the JACK backend explicitly
@@ -85,6 +64,5 @@ set_source_files_properties(src/miniaudio_impl.cpp PROPERTIES
 
 # --- Compiler Optimizations ---
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(warptempo_engine PRIVATE -Wall -Wextra -O3 -march=native)
     target_compile_options(warptempo_gui PRIVATE -Wall -Wextra -O3 -march=native)
 endif()

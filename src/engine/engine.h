@@ -6,9 +6,8 @@
 #include <utility>
 #include <vector>
 
-// In-process entry point for the warptempo DSP pipeline. The standalone
-// binary's main() parses CLI into one of these and calls
-// run_warptempo_engine(); the GUI does the same thing without shelling out.
+// Parameter struct for the warptempo DSP pipeline. Constructed by the GUI's
+// render pipeline and passed to run_warptempo_engine().
 struct EngineParams {
     std::string source_audio_path;
     std::string output_audio_path;
@@ -40,7 +39,7 @@ struct EngineParams {
 };
 
 // Returns true on success, false on failure. Failure reasons are logged to
-// stderr by the engine itself (unchanged text from the standalone binary).
+// stderr by the engine itself.
 bool run_warptempo_engine(const EngineParams& p,
                           std::vector<int64_t>* out_frame_map = nullptr,
                           int* out_R_s = nullptr);
