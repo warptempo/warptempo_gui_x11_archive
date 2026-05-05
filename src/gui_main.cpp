@@ -29,6 +29,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <sys/stat.h>
@@ -190,6 +191,50 @@ inline bool parse_bpm_bracket(const std::string& s,
     lo    = l;
     hi    = h;
     return true;
+}
+
+// Brief X.3 BPM-sweep math primitive. Given a span's measured duration
+// (seconds), the user-asserted beat count for that span, and a target BPM,
+// return the (base_tempo, scale) pair the engine needs so that one cell of
+// the BPM sweep renders at exactly the target tempo.
+//
+// base_tempo is rounded to 2 decimals via banker's rounding (std::nearbyint
+// with the default FE_TONEAREST mode); scale is rounded to 6 decimals the
+// same way. The bash-script port uses an epsilon nudge before rounding to
+// work around shell-level numerics — that nudge does not apply in C++ and
+// is intentionally omitted here. The C++ port may diverge from the bash
+// script on tie cases; this is documented behavior.
+struct BaseTempoScale {
+    double base_tempo;
+    double scale;
+    double ratio;
+};
+
+inline std::optional<BaseTempoScale> compute_base_tempo_scale(
+    double duration_seconds, int beats, int target_bpm) {
+    if (!(duration_seconds > 0.0)) return std::nullopt;
+    if (beats      <= 0) return std::nullopt;
+    if (target_bpm <= 0) return std::nullopt;
+
+    const double desired_duration =
+        static_cast<double>(beats) * 60.0 /
+        static_cast<double>(target_bpm);
+    if (!std::isfinite(desired_duration) ||
+        desired_duration == 0.0) return std::nullopt;
+
+    const double ratio = duration_seconds / desired_duration;
+    if (!std::isfinite(ratio)) return std::nullopt;
+
+    const double base_tempo =
+        std::nearbyint(ratio * 100.0) / 100.0;
+    if (!std::isfinite(base_tempo) ||
+        base_tempo == 0.0) return std::nullopt;
+
+    const double scale =
+        std::nearbyint((ratio / base_tempo) * 1e6) / 1e6;
+    if (!std::isfinite(scale)) return std::nullopt;
+
+    return BaseTempoScale{base_tempo, scale, ratio};
 }
 
 // On-screen popup geometry for one iteration popup. `flag_rect` is the
@@ -1759,7 +1804,8 @@ int main(int argc, char** argv) {
 
             // Markers: vertical lines in the waveform area, beneath the
             // playhead. Cairo's outer clip confines painting to `exposed`.
-            if (rects_intersect(exposed, area)) {
+            if (rects_intersect(exposed, area) ||
+                rects_intersect(exposed, top_strip)) {
                 const auto m0 = clock::now();
                 if (app.render_view_enabled) {
                     // Render-view: dark blue base, sky-tint when selected.
@@ -6711,6 +6757,196 @@ int main(int argc, char** argv) {
             return;
         }
 
+        // Brief X.3: Ctrl+Alt+M sweeps every BPM in the popup-owner's
+        // [bpm_lo, bpm_hi] range, computing (base_tempo, scale) per cell
+        // and rendering one .wav per cell into
+        // `<source_parent>/renders/<N>_render_basetempo/`. The scale value
+        // is encoded in the filename so Ctrl+Alt+C can later extract and
+        // commit it back into source settings_passthrough. Mirrors the
+        // iter render handler's structure; the substantive difference is
+        // per-cell mutation of settings_passthrough's `scale` entry, in
+        // addition to per-cell marker mutation. Silent no-op outside
+        // BPM mode / warp / loaded audio / committed popup.
+        if (ctrl && alt && !shift &&
+            (keysym == XK_m || keysym == XK_M)) {
+            if (app.active_mode != 'W') return;
+            if (!app.bpm_mode_enabled) return;
+            if (app.source_audio_path.empty()) return;
+            if (audio.sample_rate() <= 0) return;
+            if (audio.total_frames() <= 0) return;
+
+            const std::vector<GuiMarker> base_markers =
+                app.markers.markers();
+            int owner_idx = -1;
+            for (int i = 0; i < static_cast<int>(base_markers.size()); ++i) {
+                if (base_markers[i].bpm_is_popup_owner) {
+                    owner_idx = i;
+                    break;
+                }
+            }
+            if (owner_idx < 0) return;
+            const GuiMarker& owner = base_markers[owner_idx];
+            if (owner.bpm_beats <= 0) return;
+            if (owner.bpm_lo    <= 0) return;
+            if (owner.bpm_hi    <= 0) return;
+
+            // Find the span endpoint: first effectively-enabled marker
+            // after the owner. If none, the span runs to end-of-audio.
+            int endpoint_idx = -1;
+            for (int i = owner_idx + 1;
+                 i < static_cast<int>(base_markers.size()); ++i) {
+                if (effective_disabled(base_markers, i)) continue;
+                endpoint_idx = i;
+                break;
+            }
+            const double audio_total_seconds =
+                static_cast<double>(audio.total_frames()) /
+                static_cast<double>(audio.sample_rate());
+            const double duration_seconds =
+                (endpoint_idx >= 0)
+                    ? (base_markers[endpoint_idx].time_seconds -
+                       owner.time_seconds)
+                    : (audio_total_seconds - owner.time_seconds);
+            if (!(duration_seconds > 0.0)) return;
+
+            std::vector<int> bpm_values;
+            for (int b = owner.bpm_lo; b <= owner.bpm_hi; ++b) {
+                bpm_values.push_back(b);
+            }
+            if (bpm_values.empty()) return;
+
+            std::filesystem::path src(app.source_audio_path);
+            std::filesystem::path src_parent = src.parent_path();
+            if (src_parent.empty()) src_parent = std::filesystem::path(".");
+            const std::filesystem::path queue_root = src_parent / "renders";
+
+            int next_index = 1;
+            std::error_code ec;
+            if (std::filesystem::is_directory(queue_root, ec)) {
+                int max_idx = 0;
+                for (const auto& de :
+                     std::filesystem::directory_iterator(queue_root, ec)) {
+                    if (!de.is_directory()) continue;
+                    const std::string name = de.path().filename().string();
+                    int v = 0;
+                    size_t i = 0;
+                    while (i < name.size() &&
+                           name[i] >= '0' && name[i] <= '9') {
+                        v = v * 10 + (name[i] - '0');
+                        ++i;
+                    }
+                    if (i == 0 || i >= name.size() || name[i] != '_') continue;
+                    if (v > max_idx) max_idx = v;
+                }
+                next_index = max_idx + 1;
+            }
+
+            const std::string command_tag = "render_basetempo";
+            const std::filesystem::path batch_folder =
+                queue_root /
+                (std::to_string(next_index) + "_" + command_tag);
+
+            int pad_width = 1;
+            for (int n = static_cast<int>(bpm_values.size());
+                 n >= 10; n /= 10) ++pad_width;
+            if (pad_width > 9) pad_width = 9;
+
+            const std::vector<GuiTransient> base_transients =
+                app.transients.markers();
+            std::vector<int64_t> base_transient_frames;
+            for (const auto& t : base_transients) {
+                if (t.disabled) continue;
+                base_transient_frames.push_back(t.effective_frame());
+            }
+
+            std::vector<RenderRequest> reqs;
+            reqs.reserve(bpm_values.size());
+            int seq = 1;
+            for (int bpm : bpm_values) {
+                const auto computed = compute_base_tempo_scale(
+                    duration_seconds, owner.bpm_beats, bpm);
+                if (!computed) {
+                    std::fprintf(stderr,
+                        "warptempo_gui: render-basetempo: rejected cell "
+                        "bpm=%d (duration=%.6f, beats=%d)\n",
+                        bpm, duration_seconds, owner.bpm_beats);
+                    continue;
+                }
+
+                std::vector<GuiMarker> cell_markers = base_markers;
+                cell_markers[owner_idx].tempo_base  = computed->base_tempo;
+                cell_markers[owner_idx].tempo_scale.clear();
+
+                std::vector<std::pair<std::string, std::string>>
+                    cell_settings = app.settings_passthrough;
+                char scale_buf[32];
+                std::snprintf(scale_buf, sizeof(scale_buf),
+                              "%.6f", computed->scale);
+                bool found_scale = false;
+                for (auto& kv : cell_settings) {
+                    if (kv.first == "scale") {
+                        kv.second = scale_buf;
+                        found_scale = true;
+                        break;
+                    }
+                }
+                if (!found_scale) {
+                    cell_settings.emplace_back("scale", scale_buf);
+                }
+
+                char num_buf[16];
+                std::snprintf(num_buf, sizeof(num_buf),
+                              "%0*d", pad_width, seq);
+                char rest_buf[96];
+                std::snprintf(rest_buf, sizeof(rest_buf),
+                              "_bpm=%d;basetempo=%.2f;scale=%.6f",
+                              bpm, computed->base_tempo, computed->scale);
+                std::string basename = num_buf;
+                basename += rest_buf;
+
+                RenderRequest req;
+                req.source_audio_path    = app.source_audio_path;
+                req.markers              = std::move(cell_markers);
+                req.transients           = base_transients;
+                req.transient_frames     = base_transient_frames;
+                req.settings_passthrough = std::move(cell_settings);
+                req.batch_folder         = batch_folder.string();
+                req.batch_basename       = std::move(basename);
+                reqs.push_back(std::move(req));
+                ++seq;
+            }
+
+            if (reqs.empty()) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-basetempo: no valid cells; "
+                    "nothing to render\n");
+                return;
+            }
+
+            std::filesystem::create_directories(batch_folder, ec);
+            if (ec) {
+                std::fprintf(stderr,
+                    "warptempo_gui: render-basetempo: could not create "
+                    "'%s': %s\n",
+                    batch_folder.string().c_str(), ec.message().c_str());
+                return;
+            }
+
+            const int total = static_cast<int>(reqs.size());
+            const auto result = run_render_batch(reqs, "basetempo");
+            if (result.cancelled) {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries (cancelled)\n",
+                    result.rendered, total);
+            } else {
+                std::fprintf(stderr,
+                    "warptempo_gui: rendered %d of %d entries into %s\n",
+                    result.rendered, total,
+                    batch_folder.filename().string().c_str());
+            }
+            return;
+        }
+
         // Chunk W: Ctrl+Alt+C commits the displayed render's markers
         // and transients into authoring memory. Single cross-file undo
         // entry; both warp_dirty and transient_dirty are recomputed.
@@ -6789,6 +7025,68 @@ int main(int argc, char** argv) {
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'W', OpKind::Other, hint_last);
             recompute_dirty();
+
+            // Brief X.3: if the displayed render's basename carries a
+            // `scale=<float>` token (BPM-sweep render filenames do; iter
+            // and queue render filenames don't), extract the float and
+            // overwrite (or append) the `scale` entry in
+            // app.settings_passthrough. Settings has no undo by
+            // convention; this mutation is permanent until the next
+            // Ctrl+S overwrites or the user manually edits the file.
+            // Conservative parse: any failure logs and skips, leaving
+            // markers+transients commit unaffected.
+            {
+                const std::string& bn = cur_e.basename;
+                const auto sp = bn.find("scale=");
+                if (sp != std::string::npos) {
+                    const size_t value_start = sp + 6;
+                    size_t value_end = bn.size();
+                    for (size_t i = value_start; i < bn.size(); ++i) {
+                        if (bn[i] == ';') { value_end = i; break; }
+                        if (i + 4 <= bn.size() &&
+                            bn.compare(i, 4, ".wav") == 0) {
+                            value_end = i;
+                            break;
+                        }
+                    }
+                    const std::string val_s =
+                        bn.substr(value_start, value_end - value_start);
+                    double parsed = 0.0;
+                    bool   ok     = false;
+                    if (!val_s.empty()) {
+                        try {
+                            size_t consumed = 0;
+                            parsed = std::stod(val_s, &consumed);
+                            ok = (consumed == val_s.size()) &&
+                                 std::isfinite(parsed);
+                        } catch (...) {
+                            ok = false;
+                        }
+                    }
+                    if (!ok) {
+                        std::fprintf(stderr,
+                            "warptempo_gui: render-view: could not parse "
+                            "scale from basename '%s'; settings unchanged\n",
+                            bn.c_str());
+                    } else {
+                        char fmt_buf[32];
+                        std::snprintf(fmt_buf, sizeof(fmt_buf),
+                                      "%.6f", parsed);
+                        bool found_scale = false;
+                        for (auto& kv : app.settings_passthrough) {
+                            if (kv.first == "scale") {
+                                kv.second = fmt_buf;
+                                found_scale = true;
+                                break;
+                            }
+                        }
+                        if (!found_scale) {
+                            app.settings_passthrough.emplace_back(
+                                "scale", fmt_buf);
+                        }
+                    }
+                }
+            }
 
             const std::filesystem::path src(app.source_audio_path);
             std::filesystem::path src_parent = src.parent_path();
