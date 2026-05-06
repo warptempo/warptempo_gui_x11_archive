@@ -517,3 +517,9 @@ GuiRect union_rect(GuiRect a, GuiRect b);
 // on engine= and transients_enabled= without a typed parser.
 std::string settings_get(const AppState& app, const std::string& key,
                          const std::string& dflt);
+
+// X.7.8a: promoted from a lambda in main(). True iff the bottom strip
+// must paint full-width — when the prompt overlay is active or when a
+// queue progress message is showing. Drives timestamp_invalidate_rect
+// width selection in the redraw path. Pure read against AppState.
+bool bottom_strip_wide(const AppState& app);
