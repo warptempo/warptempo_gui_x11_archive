@@ -8,6 +8,7 @@
 #include "text_display.h"
 #include "text_editor.h"
 #include "transientmarkers.h"
+#include "undo.h"
 #include "viewport.h"
 #include "x11.h"
 
@@ -1019,8 +1020,16 @@ int main(int argc, char** argv) {
     // truthiness check because callbacks are wired after this assignment.
     std::function<void()> recompute_hover_at_cursor;
 
+    // X.7.3: forward-declared so the Undo struct can capture references.
+    // Bodies are assigned later at their original definition sites — same
+    // forward-declare-then-assign pattern as recompute_hover_at_cursor.
+    std::function<void()> clear_hover_popup;
+    std::function<void()> stop_playback_if_playing;
+
     Viewport viewport(app, audio, gui, playback, recompute_hover_at_cursor);
     Selection selection(app, audio, viewport, playback);
+    Undo undo(app, viewport, selection,
+              clear_hover_popup, stop_playback_if_playing);
 
     auto trim_begin_sample           = [&]() { return viewport.trim_begin_sample(); };
     auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
@@ -1984,7 +1993,7 @@ int main(int argc, char** argv) {
 
     // Reset the hover popup state. If the popup was visible, invalidate the
     // top strip so the next paint erases it. Safe to call from any path.
-    auto clear_hover_popup = [&]() {
+    clear_hover_popup = [&]() {
         const bool was_visible = app.hover_popup.visible;
         app.hover_popup = HoverPopupState{};
         if (was_visible) invalidate_top_strip();
@@ -1997,45 +2006,15 @@ int main(int argc, char** argv) {
     auto toggle_selection_membership = [&](int idx) { return selection.toggle_selection_membership(idx); };
 
     // -- Undo/redo helpers --------------------------------------------------
+    //
+    // X.7.3: the undo-cluster lambdas have been hoisted onto the Undo struct
+    // in undo.{cpp,h}. The lambdas below are one-line forwarders so callsites
+    // elsewhere in main() don't need to change. apply_post_restore_rules_warp
+    // and apply_post_restore_rules_transient have no callers outside the
+    // undo cluster, so their forwarders are dropped — they remain public on
+    // the Undo struct for consistency.
 
-    // Mirror history into per-mode dirty flags + the OR'd app.dirty signal.
-    // Walks the entries between the saved baseline and the current cursor
-    // (using saved_distance) and tags each by its op_mode. When saved_valid
-    // is false (history mutated past the saved reference's reach), both
-    // flags become true — we can't disambiguate which list diverged.
-    auto recompute_dirty = [&]() {
-        const auto& h = app.history;
-        if (!h.saved_valid) {
-            app.warp_dirty      = true;
-            app.transient_dirty = true;
-        } else if (h.saved_distance == 0) {
-            app.warp_dirty      = false;
-            app.transient_dirty = false;
-        } else if (h.saved_distance < 0) {
-            // Saved is `n` undos behind the current cursor. The last n
-            // entries of undo_stack moved us from saved baseline to current.
-            app.warp_dirty      = false;
-            app.transient_dirty = false;
-            const int n  = -h.saved_distance;
-            const int us = static_cast<int>(h.undo_stack.size());
-            for (int i = std::max(0, us - n); i < us; ++i) {
-                if (h.undo_stack[i].op_mode == 'T') app.transient_dirty = true;
-                else                                app.warp_dirty      = true;
-            }
-        } else {
-            // Saved is `n` redos ahead. The top n entries of redo_stack
-            // would, if redone, take us back to the saved state.
-            app.warp_dirty      = false;
-            app.transient_dirty = false;
-            const int n  = h.saved_distance;
-            const int rs = static_cast<int>(h.redo_stack.size());
-            for (int i = std::max(0, rs - n); i < rs; ++i) {
-                if (h.redo_stack[i].op_mode == 'T') app.transient_dirty = true;
-                else                                app.warp_dirty      = true;
-            }
-        }
-        app.dirty = app.warp_dirty || app.transient_dirty;
-    };
+    auto recompute_dirty = [&]() { undo.recompute_dirty(); };
 
     // Look up a key in app.settings_passthrough, returning its value or
     // the default if the key isn't present. Used by `t`-mode entry to
@@ -2049,54 +2028,21 @@ int main(int argc, char** argv) {
         return dflt;
     };
 
-    auto sanitize_selection_after_restore = [&](int n) { selection.sanitize_selection_after_restore(n); };
-
-    // Push the pre-mutation entry onto the undo stack. Every warp-mode
-    // mutation site calls this at the point the mutation is confirmed to
-    // land. Caller passes the warp pre-state + op kind + last-selected
-    // hint; the transient pre-state is captured here from the live
-    // AppState (warp ops don't touch transients, so post-mutation ==
-    // pre-mutation for that list).
     auto push_undo = [&](std::vector<GuiWarpMarker> pre_state, OpKind op_kind,
                          int hint_last) {
-        UndoEntry e;
-        e.snapshot           = std::move(pre_state);
-        e.transient_snapshot = app.transients.markers();
-        e.op_kind            = op_kind;
-        e.op_mode            = 'W';
-        e.hint_last_selected = hint_last;
-        app.history.push(std::move(e));
-        clear_hover_popup();
+        undo.push_undo(std::move(pre_state), op_kind, hint_last);
     };
 
-    // Transient counterpart. Symmetric: caller passes the transient pre-
-    // state; warp pre-state is captured from live AppState (transient ops
-    // don't touch warp markers).
     auto push_undo_transient = [&](std::vector<GuiTransientMarker> pre_state,
                                    OpKind op_kind, int hint_last) {
-        UndoEntry e;
-        e.snapshot           = app.markers.markers();
-        e.transient_snapshot = std::move(pre_state);
-        e.op_kind            = op_kind;
-        e.op_mode            = 'T';
-        e.hint_last_selected = hint_last;
-        app.history.push(std::move(e));
-        clear_hover_popup();
+        undo.push_undo_transient(std::move(pre_state), op_kind, hint_last);
     };
 
-    // Cross-file undo: both pre-states explicit. Used by the b/e toggle
-    // helpers, which may mutate either or both lists in a single op.
     auto push_undo_both = [&](std::vector<GuiWarpMarker> warp_pre,
                               std::vector<GuiTransientMarker> trans_pre,
                               char op_mode, OpKind op_kind, int hint_last) {
-        UndoEntry e;
-        e.snapshot           = std::move(warp_pre);
-        e.transient_snapshot = std::move(trans_pre);
-        e.op_kind            = op_kind;
-        e.op_mode            = op_mode;
-        e.hint_last_selected = hint_last;
-        app.history.push(std::move(e));
-        clear_hover_popup();
+        undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
+                            op_mode, op_kind, hint_last);
     };
 
     // -- V.A1 top-flag editor helpers ---------------------------------------
@@ -2688,254 +2634,21 @@ int main(int argc, char** argv) {
 
     auto sync_playhead_to_last_selected = [&]() { selection.sync_playhead_to_last_selected(); };
 
-    // Apply post-restore selection and playhead rules per the chunk L
-    // patch 1 spec. Called after the marker vector has been restored to
-    // `entry.snapshot` and before sanitize_selection_after_restore.
-    // `before` is the marker vector that was current pre-restoration.
-    //
-    // Net direction is derived from vector-size change and op_kind:
-    //   - size grew   → "creating" — select re-created set, jump playhead.
-    //   - size shrank → "destroying" — clear selection, leave playhead.
-    //   - size same, Move → "moving" — select moved set, jump playhead.
-    //   - otherwise → "other" — selection and playhead untouched.
-    //
-    // Viewport recenters on the new playhead only if it would be offscreen
-    // after the jump; the `c`-key centering math is reused.
-    auto apply_post_restore_rules_warp = [&](const UndoEntry& entry,
-                                             const std::vector<GuiWarpMarker>& before) {
-        const auto& after = app.markers.markers();
-        constexpr double kEps = 1e-9;
-
-        std::set<int> target_set;
-        bool want_playhead_jump = false;
-
-        if (after.size() > before.size()) {
-            std::vector<double> before_times;
-            before_times.reserve(before.size());
-            for (const auto& m : before) before_times.push_back(m.time_seconds);
-            std::sort(before_times.begin(), before_times.end());
-            for (size_t i = 0; i < after.size(); ++i) {
-                const double t = after[i].time_seconds;
-                auto it = std::lower_bound(before_times.begin(),
-                                           before_times.end(), t - kEps);
-                const bool matched = (it != before_times.end() &&
-                                      std::abs(*it - t) < kEps);
-                if (!matched) target_set.insert(static_cast<int>(i));
-            }
-            want_playhead_jump = !target_set.empty();
-        } else if (after.size() < before.size()) {
-            app.selected_markers.clear();
-            app.last_selected_marker = -1;
-            return;
-        } else if (entry.op_kind == OpKind::Move) {
-            for (size_t i = 0; i < after.size(); ++i) {
-                if (std::abs(after[i].time_seconds -
-                             before[i].time_seconds) > kEps) {
-                    target_set.insert(static_cast<int>(i));
-                }
-            }
-            want_playhead_jump = !target_set.empty();
-        } else {
-            return;
-        }
-
-        if (target_set.empty()) return;
-
-        app.selected_markers = target_set;
-        if (target_set.count(entry.hint_last_selected)) {
-            app.last_selected_marker = entry.hint_last_selected;
-        } else {
-            app.last_selected_marker = *target_set.rbegin();
-        }
-
-        if (!want_playhead_jump) return;
-        sync_playhead_to_last_selected();
-    };
-
-    // Transient counterpart to apply_post_restore_rules_warp. Same shape:
-    // size grew → select created (jump playhead), size shrank → clear
-    // selection, equal size + Move → select moved (jump). `before` is the
-    // transient vector pre-restoration; `after` is taken live from
-    // app.transients.
-    auto apply_post_restore_rules_transient = [&](const UndoEntry& entry,
-                                                  const std::vector<GuiTransientMarker>& before) {
-        const auto& after = app.transients.markers();
-
-        std::set<int> target_set;
-        bool want_playhead_jump = false;
-
-        if (after.size() > before.size()) {
-            std::set<int64_t> before_frames;
-            for (const auto& m : before) before_frames.insert(m.effective_frame());
-            for (size_t i = 0; i < after.size(); ++i) {
-                if (!before_frames.count(after[i].effective_frame())) {
-                    target_set.insert(static_cast<int>(i));
-                }
-            }
-            want_playhead_jump = !target_set.empty();
-        } else if (after.size() < before.size()) {
-            app.selected_markers.clear();
-            app.last_selected_marker = -1;
-            return;
-        } else if (entry.op_kind == OpKind::Move) {
-            for (size_t i = 0; i < after.size(); ++i) {
-                if (after[i].effective_frame() != before[i].effective_frame()) {
-                    target_set.insert(static_cast<int>(i));
-                }
-            }
-            want_playhead_jump = !target_set.empty();
-        } else {
-            return;
-        }
-
-        if (target_set.empty()) return;
-
-        app.selected_markers = target_set;
-        if (target_set.count(entry.hint_last_selected)) {
-            app.last_selected_marker = entry.hint_last_selected;
-        } else {
-            app.last_selected_marker = *target_set.rbegin();
-        }
-
-        if (!want_playhead_jump) return;
-        sync_playhead_to_last_selected();
-    };
-
     // Gesture-stop: called at the top of any handler that will move the
     // visible playhead (keys, button press, Ctrl+wheel, undo/redo, tab
     // switch). Stops the audio thread and keeps the LSP in sync with the
     // visible playhead so the next Space-to-play captures the right
     // launch position. Does NOT return-to-launch — the gesture is about
     // to commit a new playhead position.
-    auto stop_playback_if_playing = [&]() {
+    stop_playback_if_playing = [&]() {
         if (!playback.is_playing() && !app.is_playing) return;
         playback.stop();
         app.is_playing        = false;
         app.last_space_sample = app.playhead_sample;
     };
 
-    // Ctrl+Z. Silent no-op on empty stack. Restores the top undo entry;
-    // current state (tagged with the popped entry's op kind + hint + mode)
-    // is pushed onto redo so the op's direction is reversible. Both lists
-    // are restored — entries always carry both snapshots so the inverse
-    // is symmetric. If the entry's op_mode differs from the active mode,
-    // active_mode flips to it as a side effect (visual feedback for what
-    // the user just undid).
-    auto do_undo = [&]() {
-        if (app.history.undo_stack.empty()) return;
-        stop_playback_if_playing();
-        clear_hover_popup();
-        UndoEntry entry = std::move(app.history.undo_stack.back());
-        app.history.undo_stack.pop_back();
-
-        UndoEntry redo_entry;
-        redo_entry.snapshot           = app.markers.markers();
-        redo_entry.transient_snapshot = app.transients.markers();
-        redo_entry.op_kind            = entry.op_kind;
-        redo_entry.op_mode            = entry.op_mode;
-        redo_entry.hint_last_selected = entry.hint_last_selected;
-        std::vector<GuiWarpMarker>    before_w = redo_entry.snapshot;
-        std::vector<GuiTransientMarker> before_t = redo_entry.transient_snapshot;
-
-        app.history.redo_stack.push_back(std::move(redo_entry));
-        if (app.history.redo_stack.size() > UndoHistory::kCap) {
-            app.history.redo_stack.erase(app.history.redo_stack.begin());
-        }
-        if (app.history.saved_valid) app.history.saved_distance += 1;
-
-        app.markers.markers_mut()    = std::move(entry.snapshot);
-        app.transients.markers_mut() = std::move(entry.transient_snapshot);
-
-        // Switch active mode to match the op being undone before applying
-        // post-restore rules — selection state is mode-bound, so the rules
-        // and the sanitize step must run against the correct list.
-        if (entry.op_mode != app.active_mode) {
-            // Stash the current selection into the leaving mode's slot,
-            // then restore the destination mode's slot.
-            ViewState& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
-            if (app.active_mode == 'T') {
-                curtab.transient_selected      = app.selected_markers;
-                curtab.transient_last_selected = app.last_selected_marker;
-                app.selected_markers           = curtab.warp_selected;
-                app.last_selected_marker       = curtab.warp_last_selected;
-            } else {
-                curtab.warp_selected           = app.selected_markers;
-                curtab.warp_last_selected      = app.last_selected_marker;
-                app.selected_markers           = curtab.transient_selected;
-                app.last_selected_marker       = curtab.transient_last_selected;
-            }
-            app.active_mode = entry.op_mode;
-        }
-
-        if (entry.op_mode == 'T') {
-            apply_post_restore_rules_transient(entry, before_t);
-            sanitize_selection_after_restore(
-                static_cast<int>(app.transients.markers().size()));
-        } else {
-            apply_post_restore_rules_warp(entry, before_w);
-            sanitize_selection_after_restore(
-                static_cast<int>(app.markers.markers().size()));
-        }
-        recompute_dirty();
-        invalidate_waveform_area();
-        invalidate_timestamp_area();
-    };
-
-    // Ctrl+Shift+Z. Mirror of do_undo. Silent no-op on empty redo stack.
-    auto do_redo = [&]() {
-        if (app.history.redo_stack.empty()) return;
-        stop_playback_if_playing();
-        clear_hover_popup();
-        UndoEntry entry = std::move(app.history.redo_stack.back());
-        app.history.redo_stack.pop_back();
-
-        UndoEntry undo_entry;
-        undo_entry.snapshot           = app.markers.markers();
-        undo_entry.transient_snapshot = app.transients.markers();
-        undo_entry.op_kind            = entry.op_kind;
-        undo_entry.op_mode            = entry.op_mode;
-        undo_entry.hint_last_selected = entry.hint_last_selected;
-        std::vector<GuiWarpMarker>    before_w = undo_entry.snapshot;
-        std::vector<GuiTransientMarker> before_t = undo_entry.transient_snapshot;
-
-        app.history.undo_stack.push_back(std::move(undo_entry));
-        if (app.history.undo_stack.size() > UndoHistory::kCap) {
-            app.history.undo_stack.erase(app.history.undo_stack.begin());
-        }
-        if (app.history.saved_valid) app.history.saved_distance -= 1;
-
-        app.markers.markers_mut()    = std::move(entry.snapshot);
-        app.transients.markers_mut() = std::move(entry.transient_snapshot);
-
-        if (entry.op_mode != app.active_mode) {
-            ViewState& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
-            if (app.active_mode == 'T') {
-                curtab.transient_selected      = app.selected_markers;
-                curtab.transient_last_selected = app.last_selected_marker;
-                app.selected_markers           = curtab.warp_selected;
-                app.last_selected_marker       = curtab.warp_last_selected;
-            } else {
-                curtab.warp_selected           = app.selected_markers;
-                curtab.warp_last_selected      = app.last_selected_marker;
-                app.selected_markers           = curtab.transient_selected;
-                app.last_selected_marker       = curtab.transient_last_selected;
-            }
-            app.active_mode = entry.op_mode;
-        }
-
-        if (entry.op_mode == 'T') {
-            apply_post_restore_rules_transient(entry, before_t);
-            sanitize_selection_after_restore(
-                static_cast<int>(app.transients.markers().size()));
-        } else {
-            apply_post_restore_rules_warp(entry, before_w);
-            sanitize_selection_after_restore(
-                static_cast<int>(app.markers.markers().size()));
-        }
-        recompute_dirty();
-        invalidate_waveform_area();
-        invalidate_timestamp_area();
-    };
+    auto do_undo = [&]() { undo.do_undo(); };
+    auto do_redo = [&]() { undo.do_redo(); };
 
     // Tab / Shift+Tab: cycle through markers. Rules per spec:
     //   0 or 1 selected: cycle through all markers.
