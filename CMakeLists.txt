@@ -30,6 +30,7 @@ add_executable(warptempo_gui
     src/gui/render_pipeline.cpp
     src/gui/timemap.cpp
     src/gui/viewport.cpp
+    src/gui/selection.cpp
     src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
     src/engine/transients.cpp
