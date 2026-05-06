@@ -1,4 +1,4 @@
-#include "transients.h"
+#include "transientmarkers_ops.h"
 
 #include "audio.h"
 #include "render_pipeline.h"
@@ -36,7 +36,7 @@
 // transient list does not yet carry a frame-0 entry after insertion,
 // a silent companion at frame 0 is inserted alongside (frame-0
 // invariant: phase reset at render start is always correct).
-void Transients::drop_transient_at_position(double time_seconds) {
+void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
     const int64_t frame = static_cast<int64_t>(std::llround(
@@ -69,7 +69,7 @@ void Transients::drop_transient_at_position(double time_seconds) {
     viewport.move_playhead_to(frame);
 }
 
-void Transients::drop_transient_at_playhead() {
+void GuiTransientMarkersOps::drop_transient_at_playhead() {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
     const double t = static_cast<double>(app.playhead_sample) /
@@ -81,7 +81,7 @@ void Transients::drop_transient_at_playhead() {
 // don't have labels. Mirrors warp's time-0 protection: the frame-0
 // entry is the transient list's anchor (phase-reset invariant) and
 // cannot be removed.
-void Transients::delete_selected_transient() {
+void GuiTransientMarkersOps::delete_selected_transient() {
     if (app.selected_markers.empty()) return;
     const auto& tv = app.transientmarkers.markers();
     for (int idx : app.selected_markers) {
@@ -115,7 +115,7 @@ void Transients::delete_selected_transient() {
 
 // Toggle the disabled flag on each selected transient. Unconditional —
 // transients have no label-def gating like warp markers do.
-void Transients::toggle_transient_disabled() {
+void GuiTransientMarkersOps::toggle_transient_disabled() {
     if (app.selected_markers.empty()) return;
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
@@ -139,7 +139,7 @@ void Transients::toggle_transient_disabled() {
 // Operates on effective_frame (the visible position) — for a
 // D-with-displacement entry, that's displaced_frame.
 // No trim clamp — transients aren't bounded by trim flags during edit.
-std::pair<int64_t, int64_t> Transients::compute_transient_delta_bounds(bool& ok) {
+std::pair<int64_t, int64_t> GuiTransientMarkersOps::compute_transient_delta_bounds(bool& ok) {
     ok = false;
     const auto& tv = app.transientmarkers.markers();
     if (app.selected_markers.empty()) return {0, 0};
@@ -171,7 +171,7 @@ std::pair<int64_t, int64_t> Transients::compute_transient_delta_bounds(bool& ok)
 
 // Nudge selected transients by +/- 1 source-pixel. Direction: -1 for
 // earlier, +1 for later. Symmetric with nudge_selected_markers.
-void Transients::nudge_selected_transients(int direction) {
+void GuiTransientMarkersOps::nudge_selected_transients(int direction) {
     if (app.loading || audio.total_frames() <= 0) return;
     stop_playback_if_playing();
     if (app.selected_markers.empty()) return;
@@ -205,7 +205,7 @@ void Transients::nudge_selected_transients(int direction) {
 
 // `j` for transient mode: shift the selection so last_selected lands
 // on the playhead. All-or-nothing clamp check.
-void Transients::jump_transient_selection_to_playhead() {
+void GuiTransientMarkersOps::jump_transient_selection_to_playhead() {
     if (app.selected_markers.empty()) return;
     if (app.last_selected_marker < 0) return;
     const auto& tv = app.transientmarkers.markers();
@@ -239,7 +239,7 @@ void Transients::jump_transient_selection_to_playhead() {
 // version's toggle / auto-replace / equal-frame refusal and likewise
 // resolves cross-file: an existing b= on the warp side is cleared, and
 // a swap target on the warp side is honored.
-void Transients::toggle_transient_begin_time() {
+void GuiTransientMarkersOps::toggle_transient_begin_time() {
     if (app.selected_markers.size() != 1) return;
     const int idx = app.last_selected_marker;
     if (idx < 0) return;
@@ -301,7 +301,7 @@ void Transients::toggle_transient_begin_time() {
     viewport.invalidate_timestamp_area();
 }
 
-void Transients::toggle_transient_end_time() {
+void GuiTransientMarkersOps::toggle_transient_end_time() {
     if (app.selected_markers.size() != 1) return;
     const int idx = app.last_selected_marker;
     if (idx < 0) return;
@@ -370,7 +370,7 @@ void Transients::toggle_transient_end_time() {
 // whose src_frame the new detector no longer places are dropped. The
 // merged list is sorted by effective_frame() and the frame-0 invariant
 // is restored. Does NOT push undo — detection is destructive by spec.
-void Transients::merge_detection(const std::vector<int64_t>& fresh_src_frames) {
+void GuiTransientMarkersOps::merge_detection(const std::vector<int64_t>& fresh_src_frames) {
     std::map<int64_t, GuiTransientMarker> old_d_by_src;
     std::vector<GuiTransientMarker> old_i;
     for (const auto& m : app.transientmarkers.markers()) {
@@ -415,7 +415,7 @@ void Transients::merge_detection(const std::vector<int64_t>& fresh_src_frames) {
 // file is the authoritative record. The transient_dirty bit is reset
 // explicitly: the merge mutated app.transientmarkers but no UndoEntry was
 // pushed, so the post-merge state is the one we want to call "saved".
-void Transients::run_detect_now() {
+void GuiTransientMarkersOps::run_detect_now() {
     if (app.source_audio_path.empty())   return;
     if (audio.total_frames() <= 0)       return;
 
@@ -466,7 +466,7 @@ void Transients::run_detect_now() {
 // Ctrl+Alt+T entry point. Confirms before clobbering an existing
 // detection (any D entry in the list). With no prior detection (only
 // I entries or the auto frame-0 head), runs immediately.
-void Transients::detect_transients() {
+void GuiTransientMarkersOps::detect_transients() {
     if (app.prompt.active)             return;
     if (app.source_audio_path.empty()) return;
     if (audio.total_frames() <= 0)     return;
@@ -488,7 +488,7 @@ void Transients::detect_transients() {
 // it on the next read of an empty file (which is itself the empty
 // list, since save() removes the file when empty). The undo restores
 // the full pre-clear state.
-void Transients::clear_all_transients() {
+void GuiTransientMarkersOps::clear_all_transients() {
     if (app.transientmarkers.markers().empty()) return;
 
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();

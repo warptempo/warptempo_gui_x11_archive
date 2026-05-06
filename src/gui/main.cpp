@@ -8,7 +8,7 @@
 #include "text_display.h"
 #include "text_editor.h"
 #include "transientmarkers.h"
-#include "transients.h"
+#include "transientmarkers_ops.h"
 #include "undo.h"
 #include "viewport.h"
 #include "x11.h"
@@ -1062,9 +1062,9 @@ int main(int argc, char** argv) {
     Selection selection(app, audio, viewport, playback);
     Undo undo(app, viewport, selection,
               clear_hover_popup, stop_playback_if_playing);
-    Transients transients(app, audio, viewport, selection, undo,
-                          clear_hover_popup, stop_playback_if_playing,
-                          find_flag, open_prompt_detect_confirm);
+    GuiTransientMarkersOps transients(app, audio, viewport, selection, undo,
+                                      clear_hover_popup, stop_playback_if_playing,
+                                      find_flag, open_prompt_detect_confirm);
 
     auto trim_begin_sample           = [&]() { return viewport.trim_begin_sample(); };
     auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
