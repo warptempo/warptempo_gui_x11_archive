@@ -1,3 +1,4 @@
+#include "app_state.h"
 #include "audio.h"
 #include "warpmarkers.h"
 #include "playback.h"
@@ -6,6 +7,7 @@
 #include "text_display.h"
 #include "text_editor.h"
 #include "transientmarkers.h"
+#include "viewport.h"
 #include "x11.h"
 
 #include <cairo/cairo.h>
@@ -60,15 +62,14 @@ constexpr int kDoubleClickPixels  = 5;
 constexpr int kHoverDelayMs       = 500;
 
 // ms-per-pixel for each numeric zoom level. Level 0 is most zoomed in.
+// kNumZoomLevels (in app_state.h) is the count of entries here; the
+// static_assert below pins them together so the table can't drift.
 constexpr double kZoomMsPerPixel[] = {
     1.25, 2.6, 5.2, 10.4, 20.8, 41.7, 83.3, 166.7
 };
-constexpr int kNumZoomLevels = static_cast<int>(
-    sizeof(kZoomMsPerPixel) / sizeof(kZoomMsPerPixel[0]));
-
-// Sentinel for the fit-file level ("whole file visible"). Computed at zoom /
-// resize time, not stored as a fixed ms/pixel.
-constexpr int kFitFileLevel = kNumZoomLevels;
+static_assert(sizeof(kZoomMsPerPixel) / sizeof(kZoomMsPerPixel[0])
+              == static_cast<size_t>(kNumZoomLevels),
+              "kZoomMsPerPixel size must match kNumZoomLevels");
 
 // Timestamp text layout (bottom-left of the status strip).
 constexpr int kTimestampPadX              = 8;
@@ -500,202 +501,10 @@ inline std::string compute_hover_popup_text(
     return "";
 }
 
-// Classification of each undo entry by the net effect of its op on the
-// marker vector. Used by post-restore rules to decide selection and
-// playhead behavior; count-preserving ops split Move vs Other so Move can
-// restore the "what just moved" selection.
-enum class OpKind { Create, Destroy, Move, Other };
+// OpKind, UndoEntry, DragState, UndoHistory, PlayheadDragState,
+// HoverPopupState, DialogTrigger, PromptState, ViewState, AppState live in
+// app_state.h (extracted in brief X.7.1 alongside the Viewport struct).
 
-// One entry on either stack. Carries the pre-mutation marker snapshot plus
-// a pre-op selection hint (so Undo-of-Destroy / Undo-of-Move can restore
-// a sensible selection anchor) and the op kind.
-//
-// Chunk S.2.2: every entry now also carries the pre-mutation transient
-// snapshot and the mode the operation was performed in. Both lists are
-// always restored on undo/redo so the inverse is symmetric regardless of
-// which list the op actually touched. `op_mode` lets undo flip the active
-// mode as a side effect — visual feedback for what's being undone.
-struct UndoEntry {
-    std::vector<GuiWarpMarker>    snapshot;
-    std::vector<GuiTransientMarker> transient_snapshot;
-    char                      op_mode              = 'W';
-    OpKind                    op_kind              = OpKind::Other;
-    int                       hint_last_selected   = -1;
-};
-
-// Ctrl+drag state. `active` gates motion handling; the rest captures the
-// pre-drag snapshot so Escape can restore positions and clamps can be
-// evaluated without re-scanning the marker list on every motion event.
-//
-// Storing per-marker (min_allowed, max_allowed) as the spec suggests works
-// for a contiguous drag set, but a non-contiguous set (e.g. indices 2 and
-// 5 selected, 3 and 4 not) can be bounded more tightly by the nearest
-// non-selected neighbors of every dragged marker. We precompute a single
-// scalar `delta_min` / `delta_max` that's correct for both cases: the delta
-// is applied uniformly, so its feasible range is the intersection of per-
-// marker per-neighbor bounds. Trim is purely cosmetic and does not
-// constrain edits.
-struct DragState {
-    bool                active = false;
-    std::vector<int>    dragging_markers;   // sorted ascending
-    std::vector<double> original_times;     // parallel to dragging_markers
-    double              anchor_mouse_time_seconds = 0.0;
-    double              delta_min = -std::numeric_limits<double>::infinity();
-    double              delta_max =  std::numeric_limits<double>::infinity();
-    bool                moved = false;
-    // Full pre-drag marker state. Captured at button-press so commit_drag
-    // can push it onto the undo stack when motion landed; discarded on
-    // commit when no motion occurred (DragState is reset wholesale there).
-    std::vector<GuiWarpMarker>    pre_drag_snapshot;
-    std::vector<GuiTransientMarker> pre_drag_transient_snapshot;
-    // Pre-drag last_selected for the undo hint; carried onto the entry at commit.
-    int                    pre_drag_last_selected = -1;
-    // Index of the marker that was clicked to start the drag. Used to track
-    // the playhead during motion so the audio cursor follows the grabbed
-    // marker as it moves.
-    int                    hit_marker           = -1;
-    // True when begin_drag found the hit marker outside the current
-    // selection. The selection-collapse-to-{hit} mutation is deferred until
-    // motion is actually observed, so a Ctrl+click without drag leaves the
-    // selection untouched. Cleared on the first moved transition.
-    bool                   pending_collapse_to_hit = false;
-    // Which list this drag operates on (chunk S.2.2). The motion / commit
-    // handlers dispatch on this so a drag started in transient mode
-    // mutates the transient list.
-    char                   drag_mode = 'W';
-};
-
-// Two-stack undo/redo history for marker mutations. Entries are full
-// snapshots of the marker vector plus an op-kind tag and pre-op selection
-// hint — small enough to store directly rather than diff. Both stacks are
-// capped at kCap; the oldest undo entry is evicted when the cap is exceeded.
-//
-// The saved reference is a signed distance from the current position to the
-// snapshot corresponding to what's on disk. Positive = ahead on the redo
-// stack; negative = behind on the undo stack; 0 = at current. `saved_valid`
-// tracks whether the saved reference is still reachable: a new mutation
-// that clears the redo stack while saved was ahead orphans it (saved_valid
-// becomes false), and dirty stays true until the next save rebinds it.
-struct UndoHistory {
-    static constexpr size_t kCap = 500;
-    std::vector<UndoEntry> undo_stack;
-    std::vector<UndoEntry> redo_stack;
-    int  saved_distance = 0;
-    bool saved_valid    = true;
-
-    bool is_dirty() const {
-        return !(saved_valid && saved_distance == 0);
-    }
-
-    // Push the pre-mutation entry. Clears the redo stack. If the saved
-    // reference was on the redo stack, it's orphaned (saved_valid = false).
-    // If pushing would evict the bottom of the undo stack and the saved
-    // reference pointed at or below the evicted entry, it's pinned to the
-    // new bottom — per Part 5 of the chunk brief, that's the least-
-    // surprising user-facing behavior even though it's not strictly correct.
-    void push(UndoEntry entry) {
-        if (saved_valid && saved_distance > 0) saved_valid = false;
-        redo_stack.clear();
-        if (saved_valid) saved_distance -= 1;
-        undo_stack.push_back(std::move(entry));
-        if (undo_stack.size() > kCap) {
-            undo_stack.erase(undo_stack.begin());
-            if (saved_valid &&
-                saved_distance < -static_cast<int>(undo_stack.size())) {
-                saved_distance = -static_cast<int>(undo_stack.size());
-            }
-        }
-    }
-
-    void mark_saved() {
-        saved_distance = 0;
-        saved_valid    = true;
-    }
-
-    void reset() {
-        undo_stack.clear();
-        redo_stack.clear();
-        saved_distance = 0;
-        saved_valid    = true;
-    }
-};
-
-// State for the plain/Shift left-button playhead-drag gesture. The drag
-// only positions the playhead (with a 3px snap-to-marker magnet); selection
-// is set at press time and never mutated by motion. The gesture ends on
-// release (or on Escape, which ends at current position).
-struct PlayheadDragState {
-    bool active = false;
-};
-
-// V.A3b hover popup state. A popup-eligible warp marker (pass marker or
-// label_ref) under the cursor for kHoverDelayMs becomes a tooltip showing
-// the resolved tempo. The motion handler sets `marker_index` + `entry_time`
-// when the cursor first lands on an eligible rect; the tick handler flips
-// `visible` when the dwell threshold is crossed; mutation paths /
-// dismiss conditions clear the whole struct.
-//
-// `cached_text` is the popup's content string, computed on rect-entry
-// (when the dwell timer starts) and rendered at delay-completion.
-// Precomputing during the otherwise-idle delay window hides the
-// label_ref math (def lookup, frame-distance ratio) behind time the
-// user is already waiting through, so the popup-show frame doesn't
-// stutter. Discarded with the rest of the struct on rect-exit.
-struct HoverPopupState {
-    int         marker_index = -1;
-    bool        visible      = false;
-    std::string cached_text;
-    std::chrono::steady_clock::time_point entry_time{};
-};
-
-// What action triggered the modal prompt; the activate-response dispatch
-// switches on this together with the response key. Save/Discard/Cancel
-// applies to the unsaved-work prompts (CLOSE_WINDOW, REVERT_TO_BLANK);
-// Detect/Cancel applies to the re-detect confirmation (DETECT_TRANSIENTS).
-enum class DialogTrigger {
-    CLOSE_WINDOW,
-    REVERT_TO_BLANK,
-    DETECT_TRANSIENTS,
-};
-
-// In-window modal prompt state. When `active` is true, the bottom strip
-// overlays the prompt's text and response options in place of the
-// timestamp / tab letter / dirty indicator / render-view filename.
-// Input is owned by the prompt: only the response keys (and Esc, which
-// activates the rightmost response) do anything; everything else is
-// swallowed. `response_keys` holds lowercase letters; the activator
-// lowercases incoming keypresses before comparing.
-struct PromptState {
-    bool                     active = false;
-    std::string              text;
-    std::vector<char>        response_keys;     // lowercase
-    std::vector<std::string> response_labels;   // e.g. "[S]ave"
-    DialogTrigger            trigger = DialogTrigger::CLOSE_WINDOW;
-};
-
-// Navigational bookmark. Holds a snapshot of the three fields that define
-// what the user sees and where playback would start. Not in the undo domain.
-//
-// Chunk S.2.2: each tab also carries per-mode selection slots so switching
-// tabs (Ctrl+Tab) and switching modes (`t`) both restore the right
-// selection set for the destination cell. The active selection lives in
-// AppState; these slots are the persistent snapshots.
-//
-// Brief J.1: the same struct is reused by RenderViewEntry::state to carry
-// per-render persisted view-state across render-view exit/enter and
-// batch-nav. Render-view entries leave the viewport/zoom/playhead fields
-// at default in J.1 (those still flow through the live AppState fields
-// and the .rendersettings sidecar; J.2 will reroute them through `state`).
-struct ViewState {
-    int64_t viewport_start_sample = 0;
-    int     zoom_level            = 0;
-    int64_t playhead_sample       = 0;
-
-    std::set<int> warp_selected;
-    int           warp_last_selected      = -1;
-    std::set<int> transient_selected;
-    int           transient_last_selected = -1;
-};
 
 // Parsed contents of .settings, separated into tab-handled keys (typed with
 // presence flags so defaults can be applied per key) and the pass-through
@@ -716,258 +525,6 @@ struct ParsedSettings {
     bool    has_follow     = false;
     bool    follow         = true;
     std::vector<std::pair<std::string, std::string>> passthrough;
-};
-
-struct AppState {
-    int     width                 = 1400;
-    int     height                = 800;
-    bool    loading               = false;
-    float   load_progress         = 0.0f;
-
-    int64_t playhead_sample       = 0;
-    int     zoom_level            = 0;
-    int64_t viewport_start_sample = 0;
-    bool    follow_mode           = true;
-
-    // Playback state. `playback_cursor` is the last sample read from the
-    // audio thread; `is_playing` mirrors the audio thread's flag so the
-    // main loop can detect natural end-of-playback. `playback_speed` is
-    // authoritative on the main thread and pushed to the playback engine
-    // on every change.
-    int64_t playback_cursor = 0;
-    bool    is_playing      = false;
-    float   playback_speed  = 1.0f;
-
-    // "Last-Space playhead": the sample where Space-to-play was last
-    // pressed. Space-to-stop (and natural end) restore `playhead_sample`
-    // to this value — return-to-launch. Only differs from `playhead_sample`
-    // while Space-initiated playback is active; otherwise tracks it.
-    int64_t last_space_sample = 0;
-
-    // Companion files discovered alongside the loaded audio. Chunk E just
-    // records these; later chunks will parse their contents.
-    std::string warpmarkers_path;
-    std::string settings_path;
-    // Sibling `.transientmarkers` path. Computed at file load. Empty when
-    // no audio is loaded.
-    std::string transientmarkers_path;
-
-    // Absolute or relative path of the currently loaded audio file. Used by
-    // the chunk-Q render hotkey stub to compute the output path. Empty when
-    // no file is loaded (blank state).
-    std::string source_audio_path;
-
-    // Parsed warp markers for the currently loaded audio. Empty on load
-    // failure or before the first audio load.
-    GuiWarpMarkers  markers;
-
-    // Parsed transient markers (chunk S.2.2). Authored by the GUI but not
-    // yet consumed by the render pipeline (S.3 will wire that up).
-    GuiTransientMarkers transients;
-
-    // Multi-selection set + focus. `last_selected_marker` is either -1 or
-    // a member of `selected_markers`; keyed operations (Tab cycling, `j`)
-    // anchor on it.
-    //
-    // Chunk S.2.2: this pair holds the *active* selection — i.e. for the
-    // current tab + current `active_mode`. The persistent per-tab per-mode
-    // slots live on ViewState and are saved/restored on mode/tab transitions.
-    std::set<int> selected_markers;
-    int           last_selected_marker = -1;
-
-    // Active editing mode: 'W' = warp markers, 'T' = transient markers
-    // (chunk S.2.2). Toggled by `t`. Determines which list is visible /
-    // edited / hit-tested and which color set is used for the playhead
-    // and selected indicators.
-    char active_mode = 'W';
-
-    // Ctrl+drag state. Not reset across file loads — explicitly cleared
-    // there and on button release / Escape.
-    DragState     drag;
-
-    // Playhead drag state (plain / Shift left-button). Cleared on button
-    // release, Escape, and file load.
-    PlayheadDragState playhead_drag;
-
-    // V.A3b hover-popup state. See HoverPopupState above.
-    HoverPopupState   hover_popup;
-
-    // V.A3b Addendum 3: cursor screen position from the last on_motion
-    // event. Used by recompute_hover_at_cursor() to re-evaluate hover
-    // after a viewport mutation (when the cursor is stationary but rects
-    // have shifted). -1 means "no motion seen yet".
-    int               last_mouse_x = -1;
-    int               last_mouse_y = -1;
-
-    // Undo/redo history for marker mutations. `dirty` below becomes a
-    // derived signal: dirty = history.is_dirty(). Save/load reshape the
-    // saved reference rather than touching dirty directly.
-    UndoHistory history;
-
-    // True if the marker list has been modified since load or last save.
-    // Derived from `history`: mirrors history.is_dirty() after every op.
-    //
-    // Chunk S.2.2 splits dirty into two per-file flags so save can pick
-    // each file independently and the unsaved-work dialog can be triggered
-    // by either. `dirty` becomes the OR of both. The undo system continues
-    // to drive both flags through history; per-mode dirty is recomputed
-    // after every push/undo/redo by walking the saved-distance against
-    // each entry's op_mode.
-    bool        warp_dirty           = false;
-    bool        transient_dirty      = false;
-    bool        dirty                = false;
-
-    // True until the first save in this session; used to log a one-time
-    // notice if the on-disk file had content the canonical form drops.
-    bool        first_save_pending   = true;
-
-    // If a drop arrives mid-load, the path is stashed here and processed
-    // after the active load returns. Empty means "no pending drop."
-    std::string pending_drop_path;
-
-    // Double-click detection state. Tracks the most recent left-button
-    // press so the next one can compare and upgrade to a double-click.
-    std::chrono::steady_clock::time_point last_click_time =
-        std::chrono::steady_clock::time_point{};
-    int          last_click_x        = -10000;
-    int          last_click_y        = -10000;
-    bool         last_click_consumed = true;
-
-    // For redraw-time diagnostics (acceptance criterion 15).
-    std::chrono::steady_clock::time_point stats_last_report =
-        std::chrono::steady_clock::now();
-    double  stats_max_redraw_ms = 0.0;
-    int     stats_over_1ms_count = 0;
-
-    // Timestamp of the most recent user input event (key/button/motion).
-    // Read by the perf-instrumentation path to compute event-to-paint
-    // latency (e2e). Default-constructed (epoch zero) means "no input yet."
-    std::chrono::steady_clock::time_point last_input_event_time{};
-
-    // Identity counter for the currently loaded audio. Bumped on every
-    // successful file load. Used by the waveform cache as part of its
-    // invalidation fingerprint so a file swap forces a re-render.
-    long long audio_generation = 0;
-
-    // A/B navigational tabs. Ctrl+Tab toggles between them; each holds a
-    // snapshot of viewport/zoom/playhead. Persisted in .settings.
-    ViewState tab_a;
-    ViewState tab_b;
-    char active_tab = 'A';
-
-    // Pass-through entries read from .settings on load and re-emitted
-    // verbatim on save. Preserves original order. Never interpreted by
-    // the GUI; exists so the wrapper script's keys survive a round-trip.
-    std::vector<std::pair<std::string, std::string>> settings_passthrough;
-
-    // Bottom-strip command prompt. Active only when a close / revert /
-    // re-detect gesture fires while a confirmation is required. See Part
-    // 2 of chunk Q (originally a centered modal dialog; brief H.5 moves
-    // the same modal semantics into the bottom strip).
-    PromptState prompt;
-
-    // Top-flag text editor (V.A1). Active only when editing a flag rect
-    // in warp mode. The editor owns the keyboard while active and
-    // overlays a custom rect + cursor on top of render_flags.
-    text_editor::State top_flag_editor;
-    // Last-painted cursor visibility, so the tick can detect a flip and
-    // invalidate the top strip without redundant repaints.
-    bool top_flag_editor_blink_last = false;
-
-    // Render-queue state (chunk U). `queue_running` is true only inside the
-    // Ctrl+Alt+R queue walker. The Esc handler checks it to scope the
-    // cancel binding away from normal interaction. `queue_cancel_requested`
-    // is set by Esc during a queue run and read between entries.
-    bool queue_running           = false;
-    bool queue_cancel_requested  = false;
-
-    // Non-interactive bottom-strip status text. Set by long-running
-    // operations (currently only the multi-render queue runner) so the
-    // user has visual feedback while no other UI is updating. Empty
-    // means "no status — render the timestamp normally." Mutually
-    // exclusive with prompt.active in practice (the queue runner can't
-    // fire while a prompt is up).
-    std::string queue_progress_text;
-
-    // Chunk W: in-memory queue of pending renders. Ctrl+E pushes a
-    // snapshot of the current authoring state onto the back of this list;
-    // Ctrl+Alt+E consumes it, materializing one batch folder per execution
-    // with one rendered output per queued entry. The list is session-only:
-    // discarded on app close, never written to disk between sessions.
-    // Settings are not snapshotted per-entry — all entries render against
-    // the GUI's live `settings_passthrough` at execution time, mirroring
-    // the chunk-U convention.
-    struct QueuedRender {
-        std::string                source_audio_path;
-        std::vector<GuiWarpMarker>     markers;
-        std::vector<GuiTransientMarker>  transients;
-    };
-    std::vector<QueuedRender> queued_renders;
-
-    // V.B iteration mode. Toggled by plain `i` in warp mode (no-op in
-    // transient mode). Session-only; survives mode-switches but is lost
-    // on app close. When true, hover popups are suppressed and a
-    // persistent iteration popup is rendered above every owning
-    // marker's flag rect.
-    bool iteration_mode_enabled = false;
-
-    // Brief X.2 BPM mode. Toggled by plain `m` in warp mode. Mutually
-    // exclusive with iteration_mode_enabled (toggling one ON forces the
-    // other OFF). Session-only. The popup owner is identified at runtime
-    // by walking markers for bpm_is_popup_owner=true; at most one marker holds
-    // the flag at a time, maintained as an invariant by the toggle.
-    bool bpm_mode_enabled = false;
-
-    // Chunk W: render analysis mode. Plain `r` toggles between source-view
-    // (authoring) and render-view (read-only auditioning of rendered
-    // outputs from <source_parent>/renders/). All authoring state above
-    // is preserved untouched while render-view is active; this struct
-    // holds the parallel context that drives render-view's display.
-    bool render_view_enabled = false;
-    // Path to the last-displayed render's .wav, persisted across toggle
-    // off/on cycles within a session. Empty before the first entry; reset
-    // to whatever path was active when the previous toggle-off fired.
-    std::string last_render_view_path;
-    // One entry in the flat list of valid renders enumerated on toggle-in.
-    struct RenderViewEntry {
-        std::filesystem::path batch_folder;     // <source_parent>/renders/<i>_<tag>
-        std::string           basename;         // e.g. "01" (no extension)
-        std::filesystem::path wav_path;         // batch_folder / (basename + ".wav")
-
-        // Brief J.1: per-entry persisted view-state across render-view
-        // exit/enter and batch-nav. Selection + sub-mode are valid only
-        // when the wav still has the same (size, mtime) as when stashed;
-        // mismatch on reload drops them silently. The viewport/zoom/
-        // playhead fields on `state` are unused in J.1 — render-view's
-        // viewport state continues to flow through the live AppState
-        // fields and the .rendersettings sidecar; J.2 will reroute them
-        // through `state`.
-        ViewState state;
-
-        // Stat-tuple key for selection validity. Captured when stashed,
-        // compared against the current file's stat on re-load.
-        uintmax_t     persisted_size             = 0;
-        int64_t       persisted_mtime            = 0;
-    };
-    std::vector<RenderViewEntry> render_view_list;
-    int                          render_view_index = -1;     // -1 = unset
-    // The current render's loaded markers + transients, parsed from
-    // sibling `<basename>.renderwarpmarkers` /
-    // `<basename>.rendertransientmarkers`.
-    std::vector<GuiWarpMarker>       render_view_markers;
-    std::vector<GuiTransientMarker>    render_view_transients;
-    // Source-frame mapping of the current render: F_begin..F_end (source
-    // sample-rate frames) is what the render's full audio covers. When the
-    // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
-    // no `e=` flag, F_end is the source's total_frames. Used by the render
-    // -view waveform mapping and the timestamp readout.
-    int64_t                      render_view_src_F_begin = 0;
-    int64_t                      render_view_src_F_end   = 0;
-    // Source audio's sample rate / total frames at the time render-view
-    // was entered. Cached so timestamp computation and trim resolution
-    // don't have to peek at the swapped-out source GuiAudio.
-    int                          render_view_src_sr      = 0;
-    int64_t                      render_view_src_total   = 0;
 };
 
 // Off-screen pixel cache for the waveform subsystem. Lives for the life
@@ -1010,11 +567,16 @@ struct WaveformCache {
     ~WaveformCache() { destroy_surface(); }
 };
 
-int top_strip_height(int window_height) {
+} // namespace
+
+// Geometry helpers — public to viewport.cpp via app_state.h. The strip-height
+// helpers and samples_per_pixel_at remain main-private (`static`).
+
+static int top_strip_height(int window_height) {
     return static_cast<int>(std::lround(window_height * kTopStripRatio));
 }
 
-int bottom_strip_height(int window_height) {
+static int bottom_strip_height(int window_height) {
     return static_cast<int>(std::lround(window_height * kBottomStripRatio));
 }
 
@@ -1090,10 +652,10 @@ std::pair<long long, long long> compute_trim_samples(
     return {begin, end};
 }
 
-double samples_per_pixel_at(int zoom_level,
-                            int waveform_width_px,
-                            int64_t total_frames,
-                            int sample_rate) {
+static double samples_per_pixel_at(int zoom_level,
+                                   int waveform_width_px,
+                                   int64_t total_frames,
+                                   int sample_rate) {
     if (zoom_level == kFitFileLevel) {
         if (waveform_width_px <= 0) return 1.0;
         double spp = static_cast<double>(total_frames) /
@@ -1203,6 +765,8 @@ GuiRect timestamp_invalidate_rect(int window_height, int window_width,
     return GuiRect{0, window_height - kTimestampRegionH,
                    kTimestampRegionW, kTimestampRegionH};
 }
+
+namespace {
 
 // Ensure `p` exists with `contents`. If the file already exists, leave it
 // alone. Returns true on success or if file already exists. Failures are
@@ -1434,225 +998,40 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // -- Trim helpers --------------------------------------------------------
-
-    auto trim_range = [&]() -> std::pair<int64_t, int64_t> {
-        if (audio.total_frames() <= 0) return {0, 0};
-        if (app.render_view_enabled) {
-            return compute_trim_samples(
-                app.render_view_markers, app.render_view_transients,
-                audio.sample_rate(), audio.total_frames());
-        }
-        return compute_trim_samples(
-            app.markers.markers(), app.transients.markers(),
-            audio.sample_rate(), audio.total_frames());
-    };
-    auto trim_begin_sample = [&]() -> int64_t { return trim_range().first; };
-    auto trim_end_sample   = [&]() -> int64_t { return trim_range().second; };
-
-    // -- Navigation/viewport helpers ----------------------------------------
-
-    // Viewport changes repaint the waveform area and the top strip together:
-    // flag positions depend on the viewport, so any pan/zoom has to refresh
-    // flags as well as waveform. Playhead-only moves keep using the narrow
-    // column invalidation below.
-    auto invalidate_waveform_area = [&]() {
-        const GuiRect a = waveform_area(app);
-        const int y0 = 0;
-        const int y1 = a.y + a.h;
-        gui.invalidate_region(0, y0, app.width, y1 - y0);
-    };
+    // -- Viewport + invalidation helpers ------------------------------------
+    //
+    // X.7.1: the viewport-mutator and invalidation lambdas have been hoisted
+    // onto the Viewport struct in viewport.{cpp,h}. The lambdas below are
+    // one-line forwarders so callsites elsewhere in main() don't need to
+    // change. `bottom_strip_wide` stays inline because it's still called
+    // from the redraw lambda; `invalidate_timestamp_area` is gone — its
+    // body was byte-identical to invalidate_timestamp_area, so all of its
+    // former callsites now call invalidate_timestamp_area directly.
 
     auto bottom_strip_wide = [&]() -> bool {
         return app.prompt.active || !app.queue_progress_text.empty();
     };
 
-    auto invalidate_timestamp_area = [&]() {
-        const GuiRect t = timestamp_invalidate_rect(
-            app.height, app.width, bottom_strip_wide());
-        gui.invalidate_region(t.x, t.y, t.w, t.h);
-    };
-
-    auto invalidate_playhead_columns = [&](double old_px, double new_px) {
-        const GuiRect area = waveform_area(app);
-        const GuiRect r_old = playhead_invalidate_rect(area, old_px);
-        const GuiRect r_new = playhead_invalidate_rect(area, new_px);
-        // Union when close (common case: 1px nudges overlap) — one expose.
-        if (rects_intersect(r_old, r_new) ||
-            std::abs(new_px - old_px) < 4.0) {
-            const GuiRect u = union_rect(r_old, r_new);
-            if (u.w > 0 && u.h > 0) {
-                gui.invalidate_region(u.x, u.y, u.w, u.h);
-            }
-        } else {
-            if (r_old.w > 0) gui.invalidate_region(r_old.x, r_old.y, r_old.w, r_old.h);
-            if (r_new.w > 0) gui.invalidate_region(r_new.x, r_new.y, r_new.w, r_new.h);
-        }
-        // Brief E: playhead motion may flip a flag's outline on or off when
-        // the playhead column matches a marker column. The flag rect can
-        // extend well to the right of the playhead's 17-px invalidate band,
-        // so the top strip must be invalidated separately to repaint the
-        // affected flag(s) cleanly.
-        const GuiRect ts = top_strip_area(app);
-        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
-    };
-
-    // V.A3b Addendum 3: forward-declared so the viewport-mutator lambdas
-    // below can invoke it. The body is assigned later (after hit_test_flag
-    // and clear_hover_popup are in scope). Guarded with a truthiness check
-    // because callbacks are wired after this assignment, so by the time
-    // any viewport mutator fires from input, the body is in place.
+    // V.A3b Addendum 3: forward-declared so the viewport methods below can
+    // invoke it. The body is assigned later (after hit_test_flag and
+    // clear_hover_popup are in scope). Guarded inside Viewport with a
+    // truthiness check because callbacks are wired after this assignment.
     std::function<void()> recompute_hover_at_cursor;
 
-    // move_playhead_to: update playhead, keep viewport so playhead stays
-    // visible. Invalidate only what changed. Clamps to the full audio
-    // range; trim is purely cosmetic so the playhead is free to sit in
-    // the dim region.
-    auto move_playhead_to = [&](int64_t new_sample) {
-        if (audio.total_frames() <= 0) return;
-        if (new_sample < 0) new_sample = 0;
-        const int64_t total = audio.total_frames();
-        if (total > 0 && new_sample >= total) new_sample = total - 1;
+    Viewport viewport(app, audio, gui, playback, recompute_hover_at_cursor);
 
-        const double old_px = playhead_pixel_x(app, audio);
-        const int64_t old_vp = app.viewport_start_sample;
-        const int64_t visible = samples_visible(app, audio);
-
-        app.playhead_sample = new_sample;
-
-        const int64_t vp_end = app.viewport_start_sample + visible;
-        bool viewport_changed = false;
-
-        if (new_sample < app.viewport_start_sample) {
-            app.viewport_start_sample = new_sample;
-            viewport_changed = true;
-        } else if (new_sample >= vp_end) {
-            const double spp = current_samples_per_pixel(app, audio);
-            const int64_t one_px = static_cast<int64_t>(std::llround(spp));
-            app.viewport_start_sample =
-                new_sample - (visible - std::max<int64_t>(one_px, 1));
-            viewport_changed = true;
-        }
-        clamp_viewport_start(app, audio);
-        if (app.viewport_start_sample != old_vp) viewport_changed = true;
-
-        if (viewport_changed) {
-            invalidate_waveform_area();
-        } else {
-            const double new_px = playhead_pixel_x(app, audio);
-            invalidate_playhead_columns(old_px, new_px);
-        }
-        invalidate_timestamp_area();
-        // V.A3b Addendum 3: viewport may have shifted (Home/End or any
-        // playhead jump that pushed the viewport). Re-evaluate hover at
-        // the cursor's last known coords.
-        if (viewport_changed && recompute_hover_at_cursor) {
-            recompute_hover_at_cursor();
-        }
-        if (playback.is_playing()) playback.resync_predictor();
-    };
-
-    auto move_playhead_pixels = [&](int delta_px) {
-        if (audio.total_frames() <= 0) return;
-        const double spp = current_samples_per_pixel(app, audio);
-        const int64_t delta_samples =
-            static_cast<int64_t>(std::llround(delta_px * spp));
-        move_playhead_to(app.playhead_sample + delta_samples);
-    };
-
-    // Apply a zoom change. The numeric target is derived inside; this helper
-    // handles the playhead-centered viewport recompute so zoom_in/zoom_out
-    // share exactly the same logic.
-    auto apply_zoom_change = [&](int new_zoom_level) {
-        if (audio.total_frames() <= 0) return;
-        if (new_zoom_level == app.zoom_level) return;
-
-        const double old_spp = current_samples_per_pixel(app, audio);
-        const double old_px  = (old_spp > 0.0)
-            ? static_cast<double>(app.playhead_sample -
-                                  app.viewport_start_sample) / old_spp
-            : 0.0;
-
-        app.zoom_level = new_zoom_level;
-
-        if (app.zoom_level == kFitFileLevel) {
-            app.viewport_start_sample = 0;
-        } else {
-            const double new_spp = current_samples_per_pixel(app, audio);
-            app.viewport_start_sample =
-                viewport_start_for_pixel(app.playhead_sample, old_px, new_spp);
-            clamp_viewport_start(app, audio);
-        }
-
-        invalidate_waveform_area();
-        invalidate_timestamp_area();
-        // Flags / hover popup live in the top strip — rect positions
-        // change when the viewport scale changes.
-        const GuiRect ts = top_strip_area(app);
-        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
-        // V.A3b Addendum 3: rects shifted under the (possibly stationary)
-        // cursor — re-evaluate hover.
-        if (recompute_hover_at_cursor) recompute_hover_at_cursor();
-        if (playback.is_playing()) playback.resync_predictor();
-    };
-
-    auto zoom_in = [&]() {
-        const int max_num = max_valid_numeric_level(
-            waveform_area(app).w, audio.total_frames(), audio.sample_rate());
-        if (max_num < 0) return; // no numeric level valid; only fit-file
-        if (app.zoom_level == kFitFileLevel) {
-            apply_zoom_change(max_num);
-        } else if (app.zoom_level > 0) {
-            apply_zoom_change(app.zoom_level - 1);
-        }
-        // else at level 0 already — no-op.
-    };
-
-    auto zoom_out = [&]() {
-        const int max_num = max_valid_numeric_level(
-            waveform_area(app).w, audio.total_frames(), audio.sample_rate());
-        if (app.zoom_level == kFitFileLevel) return; // already fully out
-        if (max_num < 0 || app.zoom_level >= max_num) {
-            apply_zoom_change(kFitFileLevel);
-        } else {
-            apply_zoom_change(app.zoom_level + 1);
-        }
-    };
-
-    auto scroll_viewport = [&](int64_t delta_samples) {
-        if (audio.total_frames() <= 0) return;
-        const int64_t old_vp = app.viewport_start_sample;
-        app.viewport_start_sample += delta_samples;
-        clamp_viewport_start(app, audio);
-        if (app.viewport_start_sample != old_vp) {
-            invalidate_waveform_area();
-            // Flag positions move with the viewport; the hover popup rides
-            // along, so the top strip must repaint too.
-            const GuiRect ts = top_strip_area(app);
-            gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
-            // V.A3b Addendum 3: rects shifted under the (possibly
-            // stationary) cursor — re-evaluate hover.
-            if (recompute_hover_at_cursor) recompute_hover_at_cursor();
-            if (playback.is_playing()) playback.resync_predictor();
-        }
-    };
-
-    auto center_viewport_on_playhead = [&]() {
-        if (audio.total_frames() <= 0) return;
-        const int64_t visible = samples_visible(app, audio);
-        const int64_t old_vp = app.viewport_start_sample;
-        app.viewport_start_sample = app.playhead_sample - visible / 2;
-        clamp_viewport_start(app, audio);
-        if (app.viewport_start_sample != old_vp) {
-            invalidate_waveform_area();
-            const GuiRect ts = top_strip_area(app);
-            gui.invalidate_region(ts.x, ts.y, ts.w, ts.h);
-            // V.A3b Addendum 3: rects shifted under the (possibly
-            // stationary) cursor — re-evaluate hover.
-            if (recompute_hover_at_cursor) recompute_hover_at_cursor();
-            if (playback.is_playing()) playback.resync_predictor();
-        }
-    };
+    auto trim_begin_sample           = [&]() { return viewport.trim_begin_sample(); };
+    auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
+    auto invalidate_waveform_area    = [&]() { viewport.invalidate_waveform_area(); };
+    auto invalidate_timestamp_area   = [&]() { viewport.invalidate_timestamp_area(); };
+    auto invalidate_playhead_columns = [&](double a, double b) { viewport.invalidate_playhead_columns(a, b); };
+    auto move_playhead_to            = [&](int64_t s) { viewport.move_playhead_to(s); };
+    auto move_playhead_pixels        = [&](int dx) { viewport.move_playhead_pixels(dx); };
+    auto zoom_in                     = [&]() { viewport.zoom_in(); };
+    auto zoom_out                    = [&]() { viewport.zoom_out(); };
+    auto scroll_viewport             = [&](int64_t d) { viewport.scroll_viewport(d); };
+    auto center_viewport_on_playhead = [&]() { viewport.center_viewport_on_playhead(); };
+    auto follow_scroll_if_needed     = [&]() { viewport.follow_scroll_if_needed(); };
 
     // -- Redraw -------------------------------------------------------------
 
@@ -2568,40 +1947,8 @@ int main(int argc, char** argv) {
         clamp_viewport_start(app, audio);
     });
 
-    // Invalidate a narrow column around a marker's on-screen x (same width
-    // as the playhead invalidation). No-op if the marker is off-screen.
-    auto invalidate_marker_column = [&](int marker_idx) {
-        if (marker_idx < 0) return;
-        if (audio.total_frames() <= 0) return;
-        const double spp = current_samples_per_pixel(app, audio);
-        if (spp <= 0.0) return;
-        const GuiRect area = waveform_area(app);
-        const int sr = audio.sample_rate();
-        double ms;
-        if (app.active_mode == 'T') {
-            const auto& tv = app.transients.markers();
-            if (marker_idx >= static_cast<int>(tv.size())) return;
-            ms = static_cast<double>(tv[marker_idx].effective_frame());
-        } else {
-            const auto& mv = app.markers.markers();
-            if (marker_idx >= static_cast<int>(mv.size())) return;
-            ms = mv[marker_idx].time_seconds * static_cast<double>(sr);
-        }
-        const double vp = static_cast<double>(app.viewport_start_sample);
-        const int64_t visible = samples_visible(app, audio);
-        if (ms < vp) return;
-        if (ms >= vp + static_cast<double>(visible)) return;
-        const double px = area.x + (ms - vp) / spp;
-        const GuiRect r = playhead_invalidate_rect(area, px);
-        if (r.w > 0 && r.h > 0) {
-            gui.invalidate_region(r.x, r.y, r.w, r.h);
-        }
-    };
-
-    auto invalidate_top_strip = [&]() {
-        const GuiRect ts = top_strip_area(app);
-        gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
-    };
+    auto invalidate_marker_column = [&](int i) { viewport.invalidate_marker_column(i); };
+    auto invalidate_top_strip     = [&]() { viewport.invalidate_top_strip(); };
 
     // V.A3b: a warp marker is hover-popup-eligible iff its rect doesn't
     // already display a numeric tempo: pass markers (with or without a
@@ -2641,9 +1988,7 @@ int main(int argc, char** argv) {
         if (was_visible) invalidate_top_strip();
     };
 
-    auto invalidate_markers_columns = [&](const std::set<int>& idxs) {
-        for (int i : idxs) invalidate_marker_column(i);
-    };
+    auto invalidate_markers_columns = [&](const std::set<int>& s) { viewport.invalidate_markers_columns(s); };
 
     // Restore the `last_selected ∈ selected ∪ {-1}` invariant. Callers
     // invoke this after any mutation that might have invalidated the
@@ -2698,12 +2043,6 @@ int main(int argc, char** argv) {
         invalidate_marker_column(idx);
         invalidate_top_strip();
         return added;
-    };
-
-    auto invalidate_dirty_and_timestamp = [&]() {
-        const GuiRect t = timestamp_invalidate_rect(
-            app.height, app.width, bottom_strip_wide());
-        gui.invalidate_region(t.x, t.y, t.w, t.h);
     };
 
     // -- Undo/redo helpers --------------------------------------------------
@@ -2999,7 +2338,7 @@ int main(int argc, char** argv) {
         text_editor::deactivate(app.top_flag_editor);
 
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // -- V.B iteration popup edit helpers -----------------------------------
@@ -3169,7 +2508,7 @@ int main(int argc, char** argv) {
         if (tempo_changed) {
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
         }
 
         text_editor::deactivate(app.top_flag_editor);
@@ -3636,7 +2975,7 @@ int main(int argc, char** argv) {
         }
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Ctrl+Shift+Z. Mirror of do_undo. Silent no-op on empty redo stack.
@@ -3692,7 +3031,7 @@ int main(int argc, char** argv) {
         }
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Tab / Shift+Tab: cycle through markers. Rules per spec:
@@ -3850,7 +3189,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Create, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
 
         // Move the playhead to the new marker for consistency with click-
         // to-select behavior. Done last so invalidations in the helper
@@ -3932,7 +3271,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Shift+Delete variant. Auto-cascades label_refs of any selected def
@@ -3983,7 +3322,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Shift+P: convert each selected marker's tempo source. Cache-free —
@@ -4028,7 +3367,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Toggle the disabled flag on each selected marker. Per chunk U patch 3
@@ -4049,7 +3388,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // `b` / `e` are single-marker operations. With 2+ selected they silent
@@ -4080,7 +3419,7 @@ int main(int argc, char** argv) {
                            'W', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
             return;
         }
 
@@ -4124,7 +3463,7 @@ int main(int argc, char** argv) {
                        'W', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     auto toggle_end_time = [&]() {
@@ -4148,7 +3487,7 @@ int main(int argc, char** argv) {
                            'W', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
             return;
         }
 
@@ -4189,7 +3528,7 @@ int main(int argc, char** argv) {
                        'W', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Nudge every selected marker by `delta`. Label refs are silently
@@ -4230,7 +3569,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_top_strip();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Clear any b= / e= flags so the whole file becomes editable again.
@@ -4250,7 +3589,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // -- Transient-mode editing helpers (chunk S.2.2) -----------------------
@@ -4288,7 +3627,7 @@ int main(int argc, char** argv) {
         push_undo_transient(std::move(pre_state), OpKind::Create, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
         // Match drop_marker: move playhead to the new transient. When
         // dropping at the current playhead, this is a no-op.
         move_playhead_to(frame);
@@ -4335,7 +3674,7 @@ int main(int argc, char** argv) {
         push_undo_transient(std::move(pre_state), OpKind::Destroy, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Toggle the disabled flag on each selected transient. Unconditional —
@@ -4355,7 +3694,7 @@ int main(int argc, char** argv) {
         push_undo_transient(std::move(pre_state), OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Compute (delta_min, delta_max) sample bounds for shifting the
@@ -4451,7 +3790,7 @@ int main(int argc, char** argv) {
         sync_playhead_to_last_selected();
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // `j` for transient mode: shift the selection so last_selected lands
@@ -4483,7 +3822,7 @@ int main(int argc, char** argv) {
         push_undo_transient(std::move(pre_state), OpKind::Move, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Toggle b= flag on the single selected transient. Mirrors the warp
@@ -4507,7 +3846,7 @@ int main(int argc, char** argv) {
                            'T', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
             return;
         }
 
@@ -4549,7 +3888,7 @@ int main(int argc, char** argv) {
                        'T', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     auto toggle_transient_end_time = [&]() {
@@ -4569,7 +3908,7 @@ int main(int argc, char** argv) {
                            'T', OpKind::Other, hint_last);
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
             return;
         }
 
@@ -4611,7 +3950,7 @@ int main(int argc, char** argv) {
                        'T', OpKind::Other, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // Overwrite the active tab's snapshot with the live AppState viewport /
@@ -4739,7 +4078,7 @@ int main(int argc, char** argv) {
             switch_active_mode_to('T');
         }
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     auto save_markers = [&]() -> bool {
@@ -4789,7 +4128,7 @@ int main(int argc, char** argv) {
         app.history.mark_saved();
         recompute_dirty();
         if (was_dirty != app.dirty) {
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
         }
 
         // Best-effort .settings write. Failure is logged but does not fail
@@ -4828,9 +4167,7 @@ int main(int argc, char** argv) {
 
     // -- Unsaved-work dialog + blank-state revert (chunk Q) -----------------
 
-    auto invalidate_all = [&]() {
-        gui.invalidate_region(0, 0, app.width, app.height);
-    };
+    auto invalidate_all = [&]() { viewport.invalidate_all(); };
 
     // Drop the currently loaded audio and reset all per-file UI state to
     // what the GUI looks like when launched with no argument. Leaves the
@@ -5590,7 +4927,7 @@ int main(int argc, char** argv) {
                 push_undo(std::move(snap_w), OpKind::Move, hint_last);
             }
             recompute_dirty();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
         }
         invalidate_waveform_area();
     };
@@ -5676,7 +5013,7 @@ int main(int argc, char** argv) {
             sync_playhead_to_last_selected();
             recompute_dirty();
             invalidate_waveform_area();
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
         }
     };
 
@@ -5715,7 +5052,7 @@ int main(int argc, char** argv) {
         push_undo(std::move(pre_state), OpKind::Move, hint_last);
         recompute_dirty();
         invalidate_waveform_area();
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
     };
 
     // -- Chunk W: render-view helpers ---------------------------------------
@@ -6199,7 +5536,7 @@ int main(int argc, char** argv) {
                           "%s: rendering %d of %d...",
                           batch_label.c_str(), i + 1, total);
             app.queue_progress_text = buf;
-            invalidate_dirty_and_timestamp();
+            invalidate_timestamp_area();
             // First drain surfaces the progress-text paint before the
             // engine starts; otherwise the new "rendering K of N" only
             // appears after the entry completes.
@@ -6224,7 +5561,7 @@ int main(int argc, char** argv) {
         // clearing first would shrink the invalidated rect to the narrow
         // timestamp width, leaving the trailing pixels of the final
         // "rendering N of N..." string undamaged.
-        invalidate_dirty_and_timestamp();
+        invalidate_timestamp_area();
         app.queue_progress_text.clear();
 
         return result;
@@ -8419,29 +7756,6 @@ int main(int argc, char** argv) {
         }
         load_then_drain(path);
     });
-
-    // Follow-mode scroll: when the playhead drifts off the visible viewport
-    // during playback, advance the viewport by one pixel-page so the cursor
-    // stays in view. Only the first move beyond vp_end triggers a scroll,
-    // and it lands the playhead ~10% into the new viewport so there's room
-    // to keep playing.
-    auto follow_scroll_if_needed = [&]() {
-        const int64_t visible = samples_visible(app, audio);
-        if (visible <= 0) return;
-        const int64_t vp_end = app.viewport_start_sample + visible;
-        if (app.playhead_sample < app.viewport_start_sample ||
-            app.playhead_sample >= vp_end) {
-            const int64_t lead = visible / 10;
-            const int64_t old_vp = app.viewport_start_sample;
-            app.viewport_start_sample =
-                std::max<int64_t>(0, app.playhead_sample - lead);
-            clamp_viewport_start(app, audio);
-            if (app.viewport_start_sample != old_vp) {
-                invalidate_waveform_area();
-                if (playback.is_playing()) playback.resync_predictor();
-            }
-        }
-    };
 
     // Tick: runs once per event-loop iteration. During playback, snapshots
     // the audio thread's cursor and mirrors it into the main-thread playhead,
