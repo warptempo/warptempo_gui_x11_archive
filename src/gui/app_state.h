@@ -264,11 +264,11 @@ struct AppState {
 
     // Parsed warp markers for the currently loaded audio. Empty on load
     // failure or before the first audio load.
-    GuiWarpMarkers  markers;
+    GuiWarpMarkers  warpmarkers;
 
     // Parsed transient markers (chunk S.2.2). Authored by the GUI but not
     // yet consumed by the render pipeline (S.3 will wire that up).
-    GuiTransientMarkers transients;
+    GuiTransientMarkers transientmarkers;
 
     // Multi-selection set + focus. `last_selected_marker` is either -1 or
     // a member of `selected_markers`; keyed operations (Tab cycling, `j`)

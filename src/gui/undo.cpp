@@ -45,7 +45,7 @@ void Undo::push_undo(std::vector<GuiWarpMarker> pre_state, OpKind op_kind,
                      int hint_last) {
     UndoEntry e;
     e.snapshot           = std::move(pre_state);
-    e.transient_snapshot = app.transients.markers();
+    e.transient_snapshot = app.transientmarkers.markers();
     e.op_kind            = op_kind;
     e.op_mode            = 'W';
     e.hint_last_selected = hint_last;
@@ -56,7 +56,7 @@ void Undo::push_undo(std::vector<GuiWarpMarker> pre_state, OpKind op_kind,
 void Undo::push_undo_transient(std::vector<GuiTransientMarker> pre_state,
                                OpKind op_kind, int hint_last) {
     UndoEntry e;
-    e.snapshot           = app.markers.markers();
+    e.snapshot           = app.warpmarkers.markers();
     e.transient_snapshot = std::move(pre_state);
     e.op_kind            = op_kind;
     e.op_mode            = 'T';
@@ -80,7 +80,7 @@ void Undo::push_undo_both(std::vector<GuiWarpMarker> warp_pre,
 
 void Undo::apply_post_restore_rules_warp(const UndoEntry& entry,
                                          const std::vector<GuiWarpMarker>& before) {
-    const auto& after = app.markers.markers();
+    const auto& after = app.warpmarkers.markers();
     constexpr double kEps = 1e-9;
 
     std::set<int> target_set;
@@ -131,7 +131,7 @@ void Undo::apply_post_restore_rules_warp(const UndoEntry& entry,
 
 void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
                                               const std::vector<GuiTransientMarker>& before) {
-    const auto& after = app.transients.markers();
+    const auto& after = app.transientmarkers.markers();
 
     std::set<int> target_set;
     bool want_playhead_jump = false;
@@ -181,8 +181,8 @@ void Undo::do_undo() {
     app.history.undo_stack.pop_back();
 
     UndoEntry redo_entry;
-    redo_entry.snapshot           = app.markers.markers();
-    redo_entry.transient_snapshot = app.transients.markers();
+    redo_entry.snapshot           = app.warpmarkers.markers();
+    redo_entry.transient_snapshot = app.transientmarkers.markers();
     redo_entry.op_kind            = entry.op_kind;
     redo_entry.op_mode            = entry.op_mode;
     redo_entry.hint_last_selected = entry.hint_last_selected;
@@ -195,8 +195,8 @@ void Undo::do_undo() {
     }
     if (app.history.saved_valid) app.history.saved_distance += 1;
 
-    app.markers.markers_mut()    = std::move(entry.snapshot);
-    app.transients.markers_mut() = std::move(entry.transient_snapshot);
+    app.warpmarkers.markers_mut()    = std::move(entry.snapshot);
+    app.transientmarkers.markers_mut() = std::move(entry.transient_snapshot);
 
     // Switch active mode to match the op being undone before applying
     // post-restore rules — selection state is mode-bound, so the rules
@@ -222,11 +222,11 @@ void Undo::do_undo() {
     if (entry.op_mode == 'T') {
         apply_post_restore_rules_transient(entry, before_t);
         selection.sanitize_selection_after_restore(
-            static_cast<int>(app.transients.markers().size()));
+            static_cast<int>(app.transientmarkers.markers().size()));
     } else {
         apply_post_restore_rules_warp(entry, before_w);
         selection.sanitize_selection_after_restore(
-            static_cast<int>(app.markers.markers().size()));
+            static_cast<int>(app.warpmarkers.markers().size()));
     }
     recompute_dirty();
     viewport.invalidate_waveform_area();
@@ -241,8 +241,8 @@ void Undo::do_redo() {
     app.history.redo_stack.pop_back();
 
     UndoEntry undo_entry;
-    undo_entry.snapshot           = app.markers.markers();
-    undo_entry.transient_snapshot = app.transients.markers();
+    undo_entry.snapshot           = app.warpmarkers.markers();
+    undo_entry.transient_snapshot = app.transientmarkers.markers();
     undo_entry.op_kind            = entry.op_kind;
     undo_entry.op_mode            = entry.op_mode;
     undo_entry.hint_last_selected = entry.hint_last_selected;
@@ -255,8 +255,8 @@ void Undo::do_redo() {
     }
     if (app.history.saved_valid) app.history.saved_distance -= 1;
 
-    app.markers.markers_mut()    = std::move(entry.snapshot);
-    app.transients.markers_mut() = std::move(entry.transient_snapshot);
+    app.warpmarkers.markers_mut()    = std::move(entry.snapshot);
+    app.transientmarkers.markers_mut() = std::move(entry.transient_snapshot);
 
     if (entry.op_mode != app.active_mode) {
         ViewState& curtab = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
@@ -277,11 +277,11 @@ void Undo::do_redo() {
     if (entry.op_mode == 'T') {
         apply_post_restore_rules_transient(entry, before_t);
         selection.sanitize_selection_after_restore(
-            static_cast<int>(app.transients.markers().size()));
+            static_cast<int>(app.transientmarkers.markers().size()));
     } else {
         apply_post_restore_rules_warp(entry, before_w);
         selection.sanitize_selection_after_restore(
-            static_cast<int>(app.markers.markers().size()));
+            static_cast<int>(app.warpmarkers.markers().size()));
     }
     recompute_dirty();
     viewport.invalidate_waveform_area();

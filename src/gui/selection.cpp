@@ -73,15 +73,15 @@ void Selection::cycle_selection(bool forward) {
     const int sr = audio.sample_rate();
     const bool transient = (app.active_mode == 'T');
     const int n = transient
-        ? static_cast<int>(app.transients.markers().size())
-        : static_cast<int>(app.markers.markers().size());
+        ? static_cast<int>(app.transientmarkers.markers().size())
+        : static_cast<int>(app.warpmarkers.markers().size());
     if (n == 0) return;
 
     // Helper to read frame-of-index in source samples regardless of mode.
     auto frame_of = [&](int i) -> int64_t {
-        if (transient) return app.transients.markers()[i].effective_frame();
+        if (transient) return app.transientmarkers.markers()[i].effective_frame();
         return static_cast<int64_t>(std::llround(
-            app.markers.markers()[i].time_seconds *
+            app.warpmarkers.markers()[i].time_seconds *
             static_cast<double>(sr)));
     };
 
@@ -177,8 +177,8 @@ void Selection::prune_live_selection() {
             : static_cast<int>(app.render_view_markers.size());
     } else {
         n = (app.active_mode == 'T')
-            ? static_cast<int>(app.transients.markers().size())
-            : static_cast<int>(app.markers.markers().size());
+            ? static_cast<int>(app.transientmarkers.markers().size())
+            : static_cast<int>(app.warpmarkers.markers().size());
     }
     for (auto it = app.selected_markers.begin();
          it != app.selected_markers.end();) {
@@ -206,11 +206,11 @@ void Selection::sync_playhead_to_last_selected() {
 
     int64_t target_sample = 0;
     if (app.active_mode == 'T') {
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (last >= static_cast<int>(tv.size())) return;
         target_sample = tv[last].effective_frame();
     } else {
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (last >= static_cast<int>(mv.size())) return;
         target_sample = static_cast<int64_t>(std::llround(
             mv[last].time_seconds * static_cast<double>(sr)));

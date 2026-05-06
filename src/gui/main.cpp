@@ -1095,7 +1095,7 @@ int main(int argc, char** argv) {
                       app.render_view_markers, app.render_view_transients,
                       sr, audio.total_frames())
                 : compute_trim_samples(
-                      app.markers.markers(), app.transients.markers(),
+                      app.warpmarkers.markers(), app.transientmarkers.markers(),
                       sr, audio.total_frames());
             const int64_t trim_begin = trim.first;
             const int64_t trim_end   = trim.second;
@@ -1218,11 +1218,11 @@ int main(int argc, char** argv) {
                     }
                 } else if (app.active_mode == 'T') {
                     render_transient_markers(
-                        cr, area, app.transients.markers(),
+                        cr, area, app.transientmarkers.markers(),
                         vp_start, vp_end, sr,
                         trim_struct);
                 } else {
-                    render_markers(cr, area, app.markers.markers(),
+                    render_markers(cr, area, app.warpmarkers.markers(),
                                    vp_start, vp_end, sr,
                                    trim_struct);
                 }
@@ -1321,7 +1321,7 @@ int main(int argc, char** argv) {
                     }
                 } else if (app.active_mode == 'T') {
                     render_transient_flags(
-                        cr, top_strip, app.transients.markers(),
+                        cr, top_strip, app.transientmarkers.markers(),
                         vp_start, vp_end, sr,
                         kFlagFontSize,
                         app.selected_markers,
@@ -1360,7 +1360,7 @@ int main(int argc, char** argv) {
                         overlay.popup_editor_target =
                             app.top_flag_editor.target;
                     }
-                    render_flags(cr, top_strip, app.markers.markers(),
+                    render_flags(cr, top_strip, app.warpmarkers.markers(),
                                  vp_start, vp_end, sr,
                                  kFlagFontSize,
                                  app.selected_markers,
@@ -1376,7 +1376,7 @@ int main(int argc, char** argv) {
                     // doesn't have to repeat the parser-mirroring math.
                     if (app.hover_popup.visible &&
                         !app.iteration_mode_enabled) {
-                        const auto& mv = app.markers.markers();
+                        const auto& mv = app.warpmarkers.markers();
                         const int hidx = app.hover_popup.marker_index;
                         const bool eligible =
                             (hidx >= 0 &&
@@ -1434,7 +1434,7 @@ int main(int argc, char** argv) {
                     // a 1-px cursor at cursor_pos; other popups paint
                     // their formatted iter text normally.
                     if (app.iteration_mode_enabled) {
-                        const auto& mv = app.markers.markers();
+                        const auto& mv = app.warpmarkers.markers();
                         auto hits = compute_iter_popup_hits(
                             cr, top_strip, mv,
                             vp_start, vp_end, sr, kFlagFontSize);
@@ -1596,7 +1596,7 @@ int main(int argc, char** argv) {
                     // bg-fill-under-text patterns mirror iter for
                     // consistency.
                     if (app.bpm_mode_enabled) {
-                        const auto& mv = app.markers.markers();
+                        const auto& mv = app.warpmarkers.markers();
                         auto hits = compute_bpm_popup_hits(
                             cr, top_strip, mv,
                             vp_start, vp_end, sr, kFlagFontSize);
@@ -1985,7 +1985,7 @@ int main(int argc, char** argv) {
         }
         if (app.active_mode != 'W') return false;
         if (app.iteration_mode_enabled) return false;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return false;
         const auto& m = mv[idx];
         return m.tempo_inherits || !m.label_ref.empty();
@@ -2080,7 +2080,7 @@ int main(int argc, char** argv) {
 
     auto enter_top_flag_edit = [&](int idx) {
         if (idx < 0) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         // Discard any prior edit silently before switching targets.
         if (text_editor::is_active(app.top_flag_editor) &&
@@ -2105,7 +2105,7 @@ int main(int argc, char** argv) {
     auto commit_top_flag_edit = [&]() {
         if (!text_editor::is_active(app.top_flag_editor)) return;
         const int idx = app.top_flag_editor.target;
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
             // Editor target became invalid (e.g. file reload). Drop edit.
             exit_top_flag_edit_no_commit();
@@ -2155,13 +2155,13 @@ int main(int argc, char** argv) {
         }
 
         // Capture pre-state for undo BEFORE mutating.
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
 
         const std::string old_def = mv_const[idx].label_def;
         const std::string new_def = parsed.label_def;
 
-        GuiWarpMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
         if (!m) {
             exit_top_flag_edit_no_commit();
             return;
@@ -2202,7 +2202,7 @@ int main(int argc, char** argv) {
         // converted a def to non-def).
         int n_refs_renamed = 0;
         if (!old_def.empty() && old_def != new_def) {
-            auto& mv_mut = app.markers.markers_mut();
+            auto& mv_mut = app.warpmarkers.markers_mut();
             for (int i = 0; i < static_cast<int>(mv_mut.size()); ++i) {
                 if (i == idx) continue;
                 if (mv_mut[i].label_ref == old_def) {
@@ -2235,7 +2235,7 @@ int main(int argc, char** argv) {
     auto enter_iter_edit = [&](int idx) {
         if (idx < 0) return;
         if (!app.iteration_mode_enabled) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         if (!iter_popup_eligible_marker(mv[idx])) return;
         if (text_editor::is_active(app.top_flag_editor) &&
@@ -2265,7 +2265,7 @@ int main(int argc, char** argv) {
         if (app.top_flag_editor.kind !=
                 text_editor::Kind::IterationBracket) return;
         const int idx = app.top_flag_editor.target;
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
             text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
@@ -2356,10 +2356,10 @@ int main(int argc, char** argv) {
             return;
         }
 
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
 
-        GuiWarpMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
         if (!m) {
             text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
@@ -2406,7 +2406,7 @@ int main(int argc, char** argv) {
     auto bulk_clear_iter_values = [&]() {
         if (!app.iteration_mode_enabled) return;
         if (app.active_mode != 'W') return;
-        auto& mv = app.markers.markers_mut();
+        auto& mv = app.warpmarkers.markers_mut();
         bool any = false;
         for (const auto& m : mv) {
             if (!std::isnan(m.iter_start) || !std::isnan(m.iter_end)) {
@@ -2415,7 +2415,7 @@ int main(int argc, char** argv) {
             }
         }
         if (!any) return;
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         for (auto& m : mv) {
             m.iter_start = std::numeric_limits<double>::quiet_NaN();
@@ -2434,7 +2434,7 @@ int main(int argc, char** argv) {
     auto enter_bpm_edit = [&](int idx) {
         if (idx < 0) return;
         if (!app.bpm_mode_enabled) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
         if (!bpm_popup_eligible_marker(mv[idx])) return;
         if (text_editor::is_active(app.top_flag_editor) &&
@@ -2460,7 +2460,7 @@ int main(int argc, char** argv) {
         if (app.top_flag_editor.kind !=
                 text_editor::Kind::BpmBracket) return;
         const int idx = app.top_flag_editor.target;
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         if (idx < 0 || idx >= static_cast<int>(mv_const.size())) {
             text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
@@ -2476,7 +2476,7 @@ int main(int argc, char** argv) {
                 s.c_str());
             return;
         }
-        GuiWarpMarker* m = app.markers.marker_mut(idx);
+        GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
         if (!m) {
             text_editor::deactivate(app.top_flag_editor);
             invalidate_top_strip();
@@ -2487,7 +2487,7 @@ int main(int argc, char** argv) {
         // the invariant on mode entry, but the editor can target a
         // different marker than the one originally stamped (via click
         // -switching across popups), so reassert it here.
-        auto& mv = app.markers.markers_mut();
+        auto& mv = app.warpmarkers.markers_mut();
         for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
             if (i == idx) continue;
             if (mv[i].bpm_is_popup_owner) {
@@ -2510,7 +2510,7 @@ int main(int argc, char** argv) {
     // only, no .warpmarkers write.
     auto bulk_clear_bpm_values = [&]() {
         if (app.active_mode != 'W') return;
-        auto& mv = app.markers.markers_mut();
+        auto& mv = app.warpmarkers.markers_mut();
         bool any = false;
         for (const auto& m : mv) {
             if (m.bpm_is_popup_owner) { any = true; break; }
@@ -2536,7 +2536,7 @@ int main(int argc, char** argv) {
         if (app.active_mode != 'W') return;
         if (app.selected_markers.size() != 1) return;
         const int owner = *app.selected_markers.begin();
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         if (owner < 0 || owner >= static_cast<int>(mv_const.size())) return;
         if (!bpm_popup_eligible_marker(mv_const[owner])) return;
 
@@ -2544,7 +2544,7 @@ int main(int argc, char** argv) {
             app.iteration_mode_enabled = false;
         }
 
-        auto& mv = app.markers.markers_mut();
+        auto& mv = app.warpmarkers.markers_mut();
         for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
             if (i == owner) continue;
             if (mv[i].bpm_is_popup_owner) {
@@ -2604,7 +2604,7 @@ int main(int argc, char** argv) {
         -> FlagLoc {
         FlagLoc f;
         const int sr = audio.sample_rate();
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
             const bool has = want_begin ? mv[i].is_begin_time
                                         : mv[i].is_end_time;
@@ -2617,7 +2617,7 @@ int main(int argc, char** argv) {
                 mv[i].time_seconds * static_cast<double>(sr)));
             return f;
         }
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         for (int i = 0; i < static_cast<int>(tv.size()); ++i) {
             const bool has = want_begin ? tv[i].is_begin_time
                                         : tv[i].is_end_time;
@@ -2667,7 +2667,7 @@ int main(int argc, char** argv) {
         const int sr = audio.sample_rate();
         if (sr <= 0) return;
         const double one_sample = 1.0 / static_cast<double>(sr);
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         for (const auto& m : mv) {
             if (std::abs(m.time_seconds - time_seconds) < one_sample) {
                 std::fprintf(stderr,
@@ -2692,7 +2692,7 @@ int main(int argc, char** argv) {
             nm.tempo_base = 1.0;
             nm.tempo_scale.clear();
         }
-        const int new_idx = app.markers.insert_marker(std::move(nm));
+        const int new_idx = app.warpmarkers.insert_marker(std::move(nm));
         // Insertion may have shifted indices of existing selections.
         // Rebuild selected_markers to reflect the shift.
         std::set<int> shifted;
@@ -2736,7 +2736,7 @@ int main(int argc, char** argv) {
 
     auto delete_selected_marker = [&]() {
         if (app.selected_markers.empty()) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
 
         // Validate the batch. Reject the whole operation if any member is
         // the time-0 first marker or has a label_def referenced from outside
@@ -2778,12 +2778,12 @@ int main(int argc, char** argv) {
 
         // All validations passed — capture snapshot and selection hint
         // before mutating so the undo can restore the pre-delete selection.
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         // Delete in descending order so earlier indices stay valid.
         for (auto it = app.selected_markers.rbegin();
              it != app.selected_markers.rend(); ++it) {
-            app.markers.remove_marker(*it);
+            app.warpmarkers.remove_marker(*it);
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
@@ -2800,7 +2800,7 @@ int main(int argc, char** argv) {
     // ref is now inside the batch by construction.
     auto force_delete_selected_marker = [&]() {
         if (app.selected_markers.empty()) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
 
         std::set<int> expanded = app.selected_markers;
         for (int idx : app.selected_markers) {
@@ -2831,10 +2831,10 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         for (auto it = expanded.rbegin(); it != expanded.rend(); ++it) {
-            app.markers.remove_marker(*it);
+            app.warpmarkers.remove_marker(*it);
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
@@ -2854,12 +2854,12 @@ int main(int argc, char** argv) {
     // The first marker is silently skipped (it must own its tempo).
     auto toggle_inherits = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiWarpMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
             if (idx == 0) continue;
             if (!m->label_ref.empty()) {
@@ -2894,11 +2894,11 @@ int main(int argc, char** argv) {
     // toggled marker is a label_def).
     auto toggle_disabled = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiWarpMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
             m->disabled = !m->disabled;
             changed = true;
@@ -2921,7 +2921,7 @@ int main(int argc, char** argv) {
         if (app.selected_markers.size() != 1) return;
         const int idx = app.last_selected_marker;
         if (idx < 0) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
 
         const int sr = audio.sample_rate();
@@ -2929,11 +2929,11 @@ int main(int argc, char** argv) {
             mv[idx].time_seconds * static_cast<double>(sr)));
 
         std::vector<GuiWarpMarker>    warp_pre  = mv;
-        std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
+        std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_begin_time) {
-            app.markers.marker_mut(idx)->is_begin_time = false;
+            app.warpmarkers.marker_mut(idx)->is_begin_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'W', OpKind::Other, hint_last);
             recompute_dirty();
@@ -2958,24 +2958,24 @@ int main(int argc, char** argv) {
 
         if (b_other.valid) {
             if (b_other.transient) {
-                app.transients.marker_mut(b_other.idx)->is_begin_time = false;
+                app.transientmarkers.marker_mut(b_other.idx)->is_begin_time = false;
             } else {
-                app.markers.marker_mut(b_other.idx)->is_begin_time = false;
+                app.warpmarkers.marker_mut(b_other.idx)->is_begin_time = false;
             }
         }
         if (needs_swap) {
             // The marker that had e= becomes b=; the just-toggled warp
             // marker takes e=.
             if (e_loc.transient) {
-                app.transients.marker_mut(e_loc.idx)->is_end_time   = false;
-                app.transients.marker_mut(e_loc.idx)->is_begin_time = true;
+                app.transientmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
+                app.transientmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
             } else {
-                app.markers.marker_mut(e_loc.idx)->is_end_time   = false;
-                app.markers.marker_mut(e_loc.idx)->is_begin_time = true;
+                app.warpmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
+                app.warpmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
             }
-            app.markers.marker_mut(idx)->is_end_time = true;
+            app.warpmarkers.marker_mut(idx)->is_end_time = true;
         } else {
-            app.markers.marker_mut(idx)->is_begin_time = true;
+            app.warpmarkers.marker_mut(idx)->is_begin_time = true;
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
@@ -2989,7 +2989,7 @@ int main(int argc, char** argv) {
         if (app.selected_markers.size() != 1) return;
         const int idx = app.last_selected_marker;
         if (idx < 0) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (idx >= static_cast<int>(mv.size())) return;
 
         const int sr = audio.sample_rate();
@@ -2997,11 +2997,11 @@ int main(int argc, char** argv) {
             mv[idx].time_seconds * static_cast<double>(sr)));
 
         std::vector<GuiWarpMarker>    warp_pre  = mv;
-        std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
+        std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
 
         if (mv[idx].is_end_time) {
-            app.markers.marker_mut(idx)->is_end_time = false;
+            app.warpmarkers.marker_mut(idx)->is_end_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'W', OpKind::Other, hint_last);
             recompute_dirty();
@@ -3025,22 +3025,22 @@ int main(int argc, char** argv) {
 
         if (e_other.valid) {
             if (e_other.transient) {
-                app.transients.marker_mut(e_other.idx)->is_end_time = false;
+                app.transientmarkers.marker_mut(e_other.idx)->is_end_time = false;
             } else {
-                app.markers.marker_mut(e_other.idx)->is_end_time = false;
+                app.warpmarkers.marker_mut(e_other.idx)->is_end_time = false;
             }
         }
         if (needs_swap) {
             if (b_loc.transient) {
-                app.transients.marker_mut(b_loc.idx)->is_begin_time = false;
-                app.transients.marker_mut(b_loc.idx)->is_end_time   = true;
+                app.transientmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
+                app.transientmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
             } else {
-                app.markers.marker_mut(b_loc.idx)->is_begin_time = false;
-                app.markers.marker_mut(b_loc.idx)->is_end_time   = true;
+                app.warpmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
+                app.warpmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
             }
-            app.markers.marker_mut(idx)->is_begin_time = true;
+            app.warpmarkers.marker_mut(idx)->is_begin_time = true;
         } else {
-            app.markers.marker_mut(idx)->is_end_time = true;
+            app.warpmarkers.marker_mut(idx)->is_end_time = true;
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
@@ -3057,12 +3057,12 @@ int main(int argc, char** argv) {
     // Clamps to [0.01, 9.99]. Only dirties / invalidates on real change.
     auto adjust_tempo = [&](double delta) {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
-        const auto& mv_const = app.markers.markers();
+        const auto& mv_const = app.warpmarkers.markers();
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiWarpMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
             if (!m->label_ref.empty()) continue;
             double      start_tempo;
@@ -3094,10 +3094,10 @@ int main(int argc, char** argv) {
     // Clear any b= / e= flags so the whole file becomes editable again.
     // No-op if no marker carries either flag.
     auto clear_trim = [&]() {
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         bool changed = false;
-        for (auto& m : app.markers.markers_mut()) {
+        for (auto& m : app.warpmarkers.markers_mut()) {
             if (m.is_begin_time || m.is_end_time) {
                 m.is_begin_time = false;
                 m.is_end_time   = false;
@@ -3124,20 +3124,20 @@ int main(int argc, char** argv) {
         if (sr <= 0) return;
         const int64_t frame = static_cast<int64_t>(std::llround(
             time_seconds * static_cast<double>(sr)));
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
         GuiTransientMarker nm;
         nm.src_frame   = frame;
         nm.is_inserted = true;
-        int new_idx = app.transients.insert_marker(std::move(nm));
+        int new_idx = app.transientmarkers.insert_marker(std::move(nm));
         // Frame-0 companion. If the post-insert list's head isn't at
         // frame 0, insert one. The companion always lands at index 0,
         // so the user's marker shifts up by one.
-        if (app.transients.markers().front().effective_frame() != 0) {
+        if (app.transientmarkers.markers().front().effective_frame() != 0) {
             GuiTransientMarker zero;
             zero.src_frame   = 0;
             zero.is_inserted = true;
-            app.transients.insert_marker(std::move(zero));
+            app.transientmarkers.insert_marker(std::move(zero));
             new_idx += 1;
         }
         app.selected_markers.clear();
@@ -3166,7 +3166,7 @@ int main(int argc, char** argv) {
     // cannot be removed.
     auto delete_selected_transient = [&]() {
         if (app.selected_markers.empty()) return;
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         for (int idx : app.selected_markers) {
             if (idx < 0 || idx >= static_cast<int>(tv.size())) {
                 std::fprintf(stderr,
@@ -3182,11 +3182,11 @@ int main(int argc, char** argv) {
                 return;
             }
         }
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
         for (auto it = app.selected_markers.rbegin();
              it != app.selected_markers.rend(); ++it) {
-            app.transients.remove_marker(*it);
+            app.transientmarkers.remove_marker(*it);
         }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
@@ -3200,11 +3200,11 @@ int main(int argc, char** argv) {
     // transients have no label-def gating like warp markers do.
     auto toggle_transient_disabled = [&]() {
         if (app.selected_markers.empty()) return;
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
         bool changed = false;
         for (int idx : app.selected_markers) {
-            GuiTransientMarker* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
             if (!m) continue;
             m->disabled = !m->disabled;
             changed = true;
@@ -3225,7 +3225,7 @@ int main(int argc, char** argv) {
     auto compute_transient_delta_bounds = [&](bool& ok)
         -> std::pair<int64_t, int64_t> {
         ok = false;
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (app.selected_markers.empty()) return {0, 0};
         for (int idx : app.selected_markers) {
             if (idx < 0 || idx >= static_cast<int>(tv.size())) return {0, 0};
@@ -3298,10 +3298,10 @@ int main(int argc, char** argv) {
         if (delta > d_max) delta = d_max;
         if (delta == 0) return;
 
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiTransientMarker* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
@@ -3317,7 +3317,7 @@ int main(int argc, char** argv) {
     auto jump_transient_selection_to_playhead = [&]() {
         if (app.selected_markers.empty()) return;
         if (app.last_selected_marker < 0) return;
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (app.last_selected_marker >= static_cast<int>(tv.size())) return;
         const int64_t anchor_f = tv[app.last_selected_marker].effective_frame();
         const int64_t delta    = app.playhead_sample - anchor_f;
@@ -3331,10 +3331,10 @@ int main(int argc, char** argv) {
                 "marker ordering\n");
             return;
         }
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int                 hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiTransientMarker* m = app.transients.marker_mut(idx);
+            GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
             if (!m) continue;
             apply_transient_position_delta(*m, delta);
         }
@@ -3352,15 +3352,15 @@ int main(int argc, char** argv) {
         if (app.selected_markers.size() != 1) return;
         const int idx = app.last_selected_marker;
         if (idx < 0) return;
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (idx >= static_cast<int>(tv.size())) return;
 
-        std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
+        std::vector<GuiWarpMarker>    warp_pre  = app.warpmarkers.markers();
         std::vector<GuiTransientMarker> trans_pre = tv;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_begin_time) {
-            app.transients.marker_mut(idx)->is_begin_time = false;
+            app.transientmarkers.marker_mut(idx)->is_begin_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'T', OpKind::Other, hint_last);
             recompute_dirty();
@@ -3385,22 +3385,22 @@ int main(int argc, char** argv) {
 
         if (b_other.valid) {
             if (b_other.transient) {
-                app.transients.marker_mut(b_other.idx)->is_begin_time = false;
+                app.transientmarkers.marker_mut(b_other.idx)->is_begin_time = false;
             } else {
-                app.markers.marker_mut(b_other.idx)->is_begin_time = false;
+                app.warpmarkers.marker_mut(b_other.idx)->is_begin_time = false;
             }
         }
         if (needs_swap) {
             if (e_loc.transient) {
-                app.transients.marker_mut(e_loc.idx)->is_end_time   = false;
-                app.transients.marker_mut(e_loc.idx)->is_begin_time = true;
+                app.transientmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
+                app.transientmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
             } else {
-                app.markers.marker_mut(e_loc.idx)->is_end_time   = false;
-                app.markers.marker_mut(e_loc.idx)->is_begin_time = true;
+                app.warpmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
+                app.warpmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
             }
-            app.transients.marker_mut(idx)->is_end_time = true;
+            app.transientmarkers.marker_mut(idx)->is_end_time = true;
         } else {
-            app.transients.marker_mut(idx)->is_begin_time = true;
+            app.transientmarkers.marker_mut(idx)->is_begin_time = true;
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
@@ -3414,15 +3414,15 @@ int main(int argc, char** argv) {
         if (app.selected_markers.size() != 1) return;
         const int idx = app.last_selected_marker;
         if (idx < 0) return;
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (idx >= static_cast<int>(tv.size())) return;
 
-        std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
+        std::vector<GuiWarpMarker>    warp_pre  = app.warpmarkers.markers();
         std::vector<GuiTransientMarker> trans_pre = tv;
         const int                 hint_last = app.last_selected_marker;
 
         if (tv[idx].is_end_time) {
-            app.transients.marker_mut(idx)->is_end_time = false;
+            app.transientmarkers.marker_mut(idx)->is_end_time = false;
             push_undo_both(std::move(warp_pre), std::move(trans_pre),
                            'T', OpKind::Other, hint_last);
             recompute_dirty();
@@ -3447,22 +3447,22 @@ int main(int argc, char** argv) {
 
         if (e_other.valid) {
             if (e_other.transient) {
-                app.transients.marker_mut(e_other.idx)->is_end_time = false;
+                app.transientmarkers.marker_mut(e_other.idx)->is_end_time = false;
             } else {
-                app.markers.marker_mut(e_other.idx)->is_end_time = false;
+                app.warpmarkers.marker_mut(e_other.idx)->is_end_time = false;
             }
         }
         if (needs_swap) {
             if (b_loc.transient) {
-                app.transients.marker_mut(b_loc.idx)->is_begin_time = false;
-                app.transients.marker_mut(b_loc.idx)->is_end_time   = true;
+                app.transientmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
+                app.transientmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
             } else {
-                app.markers.marker_mut(b_loc.idx)->is_begin_time = false;
-                app.markers.marker_mut(b_loc.idx)->is_end_time   = true;
+                app.warpmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
+                app.warpmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
             }
-            app.transients.marker_mut(idx)->is_begin_time = true;
+            app.transientmarkers.marker_mut(idx)->is_begin_time = true;
         } else {
-            app.transients.marker_mut(idx)->is_end_time = true;
+            app.transientmarkers.marker_mut(idx)->is_end_time = true;
         }
 
         push_undo_both(std::move(warp_pre), std::move(trans_pre),
@@ -3570,7 +3570,7 @@ int main(int argc, char** argv) {
 
     auto save_markers = [&]() -> bool {
         if (app.warpmarkers_path.empty()) return false;
-        if (app.first_save_pending && app.markers.had_nonstandard_content()) {
+        if (app.first_save_pending && app.warpmarkers.had_nonstandard_content()) {
             std::fprintf(stderr,
                 "warptempo_gui: first save in this session will discard "
                 "comments and freeform text from %s. Canonical format will "
@@ -3581,7 +3581,7 @@ int main(int argc, char** argv) {
         // the .warpmarkers and .settings paths see a consistent snapshot.
         refresh_active_tab_from_app();
 
-        const bool ok = app.markers.save(app.warpmarkers_path);
+        const bool ok = app.warpmarkers.save(app.warpmarkers_path);
         if (!ok) {
             std::fprintf(stderr,
                 "warptempo_gui: save failed: %s\n",
@@ -3592,14 +3592,14 @@ int main(int argc, char** argv) {
         // Transients sibling write. Empty list deletes the on-disk file so
         // a project never carries a stale empty .transientmarkers.
         if (!app.transientmarkers_path.empty()) {
-            if (app.transients.markers().empty()) {
-                if (!app.transients.delete_file(app.transientmarkers_path)) {
+            if (app.transientmarkers.markers().empty()) {
+                if (!app.transientmarkers.delete_file(app.transientmarkers_path)) {
                     std::fprintf(stderr,
                         "warptempo_gui: failed to delete: %s\n",
                         app.transientmarkers_path.c_str());
                 }
             } else {
-                if (!app.transients.save(app.transientmarkers_path)) {
+                if (!app.transientmarkers.save(app.transientmarkers_path)) {
                     std::fprintf(stderr,
                         "warptempo_gui: transient save failed: %s\n",
                         app.transientmarkers_path.c_str());
@@ -3679,8 +3679,8 @@ int main(int argc, char** argv) {
         app.last_space_sample     = 0;
         app.playback_speed        = 1.0f;
 
-        app.markers.clear();
-        app.transients.clear();
+        app.warpmarkers.clear();
+        app.transientmarkers.clear();
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
@@ -3823,7 +3823,7 @@ int main(int argc, char** argv) {
     auto merge_detection = [&](const std::vector<int64_t>& fresh_src_frames) {
         std::map<int64_t, GuiTransientMarker> old_d_by_src;
         std::vector<GuiTransientMarker> old_i;
-        for (const auto& m : app.transients.markers()) {
+        for (const auto& m : app.transientmarkers.markers()) {
             if (m.is_inserted) old_i.push_back(m);
             else               old_d_by_src.emplace(m.src_frame, m);
         }
@@ -3855,15 +3855,15 @@ int main(int argc, char** argv) {
             merged.insert(merged.begin(), zero);
         }
 
-        app.transients.markers_mut() = std::move(merged);
+        app.transientmarkers.markers_mut() = std::move(merged);
     };
 
     // Run the engine's detection-only pass against the loaded source +
-    // current marker set, then merge the results into app.transients.
+    // current marker set, then merge the results into app.transientmarkers.
     // After a successful merge, write the .transientmarkers sibling file
     // immediately — detection is not on the undo stack so the on-disk
     // file is the authoritative record. The transient_dirty bit is reset
-    // explicitly: the merge mutated app.transients but no UndoEntry was
+    // explicitly: the merge mutated app.transientmarkers but no UndoEntry was
     // pushed, so the post-merge state is the one we want to call "saved".
     run_detect_now = [&]() {
         if (app.source_audio_path.empty())   return;
@@ -3875,7 +3875,7 @@ int main(int argc, char** argv) {
 
         DetectionRequest dr;
         dr.source_audio_path    = app.source_audio_path;
-        dr.markers              = app.markers.markers();
+        dr.markers              = app.warpmarkers.markers();
         dr.settings_passthrough = app.settings_passthrough;
 
         std::vector<int64_t> fresh;
@@ -3893,9 +3893,9 @@ int main(int argc, char** argv) {
         // would be unusual after detection, but the save path already
         // handles the empty case.
         if (!app.transientmarkers_path.empty()) {
-            if (app.transients.markers().empty()) {
-                app.transients.delete_file(app.transientmarkers_path);
-            } else if (!app.transients.save(app.transientmarkers_path)) {
+            if (app.transientmarkers.markers().empty()) {
+                app.transientmarkers.delete_file(app.transientmarkers_path);
+            } else if (!app.transientmarkers.save(app.transientmarkers_path)) {
                 std::fprintf(stderr,
                     "warptempo_gui: transient save failed: %s\n",
                     app.transientmarkers_path.c_str());
@@ -3910,7 +3910,7 @@ int main(int argc, char** argv) {
         invalidate_all();
         std::fprintf(stderr,
             "warptempo_gui: detection produced %zu transients\n",
-            app.transients.markers().size());
+            app.transientmarkers.markers().size());
     };
 
     // Ctrl+Alt+T entry point. Confirms before clobbering an existing
@@ -3922,7 +3922,7 @@ int main(int argc, char** argv) {
         if (audio.total_frames() <= 0)     return;
 
         bool has_prior_detection = false;
-        for (const auto& m : app.transients.markers()) {
+        for (const auto& m : app.transientmarkers.markers()) {
             if (!m.is_inserted) { has_prior_detection = true; break; }
         }
         if (has_prior_detection) {
@@ -3939,12 +3939,12 @@ int main(int argc, char** argv) {
     // list, since save() removes the file when empty). The undo restores
     // the full pre-clear state.
     auto clear_all_transients = [&]() {
-        if (app.transients.markers().empty()) return;
+        if (app.transientmarkers.markers().empty()) return;
 
-        std::vector<GuiTransientMarker> pre_state = app.transients.markers();
+        std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
         const int pre_last = app.last_selected_marker;
 
-        app.transients.clear();
+        app.transientmarkers.clear();
         if (app.active_mode == 'T') app.last_selected_marker = -1;
 
         push_undo_transient(std::move(pre_state), OpKind::Destroy, pre_last);
@@ -4009,8 +4009,8 @@ int main(int argc, char** argv) {
                 : rv
                     ? static_cast<int>(app.render_view_markers.size())
                     : (app.active_mode == 'T')
-                        ? static_cast<int>(app.transients.markers().size())
-                        : static_cast<int>(app.markers.markers().size());
+                        ? static_cast<int>(app.transientmarkers.markers().size())
+                        : static_cast<int>(app.warpmarkers.markers().size());
         for (int i = 0; i < n; ++i) {
             double ms;
             if (rv_trans) {
@@ -4021,9 +4021,9 @@ int main(int argc, char** argv) {
                      static_cast<double>(sr);
             } else if (app.active_mode == 'T') {
                 ms = static_cast<double>(
-                    app.transients.markers()[i].effective_frame());
+                    app.transientmarkers.markers()[i].effective_frame());
             } else {
-                ms = app.markers.markers()[i].time_seconds *
+                ms = app.warpmarkers.markers()[i].time_seconds *
                      static_cast<double>(sr);
             }
             if (ms < vp) continue;
@@ -4064,11 +4064,11 @@ int main(int argc, char** argv) {
                 vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
         } else if (app.active_mode == 'T') {
             rects = compute_transient_flag_hit_rects(
-                scratch_cr, top, app.transients.markers(),
+                scratch_cr, top, app.transientmarkers.markers(),
                 vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
         } else {
             rects = compute_flag_hit_rects(
-                scratch_cr, top, app.markers.markers(),
+                scratch_cr, top, app.warpmarkers.markers(),
                 vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
         }
         cairo_destroy(scratch_cr);
@@ -4098,7 +4098,7 @@ int main(int argc, char** argv) {
         const int64_t vp_end = vp_start +
             static_cast<int64_t>(std::llround(spp * area.w));
         auto hits = compute_iter_popup_hits(
-            scratch_cr, top, app.markers.markers(),
+            scratch_cr, top, app.warpmarkers.markers(),
             vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
         cairo_destroy(scratch_cr);
         cairo_surface_destroy(scratch_s);
@@ -4129,7 +4129,7 @@ int main(int argc, char** argv) {
         const int64_t vp_end = vp_start +
             static_cast<int64_t>(std::llround(spp * area.w));
         auto hits = compute_bpm_popup_hits(
-            scratch_cr, top, app.markers.markers(),
+            scratch_cr, top, app.warpmarkers.markers(),
             vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
         cairo_destroy(scratch_cr);
         cairo_surface_destroy(scratch_s);
@@ -4191,7 +4191,7 @@ int main(int argc, char** argv) {
                 app.hover_popup.cached_text =
                     popup_eligible_marker(hit)
                         ? compute_hover_popup_text(
-                              app.markers.markers(), hit,
+                              app.warpmarkers.markers(), hit,
                               audio.sample_rate())
                         : std::string();
             }
@@ -4216,17 +4216,17 @@ int main(int argc, char** argv) {
         if (sr <= 0) return false;
         const bool transient = (app.active_mode == 'T');
         const int n = transient
-            ? static_cast<int>(app.transients.markers().size())
-            : static_cast<int>(app.markers.markers().size());
+            ? static_cast<int>(app.transientmarkers.markers().size())
+            : static_cast<int>(app.warpmarkers.markers().size());
         if (hit >= n) return false;
 
         const double sr_d = static_cast<double>(sr);
         auto t_of = [&](int idx) -> double {
             if (transient) {
                 return static_cast<double>(
-                    app.transients.markers()[idx].effective_frame()) / sr_d;
+                    app.transientmarkers.markers()[idx].effective_frame()) / sr_d;
             }
-            return app.markers.markers()[idx].time_seconds;
+            return app.warpmarkers.markers()[idx].time_seconds;
         };
 
         // Drag target: entire selection if hit is in it, else just the hit.
@@ -4302,9 +4302,9 @@ int main(int argc, char** argv) {
         // Capture the pre-drag list state for undo. Commit pushes the
         // active-mode snapshot if motion landed; otherwise it's discarded.
         if (transient) {
-            d.pre_drag_transient_snapshot = app.transients.markers();
+            d.pre_drag_transient_snapshot = app.transientmarkers.markers();
         } else {
-            d.pre_drag_snapshot = app.markers.markers();
+            d.pre_drag_snapshot = app.warpmarkers.markers();
         }
         d.pre_drag_last_selected = app.last_selected_marker;
         d.hit_marker             = hit;
@@ -4346,7 +4346,7 @@ int main(int argc, char** argv) {
             const double new_t = app.drag.original_times[k] + delta;
             double old_t;
             if (transient) {
-                GuiTransientMarker* m = app.transients.marker_mut(idx);
+                GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
                 if (!m) continue;
                 old_t = static_cast<double>(m->effective_frame()) / sr_d;
                 const int64_t new_frame = static_cast<int64_t>(
@@ -4355,7 +4355,7 @@ int main(int argc, char** argv) {
                 if (cur_frame == new_frame) continue;
                 apply_transient_position_delta(*m, new_frame - cur_frame);
             } else {
-                GuiWarpMarker* m = app.markers.marker_mut(idx);
+                GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
                 if (!m) continue;
                 old_t = m->time_seconds;
                 if (old_t == new_t) continue;
@@ -4427,7 +4427,7 @@ int main(int argc, char** argv) {
     auto compute_selection_delta_bounds = [&](bool& ok)
         -> std::pair<double, double> {
         ok = false;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (app.selected_markers.empty()) return {0.0, 0.0};
         const int sr = audio.sample_rate();
         if (sr <= 0) return {0.0, 0.0};
@@ -4472,7 +4472,7 @@ int main(int argc, char** argv) {
         if (delta > d_max) delta = d_max;
         if (delta == 0.0) return false;
         for (int idx : app.selected_markers) {
-            GuiWarpMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
             m->time_seconds += delta;
         }
@@ -4493,7 +4493,7 @@ int main(int argc, char** argv) {
         const double delta_s =
             static_cast<double>(direction) * spp / static_cast<double>(sr);
         if (delta_s == 0.0) return;
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         if (apply_selection_shift(delta_s)) {
             push_undo(std::move(pre_state), OpKind::Move, hint_last);
@@ -4512,7 +4512,7 @@ int main(int argc, char** argv) {
         if (app.last_selected_marker < 0) return;
         const int sr = audio.sample_rate();
         if (sr <= 0) return;
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (app.last_selected_marker >= static_cast<int>(mv.size())) return;
         const double anchor_t = mv[app.last_selected_marker].time_seconds;
         const double ph_t =
@@ -4529,10 +4529,10 @@ int main(int argc, char** argv) {
                 "ordering\n");
             return;
         }
-        std::vector<GuiWarpMarker> pre_state = app.markers.markers();
+        std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
         const int              hint_last = app.last_selected_marker;
         for (int idx : app.selected_markers) {
-            GuiWarpMarker* m = app.markers.marker_mut(idx);
+            GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
             m->time_seconds += delta;
         }
@@ -5228,8 +5228,8 @@ int main(int argc, char** argv) {
             if (app.source_audio_path.empty()) return;
             AppState::QueuedRender q;
             q.source_audio_path = app.source_audio_path;
-            q.markers           = app.markers.markers();
-            q.transients        = app.transients.markers();
+            q.markers           = app.warpmarkers.markers();
+            q.transients        = app.transientmarkers.markers();
             app.queued_renders.push_back(std::move(q));
             std::fprintf(stderr,
                 "warptempo_gui: queued render (%zu in queue)\n",
@@ -5250,10 +5250,10 @@ int main(int argc, char** argv) {
 
             RenderRequest req;
             req.source_audio_path    = app.source_audio_path;
-            req.markers              = app.markers.markers();
-            req.transients           = app.transients.markers();
+            req.markers              = app.warpmarkers.markers();
+            req.transients           = app.transientmarkers.markers();
             req.settings_passthrough = app.settings_passthrough;
-            for (const auto& m : app.transients.markers()) {
+            for (const auto& m : app.transientmarkers.markers()) {
                 if (m.disabled) continue;
                 req.transient_frames.push_back(m.effective_frame());
             }
@@ -5402,7 +5402,7 @@ int main(int argc, char** argv) {
             // float-accumulation drift a naive `for (d=start; d<=end;
             // d+=0.01)` would suffer across many steps.
             const std::vector<GuiWarpMarker> base_markers =
-                app.markers.markers();
+                app.warpmarkers.markers();
             std::vector<int>                 eligible_indices;
             std::vector<std::vector<double>> per_marker_deltas;
             std::vector<bool>                is_swept;
@@ -5501,7 +5501,7 @@ int main(int argc, char** argv) {
             // transient configuration, only marker tempo_base values
             // differ across cells.
             const std::vector<GuiTransientMarker> base_transients =
-                app.transients.markers();
+                app.transientmarkers.markers();
             std::vector<int64_t> base_transient_frames;
             for (const auto& t : base_transients) {
                 if (t.disabled) continue;
@@ -5602,7 +5602,7 @@ int main(int argc, char** argv) {
             if (audio.total_frames() <= 0) return;
 
             const std::vector<GuiWarpMarker> base_markers =
-                app.markers.markers();
+                app.warpmarkers.markers();
             int owner_idx = -1;
             for (int i = 0; i < static_cast<int>(base_markers.size()); ++i) {
                 if (base_markers[i].bpm_is_popup_owner) {
@@ -5678,7 +5678,7 @@ int main(int argc, char** argv) {
             if (pad_width > 9) pad_width = 9;
 
             const std::vector<GuiTransientMarker> base_transients =
-                app.transients.markers();
+                app.transientmarkers.markers();
             std::vector<int64_t> base_transient_frames;
             for (const auto& t : base_transients) {
                 if (t.disabled) continue;
@@ -5826,16 +5826,16 @@ int main(int argc, char** argv) {
                 }
             }
 
-            std::vector<GuiWarpMarker>    warp_pre  = app.markers.markers();
-            std::vector<GuiTransientMarker> trans_pre = app.transients.markers();
+            std::vector<GuiWarpMarker>    warp_pre  = app.warpmarkers.markers();
+            std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
             const int                 hint_last = app.last_selected_marker;
 
-            app.markers.markers_mut()    = std::move(src_warp);
-            app.transients.markers_mut() = std::move(src_trans);
+            app.warpmarkers.markers_mut()    = std::move(src_warp);
+            app.transientmarkers.markers_mut() = std::move(src_trans);
             app.selected_markers.clear();
             app.last_selected_marker = -1;
             // Brief J.2 Section 4: the active tab's per-mode slots
-            // referenced the OLD app.markers/transients we just
+            // referenced the OLD app.warpmarkers/transients we just
             // replaced. Clear them so restore_source_audio loads
             // empty into the live pair (and so a later mode flip
             // doesn't surface stale indices).
@@ -6637,7 +6637,7 @@ int main(int argc, char** argv) {
                         set_single_selection(hit);
                         const int sr = audio.sample_rate();
                         const int64_t sample = static_cast<int64_t>(std::llround(
-                            app.markers.markers()[hit].time_seconds *
+                            app.warpmarkers.markers()[hit].time_seconds *
                             static_cast<double>(sr)));
                         move_playhead_to(sample);
                         enter_top_flag_edit(hit);
@@ -6648,10 +6648,10 @@ int main(int argc, char** argv) {
                     const int sr = audio.sample_rate();
                     int64_t sample;
                     if (app.active_mode == 'T') {
-                        sample = app.transients.markers()[hit].effective_frame();
+                        sample = app.transientmarkers.markers()[hit].effective_frame();
                     } else {
                         sample = static_cast<int64_t>(std::llround(
-                            app.markers.markers()[hit].time_seconds *
+                            app.warpmarkers.markers()[hit].time_seconds *
                             static_cast<double>(sr)));
                     }
                     move_playhead_to(sample);
@@ -6679,10 +6679,10 @@ int main(int argc, char** argv) {
                     }
                     int64_t sample;
                     if (app.active_mode == 'T') {
-                        sample = app.transients.markers()[hit].effective_frame();
+                        sample = app.transientmarkers.markers()[hit].effective_frame();
                     } else {
                         sample = static_cast<int64_t>(std::llround(
-                            app.markers.markers()[hit].time_seconds *
+                            app.warpmarkers.markers()[hit].time_seconds *
                             static_cast<double>(sr)));
                     }
                     move_playhead_to(sample);
@@ -6745,7 +6745,7 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else if (app.active_mode == 'T') {
-                    const auto& mv = app.transients.markers();
+                    const auto& mv = app.transientmarkers.markers();
                     for (size_t i = 0; i < mv.size(); ++i) {
                         if (mv[i].effective_frame() == ph) {
                             snapped = static_cast<int>(i);
@@ -6753,7 +6753,7 @@ int main(int argc, char** argv) {
                         }
                     }
                 } else {
-                    const auto& mv = app.markers.markers();
+                    const auto& mv = app.warpmarkers.markers();
                     for (size_t i = 0; i < mv.size(); ++i) {
                         const int64_t s = static_cast<int64_t>(
                             std::llround(mv[i].time_seconds *
@@ -6885,10 +6885,10 @@ int main(int argc, char** argv) {
             int64_t new_playhead;
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
-                    new_playhead = app.transients.markers()[hit].effective_frame();
+                    new_playhead = app.transientmarkers.markers()[hit].effective_frame();
                 } else {
                     new_playhead = static_cast<int64_t>(std::llround(
-                        app.markers.markers()[hit].time_seconds *
+                        app.warpmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 }
             } else {
@@ -6927,7 +6927,7 @@ int main(int argc, char** argv) {
                     app.hover_popup.cached_text =
                         popup_eligible_marker(hit)
                             ? compute_hover_popup_text(
-                                  app.markers.markers(), hit,
+                                  app.warpmarkers.markers(), hit,
                                   audio.sample_rate())
                             : std::string();
                 }
@@ -6961,15 +6961,15 @@ int main(int argc, char** argv) {
         const int hit_idx = app.drag.hit_marker;
         const bool transient_drag = (app.drag.drag_mode == 'T');
         const int n = transient_drag
-            ? static_cast<int>(app.transients.markers().size())
-            : static_cast<int>(app.markers.markers().size());
+            ? static_cast<int>(app.transientmarkers.markers().size())
+            : static_cast<int>(app.warpmarkers.markers().size());
         if (hit_idx >= 0 && hit_idx < n) {
             int64_t ph;
             if (transient_drag) {
-                ph = app.transients.markers()[hit_idx].effective_frame();
+                ph = app.transientmarkers.markers()[hit_idx].effective_frame();
             } else {
                 ph = static_cast<int64_t>(std::llround(
-                    app.markers.markers()[hit_idx].time_seconds * sr_d));
+                    app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));
             }
             if (ph != app.playhead_sample) {
                 const double old_px = playhead_pixel_x(app, audio);
@@ -7074,10 +7074,10 @@ int main(int argc, char** argv) {
                           format_default_settings_template(stem, ext_no_dot));
 
         // Load the markers file. Parse failures are non-fatal: we log each
-        // error to stderr and leave app.markers empty. The GUI still works
+        // error to stderr and leave app.warpmarkers empty. The GUI still works
         // as a waveform viewer.
-        app.markers.clear();
-        app.transients.clear();
+        app.warpmarkers.clear();
+        app.transientmarkers.clear();
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
@@ -7090,9 +7090,9 @@ int main(int argc, char** argv) {
         app.warp_dirty         = false;
         app.transient_dirty    = false;
         app.first_save_pending = true;
-        const bool markers_ok = app.markers.load(wm_path.string());
+        const bool markers_ok = app.warpmarkers.load(wm_path.string());
         if (!markers_ok) {
-            for (const auto& err : app.markers.errors()) {
+            for (const auto& err : app.warpmarkers.errors()) {
                 if (err.line_number > 0) {
                     std::fprintf(stderr,
                                  "warptempo_gui: %s:%d: %s\n",
@@ -7108,7 +7108,7 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr,
                          "[warptempo_gui] parsed %zu markers from %s\n",
-                         app.markers.markers().size(),
+                         app.warpmarkers.markers().size(),
                          wm_path.string().c_str());
         }
 
@@ -7116,9 +7116,9 @@ int main(int argc, char** argv) {
         // transient list is just empty. Parse errors are logged to stderr;
         // the warp side stays usable regardless.
         if (std::filesystem::exists(tm_path)) {
-            const bool tr_ok = app.transients.load(tm_path.string());
+            const bool tr_ok = app.transientmarkers.load(tm_path.string());
             if (!tr_ok) {
-                for (const auto& err : app.transients.errors()) {
+                for (const auto& err : app.transientmarkers.errors()) {
                     if (err.line_number > 0) {
                         std::fprintf(stderr,
                                      "warptempo_gui: %s:%d: %s\n",
@@ -7134,7 +7134,7 @@ int main(int argc, char** argv) {
             } else {
                 std::fprintf(stderr,
                              "[warptempo_gui] parsed %zu transients from %s\n",
-                             app.transients.markers().size(),
+                             app.transientmarkers.markers().size(),
                              tm_path.string().c_str());
             }
         }

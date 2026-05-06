@@ -16,7 +16,7 @@ std::pair<int64_t, int64_t> Viewport::trim_range() const {
             audio.sample_rate(), audio.total_frames());
     }
     return compute_trim_samples(
-        app.markers.markers(), app.transients.markers(),
+        app.warpmarkers.markers(), app.transientmarkers.markers(),
         audio.sample_rate(), audio.total_frames());
 }
 
@@ -226,11 +226,11 @@ void Viewport::invalidate_marker_column(int marker_idx) {
     const int sr = audio.sample_rate();
     double ms;
     if (app.active_mode == 'T') {
-        const auto& tv = app.transients.markers();
+        const auto& tv = app.transientmarkers.markers();
         if (marker_idx >= static_cast<int>(tv.size())) return;
         ms = static_cast<double>(tv[marker_idx].effective_frame());
     } else {
-        const auto& mv = app.markers.markers();
+        const auto& mv = app.warpmarkers.markers();
         if (marker_idx >= static_cast<int>(mv.size())) return;
         ms = mv[marker_idx].time_seconds * static_cast<double>(sr);
     }
