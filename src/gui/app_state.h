@@ -154,6 +154,18 @@ struct PlayheadDragState {
     bool active = false;
 };
 
+// Cross-file flag scan result. `valid` is false when the requested flag
+// (b= or e=) is not set on any marker. Returned by find_flag, which scans
+// the warp list first then the transient list — `transient` distinguishes
+// which list `idx` indexes into. `frame` is the marker's effective sample
+// frame (computed at lookup time so callers don't need a sample-rate).
+struct FlagLoc {
+    bool    valid     = false;
+    bool    transient = false;
+    int     idx       = -1;
+    int64_t frame     = 0;
+};
+
 // V.A3b hover popup state. A popup-eligible warp marker (pass marker or
 // label_ref) under the cursor for kHoverDelayMs becomes a tooltip showing
 // the resolved tempo. The motion handler sets `marker_index` + `entry_time`
