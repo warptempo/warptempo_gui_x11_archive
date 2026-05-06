@@ -19,6 +19,7 @@ pkg_check_modules(JACK REQUIRED jack)
 
 add_executable(warptempo_gui
     src/gui/main.cpp
+    src/gui/app_state.cpp
     src/gui/x11.cpp
     src/gui/audio.cpp
     src/gui/render.cpp
@@ -36,6 +37,7 @@ add_executable(warptempo_gui
     src/gui/warpmarkers_ops.cpp
     src/gui/flag_editor.cpp
     src/gui/render_view.cpp
+    src/gui/tab_mode.cpp
     src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
     src/engine/transients.cpp

@@ -510,3 +510,10 @@ GuiRect timestamp_invalidate_rect(int window_height, int window_width,
 GuiRect playhead_invalidate_rect(const GuiRect& area, double px_x);
 bool    rects_intersect(GuiRect a, GuiRect b);
 GuiRect union_rect(GuiRect a, GuiRect b);
+
+// X.7.7: promoted from a lambda in main(). Looks up `key` in
+// app.settings_passthrough and returns its value, or `dflt` if the key
+// is not present. Used by the `t`-mode entry path in GuiTabMode to gate
+// on engine= and transients_enabled= without a typed parser.
+std::string settings_get(const AppState& app, const std::string& key,
+                         const std::string& dflt);

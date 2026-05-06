@@ -7,6 +7,7 @@
 #include "render_pipeline.h"
 #include "render_view.h"
 #include "selection.h"
+#include "tab_mode.h"
 #include "text_display.h"
 #include "text_editor.h"
 #include "transientmarkers.h"
@@ -978,10 +979,11 @@ int main(int argc, char** argv) {
     GuiFlagEditor flag_editor(app, viewport, undo, clear_hover_popup);
     GuiRenderView render_view(app, audio, playback, gui, selection,
                               clear_hover_popup, refresh_active_tab_from_app);
+    GuiTabMode tab_mode(app, audio, viewport, selection,
+                        clear_hover_popup, stop_playback_if_playing);
 
     auto trim_begin_sample           = [&]() { return viewport.trim_begin_sample(); };
     auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
-    auto invalidate_waveform_area    = [&]() { viewport.invalidate_waveform_area(); };
     auto invalidate_timestamp_area   = [&]() { viewport.invalidate_timestamp_area(); };
     auto invalidate_playhead_columns = [&](double a, double b) { viewport.invalidate_playhead_columns(a, b); };
     auto move_playhead_to            = [&](int64_t s) { viewport.move_playhead_to(s); };
@@ -1962,18 +1964,6 @@ int main(int argc, char** argv) {
 
     auto recompute_dirty = [&]() { undo.recompute_dirty(); };
 
-    // Look up a key in app.settings_passthrough, returning its value or
-    // the default if the key isn't present. Used by `t`-mode entry to
-    // gate on engine= and transients_enabled= without a typed parser
-    // (the chunk doesn't otherwise interpret these keys).
-    auto settings_get = [&](const std::string& key,
-                            const std::string& dflt) -> std::string {
-        for (const auto& kv : app.settings_passthrough) {
-            if (kv.first == key) return kv.second;
-        }
-        return dflt;
-    };
-
     auto push_undo_both = [&](std::vector<GuiWarpMarker> warp_pre,
                               std::vector<GuiTransientMarker> trans_pre,
                               char op_mode, OpKind op_kind, int hint_last) {
@@ -2096,101 +2086,17 @@ int main(int argc, char** argv) {
     auto toggle_transient_begin_time         = [&]() { transients.toggle_transient_begin_time(); };
     auto toggle_transient_end_time           = [&]() { transients.toggle_transient_end_time(); };
 
-    // Overwrite the active tab's snapshot with the live AppState viewport /
-    // zoom / playhead. Shared by Ctrl+Tab (pre-flip) and Ctrl+S (pre-write)
-    // so "remembered spot" semantics stay consistent between the two paths.
-    // Also stashes the active selection into the per-mode slot so a tab
-    // flip + mode flip can restore the right pair on return.
-    refresh_active_tab_from_app = [&]() {
-        ViewState& t = (app.active_tab == 'B') ? app.tab_b : app.tab_a;
-        t.viewport_start_sample = app.viewport_start_sample;
-        t.zoom_level            = app.zoom_level;
-        t.playhead_sample       = app.playhead_sample;
-        if (app.active_mode == 'T') {
-            t.transient_selected      = app.selected_markers;
-            t.transient_last_selected = app.last_selected_marker;
-        } else {
-            t.warp_selected           = app.selected_markers;
-            t.warp_last_selected      = app.last_selected_marker;
-        }
-    };
-
-    // Brief J.2 Section 1: indirection that returns the currently
-    // active ViewState — the slot that holds the inactive-mode
-    // selection. Source-view: the active tab. Render-view: the
-    // active render entry's `state`. Returns nullptr when no valid
-    // active view-state is available; callers must handle nullptr
-    // by no-op-ing rather than silently corrupting a fallback slot.
-    auto active_view_state = [&]() -> ViewState* {
-        if (app.render_view_enabled) {
-            if (app.render_view_index >= 0 &&
-                app.render_view_index <
-                    static_cast<int>(app.render_view_list.size())) {
-                return &app.render_view_list[app.render_view_index].state;
-            }
-            // Render-view enabled but no valid entry. Return null
-            // rather than silently writing render-view indices into
-            // a source tab slot.
-            return nullptr;
-        }
-        return (app.active_tab == 'B') ? &app.tab_b : &app.tab_a;
-    };
-
-    auto prune_live_selection = [&]() { selection.prune_live_selection(); };
-
-    // Toggle active editing mode between 'W' (warp) and 'T' (transient).
-    // Saves the active selection into the leaving mode's per-tab slot,
-    // then restores the destination mode's slot. Visible state (viewport /
-    // zoom / playhead) is unaffected. Caller decides what invalidations to
-    // run; this helper just shuffles the AppState fields.
-    auto switch_active_mode_to = [&](char target_mode) {
-        if (target_mode == app.active_mode) return;
-        ViewState* vs = active_view_state();
-        if (!vs) return;
-        if (app.active_mode == 'T') {
-            vs->transient_selected      = app.selected_markers;
-            vs->transient_last_selected = app.last_selected_marker;
-            app.selected_markers        = vs->warp_selected;
-            app.last_selected_marker    = vs->warp_last_selected;
-        } else {
-            vs->warp_selected           = app.selected_markers;
-            vs->warp_last_selected      = app.last_selected_marker;
-            app.selected_markers        = vs->transient_selected;
-            app.last_selected_marker    = vs->transient_last_selected;
-        }
-        app.active_mode = target_mode;
-        prune_live_selection();
-        clear_hover_popup();
-    };
-
-    // `t` key: toggle into/out of transient mode. Entry preconditions
-    // (only when going W → T): engine setting must be `warptempo` and
-    // transients_enabled must not be `false`. Exit (T → W) is unconditional.
-    auto toggle_active_mode = [&]() {
-        if (app.active_mode == 'T') {
-            switch_active_mode_to('W');
-        } else {
-            const std::string engine =
-                settings_get("engine", "warptempo");
-            const std::string te =
-                settings_get("transients_enabled", "true");
-            if (engine != "warptempo") {
-                std::fprintf(stderr,
-                    "warptempo_gui: transient mode unavailable: "
-                    "engine=%s\n", engine.c_str());
-                return;
-            }
-            if (te == "false") {
-                std::fprintf(stderr,
-                    "warptempo_gui: transient mode unavailable: "
-                    "transients_enabled=false\n");
-                return;
-            }
-            switch_active_mode_to('T');
-        }
-        invalidate_waveform_area();
-        invalidate_timestamp_area();
-    };
+    // X.7.7: the mode/tab-management lambdas have been hoisted onto the
+    // GuiTabMode struct in tab_mode.{cpp,h}. The two forwarders below cover
+    // the only external callsites: refresh_active_tab_from_app for
+    // save_markers + the std::function ref captured by GuiRenderView, and
+    // toggle_active_mode for the `t` keypress. active_view_state,
+    // switch_active_mode_to, and the transient prune_live_selection
+    // forwarder had no callers outside the cluster and were dropped.
+    // switch_active_tab_to is new — it replaces the inline Ctrl+Tab block
+    // in the keyboard handler and has no forwarder.
+    refresh_active_tab_from_app = [&]() { tab_mode.refresh_active_tab_from_app(); };
+    auto toggle_active_mode     = [&]() { tab_mode.toggle_active_mode(); };
 
     auto save_markers = [&]() -> bool {
         if (app.warpmarkers_path.empty()) return false;
@@ -3939,34 +3845,7 @@ int main(int argc, char** argv) {
         // current viewport/zoom/playhead to the leaving tab, restores the
         // target tab. Does not mark the document dirty.
         if (ctrl && !shift && keysym == XK_Tab) {
-            // Synchronous stop so the next tick doesn't snap the playhead
-            // back to the audio cursor, overwriting the target tab's
-            // stored playhead.
-            stop_playback_if_playing();
-            clear_hover_popup();
-            refresh_active_tab_from_app();
-            app.active_tab = (app.active_tab == 'A') ? 'B' : 'A';
-            const ViewState& target = (app.active_tab == 'A') ? app.tab_a : app.tab_b;
-            app.viewport_start_sample = target.viewport_start_sample;
-            app.zoom_level            = target.zoom_level;
-            app.playhead_sample       = target.playhead_sample;
-            // Restore the active selection from the destination tab's
-            // current-mode slot. Mode itself is per-AppState (not per-tab),
-            // so the destination tab's other-mode slot stays warm for any
-            // future `t` flip back inside that tab.
-            if (app.active_mode == 'T') {
-                app.selected_markers     = target.transient_selected;
-                app.last_selected_marker = target.transient_last_selected;
-            } else {
-                app.selected_markers     = target.warp_selected;
-                app.last_selected_marker = target.warp_last_selected;
-            }
-            clamp_viewport_start(app, audio);
-            // invalidate_waveform_area covers the top strip + waveform
-            // (including the playhead column inside it); the timestamp
-            // area holds the letter and the ts text.
-            invalidate_waveform_area();
-            invalidate_timestamp_area();
+            tab_mode.switch_active_tab_to(app.active_tab == 'A' ? 'B' : 'A');
             return;
         }
 
