@@ -35,6 +35,7 @@ add_executable(warptempo_gui
     src/gui/transientmarkers_ops.cpp
     src/gui/warpmarkers_ops.cpp
     src/gui/flag_editor.cpp
+    src/gui/render_view.cpp
     src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
     src/engine/transients.cpp
