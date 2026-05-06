@@ -39,6 +39,7 @@ add_executable(warptempo_gui
     src/gui/render_view.cpp
     src/gui/tab_mode.cpp
     src/gui/paint_handler.cpp
+    src/gui/input_handler.cpp
     src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
     src/engine/transients.cpp
