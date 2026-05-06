@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
@@ -129,6 +131,101 @@ private:
 // cascade rule applies: the ref inherits its target label_def's
 // disabled state.
 bool effective_disabled(const std::vector<GuiWarpMarker>& markers, int idx);
+
+// V.B iteration mode: format the popup's bracket text for marker `m`.
+// "[]" when both iter values are NaN; "[%+0.2f,%+0.2f]" when set.
+inline std::string format_iter_bracket_text(const GuiWarpMarker& m) {
+    if (std::isnan(m.iter_start) || std::isnan(m.iter_end)) {
+        return "[]";
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "[%+0.2f,%+0.2f]",
+                  m.iter_start, m.iter_end);
+    return buf;
+}
+
+// V.B iteration mode: an owning marker (tempo_inherits=false AND no
+// label_ref) gets a persistent iteration popup. Pass markers and
+// label_ref markers are excluded; disabled status does not matter.
+inline bool iter_popup_eligible_marker(const GuiWarpMarker& m) {
+    return !m.tempo_inherits && m.label_ref.empty();
+}
+
+// Brief X.2 BPM mode: same eligibility shape as iter (owning marker, no
+// label_ref). Defined separately so the two predicates can diverge later
+// without cascading edits.
+inline bool bpm_popup_eligible_marker(const GuiWarpMarker& m) {
+    return !m.tempo_inherits && m.label_ref.empty();
+}
+
+// Brief X.2 BPM mode: format the popup's bracket text for marker `m`.
+// "[]" when this marker is not the popup owner (matches iter's empty form
+// exactly), or when it is the owner with bpm_beats == 0 (owner-but-blank,
+// set by the `m`-toggle-on transition before any commit; bpm_beats > 0 is
+// the implicit "committed" sentinel — the parser sets all three of
+// bpm_beats/bpm_lo/bpm_hi together, mirroring iter's NaN convention).
+// The non-empty form is the strict syntax `<beats>@[<lo>,<hi>]`.
+inline std::string format_bpm_bracket_text(const GuiWarpMarker& m) {
+    if (!m.bpm_is_popup_owner || m.bpm_beats == 0) {
+        return "[]";
+    }
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%d@[%d,%d]",
+                  m.bpm_beats, m.bpm_lo, m.bpm_hi);
+    return buf;
+}
+
+// Brief X.2 BPM mode: strict parser for "<beats>@[<lo>,<hi>]". All three
+// values must be positive integers; lo <= hi (degenerate lo=hi is valid);
+// no whitespace, no decimals, no missing fields, no alternate forms. On
+// failure returns false and leaves out-params unchanged.
+inline bool parse_bpm_bracket(const std::string& s,
+                              int& beats, int& lo, int& hi) {
+    if (s.empty()) return false;
+    const auto at_pos = s.find('@');
+    if (at_pos == std::string::npos) return false;
+    if (s.find('@', at_pos + 1) != std::string::npos) return false;
+    const std::string left  = s.substr(0, at_pos);
+    const std::string right = s.substr(at_pos + 1);
+    if (left.empty() || right.empty()) return false;
+    if (right.front() != '[' || right.back() != ']') return false;
+    const std::string inner = right.substr(1, right.size() - 2);
+    if (inner.empty()) return false;
+    const auto comma = inner.find(',');
+    if (comma == std::string::npos) return false;
+    if (inner.find(',', comma + 1) != std::string::npos) return false;
+    const std::string lo_s = inner.substr(0, comma);
+    const std::string hi_s = inner.substr(comma + 1);
+    if (lo_s.empty() || hi_s.empty()) return false;
+    auto digits_only = [](const std::string& v) {
+        for (char c : v) {
+            if (c < '0' || c > '9') return false;
+        }
+        return !v.empty();
+    };
+    if (!digits_only(left) || !digits_only(lo_s) || !digits_only(hi_s)) {
+        return false;
+    }
+    auto parse_pos_int = [](const std::string& v, int& out) -> bool {
+        long long acc = 0;
+        for (char c : v) {
+            acc = acc * 10 + (c - '0');
+            if (acc > std::numeric_limits<int>::max()) return false;
+        }
+        if (acc <= 0) return false;
+        out = static_cast<int>(acc);
+        return true;
+    };
+    int b = 0, l = 0, h = 0;
+    if (!parse_pos_int(left, b))  return false;
+    if (!parse_pos_int(lo_s, l))  return false;
+    if (!parse_pos_int(hi_s, h))  return false;
+    if (l > h) return false;
+    beats = b;
+    lo    = l;
+    hi    = h;
+    return true;
+}
 
 namespace warpmarkers_internal {
 
