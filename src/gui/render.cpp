@@ -97,6 +97,99 @@ std::string resolve_inherited_tempo_scale(
     return {};
 }
 
+// X.7.8b-3: promoted from an inline function at the original
+// main.cpp:112-200 anonymous namespace. Body is verbatim — no
+// captures, no identifier rewrites needed.
+std::string compute_hover_popup_text(
+    const std::vector<GuiWarpMarker>& mv, int idx, int sample_rate) {
+    if (idx < 0 || idx >= static_cast<int>(mv.size())) return "";
+    const GuiWarpMarker& m = mv[idx];
+
+    if (m.tempo_inherits) {
+        // resolve_inherited_tempo walks backward from `walk-1`. Starting
+        // at idx+1 lets it return idx's resolved tempo if idx happens to
+        // be the only inheriting marker in front of an owning origin.
+        const int walk = idx + 1;
+        const double tval = resolve_inherited_tempo(mv, walk);
+        const std::string sc = resolve_inherited_tempo_scale(mv, walk);
+        char tbuf[32];
+        std::snprintf(tbuf, sizeof(tbuf), "%.2f", tval);
+        std::string out = "= ";
+        out += tbuf;
+        if (!sc.empty()) {
+            out += "*";
+            out += sc;
+        }
+        return out;
+    }
+
+    if (!m.label_ref.empty()) {
+        int def_idx = -1;
+        for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
+            if (mv[i].label_def == m.label_ref) {
+                def_idx = i;
+                break;
+            }
+        }
+        if (def_idx < 0) return "";
+        if (def_idx + 1 >= static_cast<int>(mv.size())) return "";
+        if (idx     + 1 >= static_cast<int>(mv.size())) return "";
+        const double sr_d = static_cast<double>(sample_rate);
+        if (sr_d <= 0.0) return "";
+
+        const double lr_src_dist =
+            (mv[idx + 1].time_seconds - mv[idx].time_seconds) * sr_d;
+        const double def_src_dist =
+            (mv[def_idx + 1].time_seconds - mv[def_idx].time_seconds) * sr_d;
+        if (def_src_dist <= 0.0 || lr_src_dist <= 0.0) return "";
+
+        const GuiWarpMarker& def = mv[def_idx];
+        double      def_base;
+        std::string def_scale_str;
+        bool        def_has_typed_scale;
+        if (def.tempo_inherits) {
+            // Pass-def: fall back to inheritance walk. The resolved tempo
+            // is treated as a fully-effective number with no separate
+            // typed scale (inheritance returns base*scale).
+            def_base = resolve_inherited_tempo(mv, def_idx);
+            def_scale_str = "";
+            def_has_typed_scale = false;
+        } else {
+            def_base = def.tempo_base;
+            def_scale_str = def.tempo_scale;
+            def_has_typed_scale = !def_scale_str.empty();
+        }
+        double def_scale_val = 1.0;
+        if (def_has_typed_scale) {
+            try { def_scale_val = std::stod(def_scale_str); }
+            catch (...) { def_scale_val = 1.0; }
+        }
+        const double def_eff_tempo = def_base * def_scale_val;
+        if (def_base == 0.0 || def_eff_tempo == 0.0) return "";
+
+        // settings.scale cancels in the engine's multiplier expression:
+        //   multiplier = (lr_src_dist * def_eff_tempo)
+        //              / (def_base * def_src_dist)
+        const double multiplier =
+            (lr_src_dist * def_eff_tempo) / (def_base * def_src_dist);
+        const double combined_scale = def_has_typed_scale
+            ? (def_scale_val * multiplier)
+            : multiplier;
+
+        char base_buf[32];
+        std::snprintf(base_buf, sizeof(base_buf), "%.2f", def_base);
+        char scale_buf[32];
+        std::snprintf(scale_buf, sizeof(scale_buf), "%.4f", combined_scale);
+        std::string out = "~= ";
+        out += base_buf;
+        out += "*";
+        out += scale_buf;
+        return out;
+    }
+
+    return "";
+}
+
 void render_background(cairo_t* cr, int x, int y, int w, int h) {
     cairo_save(cr);
     cairo_set_source_rgb(cr, kBackground.r, kBackground.g, kBackground.b);

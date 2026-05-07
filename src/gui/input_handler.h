@@ -37,7 +37,13 @@
 // original main.cpp:1483; set_on_button_release at main.cpp:1835; the
 // handle_wheel lambda at main.cpp:1444). The reference list this struct
 // already carries covers every dependency the new bodies need; nothing
-// new is captured. X.7.8b-3 will add on_motion the same way.
+// new is captured.
+//
+// X.7.8b-3 adds on_motion the same way (body byte-identical to the
+// lambda at the original main.cpp:1319). The same reference list
+// covers it; popup_eligible_marker and compute_hover_popup_text are
+// reached as free functions (promoted out of main.cpp's anonymous
+// namespace into app_state.{h,cpp} and render.{h,cpp} respectively).
 //
 // Residual-cluster lambdas the brief listed (revert_to_blank,
 // restore_playhead_to_lsp, load_then_drain) are intentionally absent: a
@@ -164,6 +170,7 @@ struct GuiInputHandler {
     void on_button_press(unsigned int button, int x, int y, unsigned int mods);
     void on_button_release(unsigned int button, int x, int y,
                            unsigned int mods);
+    void on_motion(int mouse_x, int mouse_y, unsigned int mods);
 
 private:
     struct RenderBatchResult {

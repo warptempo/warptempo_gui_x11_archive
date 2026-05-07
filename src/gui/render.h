@@ -320,6 +320,24 @@ double resolve_inherited_tempo(const std::vector<GuiWarpMarker>& markers, int in
 std::string resolve_inherited_tempo_scale(
     const std::vector<GuiWarpMarker>& markers, int index);
 
+// X.7.8b-3: promoted out of main.cpp's anonymous namespace so
+// input_handler.cpp can reach it from the on_motion body.
+//
+// V.A3b hover-popup text. Computes the same resolution math the engine
+// uses when emitting the .timemap, so the popup matches what the engine
+// will produce. Pass markers emit "= TEMPO" or "= TEMPO*SCALE" (single
+// equals; resolved tempo of the nearest prior owning marker). Label_ref
+// markers emit "~= BASE*COMBINED_SCALE" (tilde-equals, mirroring engine
+// behavior). BASE is rendered at 2 decimals; COMBINED_SCALE is
+// `def_scale * multiplier` when the def has a typed scale, else just
+// `multiplier`, rendered at 4 decimals. Returns "" when the marker
+// doesn't qualify for a hover popup (owning, missing def, malformed).
+//
+// Sibling to resolve_inherited_tempo / flag_text_for_marker — same
+// rendering-time text formatting role over GuiWarpMarker, same TU.
+std::string compute_hover_popup_text(
+    const std::vector<GuiWarpMarker>& mv, int idx, int sample_rate);
+
 // Returns the pixel width of the baseline-style monospace timestamp at the
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);

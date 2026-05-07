@@ -100,104 +100,10 @@ constexpr int kPlayheadHalfPx = 8;
 // can reach them. They remain reachable from this TU via
 // `#include "paint_handler.h"` below.
 
-// V.A3b hover-popup text. Computes the same resolution math the engine
-// uses when emitting the .timemap, so the popup matches what the engine
-// will produce. Pass markers emit "= TEMPO" or "= TEMPO*SCALE" (single
-// equals; resolved tempo of the nearest prior owning marker). Label_ref
-// markers emit "~= BASE*COMBINED_SCALE" (tilde-equals, mirroring engine
-// behavior). BASE is rendered at 2 decimals; COMBINED_SCALE is
-// `def_scale * multiplier` when the def has a typed scale, else just
-// `multiplier`, rendered at 4 decimals. Returns "" when the marker
-// doesn't qualify for a hover popup (owning, missing def, malformed).
-inline std::string compute_hover_popup_text(
-    const std::vector<GuiWarpMarker>& mv, int idx, int sample_rate) {
-    if (idx < 0 || idx >= static_cast<int>(mv.size())) return "";
-    const GuiWarpMarker& m = mv[idx];
-
-    if (m.tempo_inherits) {
-        // resolve_inherited_tempo walks backward from `walk-1`. Starting
-        // at idx+1 lets it return idx's resolved tempo if idx happens to
-        // be the only inheriting marker in front of an owning origin.
-        const int walk = idx + 1;
-        const double tval = resolve_inherited_tempo(mv, walk);
-        const std::string sc = resolve_inherited_tempo_scale(mv, walk);
-        char tbuf[32];
-        std::snprintf(tbuf, sizeof(tbuf), "%.2f", tval);
-        std::string out = "= ";
-        out += tbuf;
-        if (!sc.empty()) {
-            out += "*";
-            out += sc;
-        }
-        return out;
-    }
-
-    if (!m.label_ref.empty()) {
-        int def_idx = -1;
-        for (int i = 0; i < static_cast<int>(mv.size()); ++i) {
-            if (mv[i].label_def == m.label_ref) {
-                def_idx = i;
-                break;
-            }
-        }
-        if (def_idx < 0) return "";
-        if (def_idx + 1 >= static_cast<int>(mv.size())) return "";
-        if (idx     + 1 >= static_cast<int>(mv.size())) return "";
-        const double sr_d = static_cast<double>(sample_rate);
-        if (sr_d <= 0.0) return "";
-
-        const double lr_src_dist =
-            (mv[idx + 1].time_seconds - mv[idx].time_seconds) * sr_d;
-        const double def_src_dist =
-            (mv[def_idx + 1].time_seconds - mv[def_idx].time_seconds) * sr_d;
-        if (def_src_dist <= 0.0 || lr_src_dist <= 0.0) return "";
-
-        const GuiWarpMarker& def = mv[def_idx];
-        double      def_base;
-        std::string def_scale_str;
-        bool        def_has_typed_scale;
-        if (def.tempo_inherits) {
-            // Pass-def: fall back to inheritance walk. The resolved tempo
-            // is treated as a fully-effective number with no separate
-            // typed scale (inheritance returns base*scale).
-            def_base = resolve_inherited_tempo(mv, def_idx);
-            def_scale_str = "";
-            def_has_typed_scale = false;
-        } else {
-            def_base = def.tempo_base;
-            def_scale_str = def.tempo_scale;
-            def_has_typed_scale = !def_scale_str.empty();
-        }
-        double def_scale_val = 1.0;
-        if (def_has_typed_scale) {
-            try { def_scale_val = std::stod(def_scale_str); }
-            catch (...) { def_scale_val = 1.0; }
-        }
-        const double def_eff_tempo = def_base * def_scale_val;
-        if (def_base == 0.0 || def_eff_tempo == 0.0) return "";
-
-        // settings.scale cancels in the engine's multiplier expression:
-        //   multiplier = (lr_src_dist * def_eff_tempo)
-        //              / (def_base * def_src_dist)
-        const double multiplier =
-            (lr_src_dist * def_eff_tempo) / (def_base * def_src_dist);
-        const double combined_scale = def_has_typed_scale
-            ? (def_scale_val * multiplier)
-            : multiplier;
-
-        char base_buf[32];
-        std::snprintf(base_buf, sizeof(base_buf), "%.2f", def_base);
-        char scale_buf[32];
-        std::snprintf(scale_buf, sizeof(scale_buf), "%.4f", combined_scale);
-        std::string out = "~= ";
-        out += base_buf;
-        out += "*";
-        out += scale_buf;
-        return out;
-    }
-
-    return "";
-}
+// X.7.8b-3: compute_hover_popup_text moved to render.{h,cpp} so
+// input_handler.cpp can reach it from on_motion. It sits next to
+// resolve_inherited_tempo / flag_text_for_marker — same rendering-
+// time text formatting role over GuiWarpMarker, same TU.
 
 // OpKind, UndoEntry, DragState, UndoHistory, PlayheadDragState,
 // HoverPopupState, DialogTrigger, PromptState, ViewState, AppState live in
@@ -756,11 +662,13 @@ int main(int argc, char** argv) {
     auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
     auto invalidate_timestamp_area   = [&]() { viewport.invalidate_timestamp_area(); };
     auto invalidate_playhead_columns = [&](double a, double b) { viewport.invalidate_playhead_columns(a, b); };
-    auto move_playhead_to            = [&](int64_t s) { viewport.move_playhead_to(s); };
     // X.7.8b-2: move_playhead_pixels, zoom_in, zoom_out, scroll_viewport
     // had no callers outside the handle_wheel lambda after that lambda
     // moved onto GuiInputHandler. Their forwarders are dropped; the
     // methods stay public on Viewport.
+    // X.7.8b-3: move_playhead_to had no callers outside the on_motion
+    // lambda after it moved onto GuiInputHandler; its forwarder is
+    // dropped. The method stays public on Viewport.
     auto follow_scroll_if_needed     = [&]() { viewport.follow_scroll_if_needed(); };
 
     // -- Redraw -------------------------------------------------------------
@@ -781,35 +689,12 @@ int main(int argc, char** argv) {
     // the on_tick handler still call it.
     auto invalidate_top_strip     = [&]() { viewport.invalidate_top_strip(); };
 
-    // V.A3b: a warp marker is hover-popup-eligible iff its rect doesn't
-    // already display a numeric tempo: pass markers (with or without a
-    // label_def) and label_ref markers. Owning markers display their tempo
-    // in the rect, so no popup is needed. Transient mode has no pass
-    // concept and is never eligible.
-    //
-    // V.B: when iteration mode is on, the hover popup for these same
-    // marker types is suppressed entirely — the persistent iteration
-    // popups occupy that visual space, and stacking a transient hover
-    // hint on top would just clutter the strip.
-    auto popup_eligible_marker = [&](int idx) -> bool {
-        if (idx < 0) return false;
-        if (app.render_view_enabled) {
-            // In render-view, hover popups apply against the loaded
-            // render's warpmarkers regardless of the pre-toggle mode.
-            // Iteration-mode is forced off on toggle-in so its gate is
-            // implicitly satisfied here too.
-            const auto& mv = app.render_view_markers;
-            if (idx >= static_cast<int>(mv.size())) return false;
-            const auto& m = mv[idx];
-            return m.tempo_inherits || !m.label_ref.empty();
-        }
-        if (app.active_mode != 'W') return false;
-        if (app.iteration_mode_enabled) return false;
-        const auto& mv = app.warpmarkers.markers();
-        if (idx >= static_cast<int>(mv.size())) return false;
-        const auto& m = mv[idx];
-        return m.tempo_inherits || !m.label_ref.empty();
-    };
+    // X.7.8b-3: popup_eligible_marker moved to a free function in
+    // app_state.{h,cpp}. The remaining callers in this TU
+    // (recompute_hover_at_cursor below, on_tick) reach it directly with
+    // the new (app, idx) signature; on_motion calls it from
+    // input_handler.cpp. V.A3b / V.B comments live above the
+    // declaration in app_state.h.
 
     // Reset the hover popup state. If the popup was visible, invalidate the
     // top strip so the next paint erases it. Safe to call from any path.
@@ -1258,14 +1143,14 @@ int main(int argc, char** argv) {
             // skips paint and keeps the strip clean).
             if (app.render_view_enabled) {
                 app.hover_popup.cached_text =
-                    popup_eligible_marker(hit)
+                    popup_eligible_marker(app, hit)
                         ? compute_hover_popup_text(
                               app.render_view_markers, hit,
                               app.render_view_src_sr)
                         : std::string();
             } else {
                 app.hover_popup.cached_text =
-                    popup_eligible_marker(hit)
+                    popup_eligible_marker(app, hit)
                         ? compute_hover_popup_text(
                               app.warpmarkers.markers(), hit,
                               audio.sample_rate())
@@ -1278,10 +1163,9 @@ int main(int argc, char** argv) {
     // the GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}.
     // X.7.8b-2: begin_drag had no callers outside the button-press lambda
     // after it moved onto GuiInputHandler; its forwarder is dropped.
-    // apply_drag_motion and commit_drag remain because the on_motion
-    // lambda (still in main.cpp until X.7.8b-3) calls them.
-    auto apply_drag_motion          = [&](double d) { warpops.apply_drag_motion(d); };
-    auto commit_drag                = [&]() { warpops.commit_drag(); };
+    // X.7.8b-3: apply_drag_motion and commit_drag had no callers outside
+    // the on_motion lambda after it moved onto GuiInputHandler; their
+    // forwarders are dropped. The methods stay public on GuiWarpMarkersOps.
 
     // X.7.6: the render-view cluster has been hoisted onto the GuiRenderView
     // struct in render_view.{cpp,h}. X.7.8b-1: every render-view forwarder
@@ -1317,190 +1201,7 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_motion([&](int mouse_x, int mouse_y, unsigned int mods) {
-        if constexpr (kDebugPerf) {
-            app.last_input_event_time = std::chrono::steady_clock::now();
-        }
-        // V.A3b Addendum 3: record latest cursor coords so viewport
-        // mutators can re-evaluate hover at the cursor's last position.
-        app.last_mouse_x = mouse_x;
-        app.last_mouse_y = mouse_y;
-        if (app.prompt.active) {
-            clear_hover_popup();
-            return;
-        }
-        // Chunk W: render-view motion handler. Brief F Section 2 adds
-        // playhead-drag snap support: when a drag is in flight, snap the
-        // playhead to the visible sub-view's markers (3px epsilon),
-        // matching source-view's gesture. Otherwise run hover popup
-        // detection against render_view_markers (suppressed in transient
-        // sub-view because hit_test_flag short-circuits to -1).
-        if (app.render_view_enabled) {
-            if (app.playhead_drag.active) {
-                clear_hover_popup();
-                if ((mods & Button1Mask) == 0) {
-                    app.playhead_drag = PlayheadDragState{};
-                    return;
-                }
-                const int sr = audio.sample_rate();
-                if (sr <= 0) return;
-                const GuiRect area = waveform_area(app);
-                const double spp = current_samples_per_pixel(app, audio);
-                if (spp <= 0.0) return;
-                const int hit = hit_test_marker_line(app, audio, mouse_x);
-                int64_t new_playhead;
-                if (hit >= 0) {
-                    if (app.active_mode == 'T') {
-                        new_playhead =
-                            app.render_view_transients[hit].effective_frame();
-                    } else {
-                        new_playhead = static_cast<int64_t>(std::llround(
-                            app.render_view_markers[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    }
-                } else {
-                    int rel = mouse_x - area.x;
-                    if (rel < 0) rel = 0;
-                    if (rel >= area.w) rel = area.w - 1;
-                    new_playhead = app.viewport_start_sample +
-                        static_cast<int64_t>(std::llround(rel * spp));
-                }
-                if (new_playhead != app.playhead_sample) {
-                    move_playhead_to(new_playhead);
-                }
-                return;
-            }
-            const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
-            if (hit != app.hover_popup.marker_index) {
-                if (app.hover_popup.visible) invalidate_top_strip();
-                app.hover_popup.marker_index = hit;
-                app.hover_popup.visible      = false;
-                app.hover_popup.entry_time   =
-                    std::chrono::steady_clock::now();
-                app.hover_popup.cached_text =
-                    popup_eligible_marker(hit)
-                        ? compute_hover_popup_text(
-                              app.render_view_markers, hit,
-                              app.render_view_src_sr)
-                        : std::string();
-            }
-            return;
-        }
-        if (app.playhead_drag.active) {
-            clear_hover_popup();
-            // Left button must still be held; if not, the release was lost —
-            // terminate the drag. Modifier changes mid-drag are ignored.
-            if ((mods & Button1Mask) == 0) {
-                app.playhead_drag = PlayheadDragState{};
-                return;
-            }
-            const int sr = audio.sample_rate();
-            if (sr <= 0) return;
-            const GuiRect area = waveform_area(app);
-            const double spp = current_samples_per_pixel(app, audio);
-            if (spp <= 0.0) return;
-
-            // Marker snap test — uses the same 3px epsilon as marker hit-test.
-            // Selection is fixed at press time and is NOT mutated here; the
-            // snap is purely a playhead-positioning magnet.
-            const int hit = hit_test_marker_line(app, audio, mouse_x);
-            int64_t new_playhead;
-            if (hit >= 0) {
-                if (app.active_mode == 'T') {
-                    new_playhead = app.transientmarkers.markers()[hit].effective_frame();
-                } else {
-                    new_playhead = static_cast<int64_t>(std::llround(
-                        app.warpmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
-                }
-            } else {
-                // No marker within epsilon: playhead follows cursor freely.
-                int rel = mouse_x - area.x;
-                if (rel < 0) rel = 0;
-                if (rel >= area.w) rel = area.w - 1;
-                new_playhead = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(rel * spp));
-            }
-
-            if (new_playhead != app.playhead_sample) {
-                move_playhead_to(new_playhead);
-            }
-            return;
-        }
-        if (!app.drag.active) {
-            // No active gesture: run hover-popup detection. Only in warp
-            // mode, with no editor, no dialog (already returned), no drag,
-            // and not while iteration mode owns the popup space.
-            // The dwell timer is started/restarted on every transition into
-            // an eligible rect; the on_tick handler flips visibility.
-            if (app.active_mode == 'W' &&
-                !app.iteration_mode_enabled &&
-                !text_editor::is_active(app.top_flag_editor) &&
-                !app.queue_running) {
-                const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
-                if (hit != app.hover_popup.marker_index) {
-                    if (app.hover_popup.visible) invalidate_top_strip();
-                    app.hover_popup.marker_index = hit;
-                    app.hover_popup.visible      = false;
-                    app.hover_popup.entry_time   =
-                        std::chrono::steady_clock::now();
-                    // Precompute popup text at rect-entry so the
-                    // delay-completion paint doesn't repeat the math.
-                    app.hover_popup.cached_text =
-                        popup_eligible_marker(hit)
-                            ? compute_hover_popup_text(
-                                  app.warpmarkers.markers(), hit,
-                                  audio.sample_rate())
-                            : std::string();
-                }
-            } else {
-                clear_hover_popup();
-            }
-            return;
-        }
-        // A drag is active — drop any pending popup.
-        clear_hover_popup();
-        // Left button must still be held down — otherwise release was lost.
-        if ((mods & Button1Mask) == 0) {
-            commit_drag();
-            return;
-        }
-        const int sr = audio.sample_rate();
-        if (sr <= 0) return;
-        const GuiRect area = waveform_area(app);
-        const double spp = current_samples_per_pixel(app, audio);
-        const double sr_d = static_cast<double>(sr);
-        const double vp_time = static_cast<double>(app.viewport_start_sample) / sr_d;
-        const double mouse_time = vp_time +
-            static_cast<double>(mouse_x - area.x) * spp / sr_d;
-        apply_drag_motion(mouse_time - app.drag.anchor_mouse_time_seconds);
-
-        // Track the playhead with the grabbed marker. The drag applies a
-        // uniform delta across the dragging set, so the hit marker's
-        // post-motion time matches the user's cursor intent. Viewport is
-        // deliberately not followed — the user can pan manually if the
-        // drag runs past the edge.
-        const int hit_idx = app.drag.hit_marker;
-        const bool transient_drag = (app.drag.drag_mode == 'T');
-        const int n = transient_drag
-            ? static_cast<int>(app.transientmarkers.markers().size())
-            : static_cast<int>(app.warpmarkers.markers().size());
-        if (hit_idx >= 0 && hit_idx < n) {
-            int64_t ph;
-            if (transient_drag) {
-                ph = app.transientmarkers.markers()[hit_idx].effective_frame();
-            } else {
-                ph = static_cast<int64_t>(std::llround(
-                    app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));
-            }
-            if (ph != app.playhead_sample) {
-                const double old_px = playhead_pixel_x(app, audio);
-                app.playhead_sample = ph;
-                if (playback.is_playing()) playback.resync_predictor();
-                const double new_px = playhead_pixel_x(app, audio);
-                invalidate_playhead_columns(old_px, new_px);
-                invalidate_timestamp_area();
-            }
-        }
+        input_handler.on_motion(mouse_x, mouse_y, mods);
     });
 
     // -- File loading --------------------------------------------------------
@@ -1788,7 +1489,7 @@ int main(int argc, char** argv) {
         // check the elapsed time and re-validate eligibility.
         if (!app.hover_popup.visible &&
             app.hover_popup.marker_index >= 0 &&
-            popup_eligible_marker(app.hover_popup.marker_index)) {
+            popup_eligible_marker(app, app.hover_popup.marker_index)) {
             const auto now = std::chrono::steady_clock::now();
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - app.hover_popup.entry_time).count();

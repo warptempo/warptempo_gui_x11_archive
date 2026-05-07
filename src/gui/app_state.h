@@ -560,3 +560,12 @@ int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
 // most one of these returns >= 0 for a given (x, y).
 int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
                        int mouse_x, int mouse_y);
+
+// X.7.8b-3: promoted from a lambda in main(). True iff the warp marker
+// at `idx` is hover-popup-eligible — i.e. its rect doesn't already
+// display a numeric tempo (pass markers and label_ref markers qualify;
+// owning markers don't). Render-view honors the loaded render's
+// markers regardless of the pre-toggle mode; source-view requires warp
+// mode with iteration mode off. Always false in transient mode (no
+// pass concept).
+bool popup_eligible_marker(const AppState& app, int idx);

@@ -1849,3 +1849,199 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
     if (!app.drag.active) return;
     warpops.commit_drag();
 }
+
+// X.7.8b-3: motion handler. Verbatim from the lambda at the original
+// main.cpp:1319; the operation-struct method calls (apply_drag_motion,
+// commit_drag, move_playhead_to, invalidate_top_strip,
+// invalidate_timestamp_area, invalidate_playhead_columns) are rewritten
+// to direct method calls on warpops / viewport. popup_eligible_marker
+// (now in app_state.{h,cpp}) takes `app` as its first argument; the
+// remaining free function calls (hit_test_marker_line, hit_test_flag,
+// compute_hover_popup_text, waveform_area, current_samples_per_pixel,
+// playhead_pixel_x, text_editor::is_active) keep their original spelling.
+void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
+    if constexpr (kDebugPerf) {
+        app.last_input_event_time = std::chrono::steady_clock::now();
+    }
+    // V.A3b Addendum 3: record latest cursor coords so viewport
+    // mutators can re-evaluate hover at the cursor's last position.
+    app.last_mouse_x = mouse_x;
+    app.last_mouse_y = mouse_y;
+    if (app.prompt.active) {
+        clear_hover_popup();
+        return;
+    }
+    // Chunk W: render-view motion handler. Brief F Section 2 adds
+    // playhead-drag snap support: when a drag is in flight, snap the
+    // playhead to the visible sub-view's markers (3px epsilon),
+    // matching source-view's gesture. Otherwise run hover popup
+    // detection against render_view_markers (suppressed in transient
+    // sub-view because hit_test_flag short-circuits to -1).
+    if (app.render_view_enabled) {
+        if (app.playhead_drag.active) {
+            clear_hover_popup();
+            if ((mods & Button1Mask) == 0) {
+                app.playhead_drag = PlayheadDragState{};
+                return;
+            }
+            const int sr = audio.sample_rate();
+            if (sr <= 0) return;
+            const GuiRect area = waveform_area(app);
+            const double spp = current_samples_per_pixel(app, audio);
+            if (spp <= 0.0) return;
+            const int hit = hit_test_marker_line(app, audio, mouse_x);
+            int64_t new_playhead;
+            if (hit >= 0) {
+                if (app.active_mode == 'T') {
+                    new_playhead =
+                        app.render_view_transients[hit].effective_frame();
+                } else {
+                    new_playhead = static_cast<int64_t>(std::llround(
+                        app.render_view_markers[hit].time_seconds *
+                        static_cast<double>(sr)));
+                }
+            } else {
+                int rel = mouse_x - area.x;
+                if (rel < 0) rel = 0;
+                if (rel >= area.w) rel = area.w - 1;
+                new_playhead = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(rel * spp));
+            }
+            if (new_playhead != app.playhead_sample) {
+                viewport.move_playhead_to(new_playhead);
+            }
+            return;
+        }
+        const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
+        if (hit != app.hover_popup.marker_index) {
+            if (app.hover_popup.visible) viewport.invalidate_top_strip();
+            app.hover_popup.marker_index = hit;
+            app.hover_popup.visible      = false;
+            app.hover_popup.entry_time   =
+                std::chrono::steady_clock::now();
+            app.hover_popup.cached_text =
+                popup_eligible_marker(app, hit)
+                    ? compute_hover_popup_text(
+                          app.render_view_markers, hit,
+                          app.render_view_src_sr)
+                    : std::string();
+        }
+        return;
+    }
+    if (app.playhead_drag.active) {
+        clear_hover_popup();
+        // Left button must still be held; if not, the release was lost —
+        // terminate the drag. Modifier changes mid-drag are ignored.
+        if ((mods & Button1Mask) == 0) {
+            app.playhead_drag = PlayheadDragState{};
+            return;
+        }
+        const int sr = audio.sample_rate();
+        if (sr <= 0) return;
+        const GuiRect area = waveform_area(app);
+        const double spp = current_samples_per_pixel(app, audio);
+        if (spp <= 0.0) return;
+
+        // Marker snap test — uses the same 3px epsilon as marker hit-test.
+        // Selection is fixed at press time and is NOT mutated here; the
+        // snap is purely a playhead-positioning magnet.
+        const int hit = hit_test_marker_line(app, audio, mouse_x);
+        int64_t new_playhead;
+        if (hit >= 0) {
+            if (app.active_mode == 'T') {
+                new_playhead = app.transientmarkers.markers()[hit].effective_frame();
+            } else {
+                new_playhead = static_cast<int64_t>(std::llround(
+                    app.warpmarkers.markers()[hit].time_seconds *
+                    static_cast<double>(sr)));
+            }
+        } else {
+            // No marker within epsilon: playhead follows cursor freely.
+            int rel = mouse_x - area.x;
+            if (rel < 0) rel = 0;
+            if (rel >= area.w) rel = area.w - 1;
+            new_playhead = app.viewport_start_sample +
+                static_cast<int64_t>(std::llround(rel * spp));
+        }
+
+        if (new_playhead != app.playhead_sample) {
+            viewport.move_playhead_to(new_playhead);
+        }
+        return;
+    }
+    if (!app.drag.active) {
+        // No active gesture: run hover-popup detection. Only in warp
+        // mode, with no editor, no dialog (already returned), no drag,
+        // and not while iteration mode owns the popup space.
+        // The dwell timer is started/restarted on every transition into
+        // an eligible rect; the on_tick handler flips visibility.
+        if (app.active_mode == 'W' &&
+            !app.iteration_mode_enabled &&
+            !text_editor::is_active(app.top_flag_editor) &&
+            !app.queue_running) {
+            const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
+            if (hit != app.hover_popup.marker_index) {
+                if (app.hover_popup.visible) viewport.invalidate_top_strip();
+                app.hover_popup.marker_index = hit;
+                app.hover_popup.visible      = false;
+                app.hover_popup.entry_time   =
+                    std::chrono::steady_clock::now();
+                // Precompute popup text at rect-entry so the
+                // delay-completion paint doesn't repeat the math.
+                app.hover_popup.cached_text =
+                    popup_eligible_marker(app, hit)
+                        ? compute_hover_popup_text(
+                              app.warpmarkers.markers(), hit,
+                              audio.sample_rate())
+                        : std::string();
+            }
+        } else {
+            clear_hover_popup();
+        }
+        return;
+    }
+    // A drag is active — drop any pending popup.
+    clear_hover_popup();
+    // Left button must still be held down — otherwise release was lost.
+    if ((mods & Button1Mask) == 0) {
+        warpops.commit_drag();
+        return;
+    }
+    const int sr = audio.sample_rate();
+    if (sr <= 0) return;
+    const GuiRect area = waveform_area(app);
+    const double spp = current_samples_per_pixel(app, audio);
+    const double sr_d = static_cast<double>(sr);
+    const double vp_time = static_cast<double>(app.viewport_start_sample) / sr_d;
+    const double mouse_time = vp_time +
+        static_cast<double>(mouse_x - area.x) * spp / sr_d;
+    warpops.apply_drag_motion(mouse_time - app.drag.anchor_mouse_time_seconds);
+
+    // Track the playhead with the grabbed marker. The drag applies a
+    // uniform delta across the dragging set, so the hit marker's
+    // post-motion time matches the user's cursor intent. Viewport is
+    // deliberately not followed — the user can pan manually if the
+    // drag runs past the edge.
+    const int hit_idx = app.drag.hit_marker;
+    const bool transient_drag = (app.drag.drag_mode == 'T');
+    const int n = transient_drag
+        ? static_cast<int>(app.transientmarkers.markers().size())
+        : static_cast<int>(app.warpmarkers.markers().size());
+    if (hit_idx >= 0 && hit_idx < n) {
+        int64_t ph;
+        if (transient_drag) {
+            ph = app.transientmarkers.markers()[hit_idx].effective_frame();
+        } else {
+            ph = static_cast<int64_t>(std::llround(
+                app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));
+        }
+        if (ph != app.playhead_sample) {
+            const double old_px = playhead_pixel_x(app, audio);
+            app.playhead_sample = ph;
+            if (playback.is_playing()) playback.resync_predictor();
+            const double new_px = playhead_pixel_x(app, audio);
+            viewport.invalidate_playhead_columns(old_px, new_px);
+            viewport.invalidate_timestamp_area();
+        }
+    }
+}

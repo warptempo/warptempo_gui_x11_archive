@@ -159,6 +159,29 @@ int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
     return -1;
 }
 
+// X.7.8b-3: promoted from a lambda at the original main.cpp:794-812.
+// Body is verbatim modulo identifier spelling: the captured `app`
+// reference is now an explicit argument.
+bool popup_eligible_marker(const AppState& app, int idx) {
+    if (idx < 0) return false;
+    if (app.render_view_enabled) {
+        // In render-view, hover popups apply against the loaded
+        // render's warpmarkers regardless of the pre-toggle mode.
+        // Iteration-mode is forced off on toggle-in so its gate is
+        // implicitly satisfied here too.
+        const auto& mv = app.render_view_markers;
+        if (idx >= static_cast<int>(mv.size())) return false;
+        const auto& m = mv[idx];
+        return m.tempo_inherits || !m.label_ref.empty();
+    }
+    if (app.active_mode != 'W') return false;
+    if (app.iteration_mode_enabled) return false;
+    const auto& mv = app.warpmarkers.markers();
+    if (idx >= static_cast<int>(mv.size())) return false;
+    const auto& m = mv[idx];
+    return m.tempo_inherits || !m.label_ref.empty();
+}
+
 int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
                        int mouse_x, int mouse_y) {
     if (!app.bpm_mode_enabled) return -1;
