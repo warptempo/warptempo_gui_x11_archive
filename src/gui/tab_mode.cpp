@@ -120,26 +120,18 @@ void GuiTabMode::switch_active_tab_to(char target_tab) {
 }
 
 // `t` key: toggle into/out of transient mode. Entry preconditions
-// (only when going W → T): engine setting must be `warptempo` and
-// transients_enabled must not be `false`. Exit (T → W) is unconditional.
+// (only when going W → T): engine setting must be `warptempo`. Exit
+// (T → W) is unconditional.
 void GuiTabMode::toggle_active_mode() {
     if (app.active_mode == 'T') {
         this->switch_active_mode_to('W');
     } else {
         const std::string engine =
             settings_get(app, "engine", "warptempo");
-        const std::string te =
-            settings_get(app, "transients_enabled", "true");
         if (engine != "warptempo") {
             std::fprintf(stderr,
                 "warptempo_gui: transient mode unavailable: "
                 "engine=%s\n", engine.c_str());
-            return;
-        }
-        if (te == "false") {
-            std::fprintf(stderr,
-                "warptempo_gui: transient mode unavailable: "
-                "transients_enabled=false\n");
             return;
         }
         this->switch_active_mode_to('T');

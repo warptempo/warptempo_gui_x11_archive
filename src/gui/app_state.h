@@ -195,12 +195,10 @@ struct HoverPopupState {
 
 // What action triggered the modal prompt; the activate-response dispatch
 // switches on this together with the response key. Save/Discard/Cancel
-// applies to the unsaved-work prompts (CLOSE_WINDOW, REVERT_TO_BLANK);
-// Detect/Cancel applies to the re-detect confirmation (DETECT_TRANSIENTS).
+// applies to the unsaved-work prompts (CLOSE_WINDOW, REVERT_TO_BLANK).
 enum class DialogTrigger {
     CLOSE_WINDOW,
     REVERT_TO_BLANK,
-    DETECT_TRANSIENTS,
 };
 
 // In-window modal prompt state. When `active` is true, the bottom strip
@@ -521,7 +519,7 @@ GuiRect union_rect(GuiRect a, GuiRect b);
 // X.7.7: promoted from a lambda in main(). Looks up `key` in
 // app.settings_passthrough and returns its value, or `dflt` if the key
 // is not present. Used by the `t`-mode entry path in GuiTabMode to gate
-// on engine= and transients_enabled= without a typed parser.
+// on engine= without a typed parser.
 std::string settings_get(const AppState& app, const std::string& key,
                          const std::string& dflt);
 

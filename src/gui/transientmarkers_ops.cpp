@@ -1,7 +1,6 @@
 #include "transientmarkers_ops.h"
 
 #include "audio.h"
-#include "render_pipeline.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,11 +23,9 @@
 //   move_playhead_to            → viewport.move_playhead_to
 //   apply_transient_position_delta → free function (defined in main.cpp)
 //   current_samples_per_pixel   → free function
-//   do_detection                → engine free function
 //   stop_playback_if_playing,
 //   clear_hover_popup,
-//   find_flag,
-//   open_prompt_detect_confirm  → std::function refs (called as f())
+//   find_flag                   → std::function refs (called as f())
 
 // Drop a transient marker at `time_seconds`. Equal-frame collisions
 // are accepted (mid-edit nudges may transit through them); save()
@@ -363,141 +360,3 @@ void GuiTransientMarkersOps::toggle_transient_end_time() {
     viewport.invalidate_timestamp_area();
 }
 
-// Two-pass merge: existing D entries indexed by their immutable
-// src_frame anchor are matched against fresh detections so user edits
-// (disabled, displaced position, b=/e= flags) survive re-detection.
-// Existing I (manually inserted) entries always carry over; D entries
-// whose src_frame the new detector no longer places are dropped. The
-// merged list is sorted by effective_frame() and the frame-0 invariant
-// is restored. Does NOT push undo — detection is destructive by spec.
-void GuiTransientMarkersOps::merge_detection(const std::vector<int64_t>& fresh_src_frames) {
-    std::map<int64_t, GuiTransientMarker> old_d_by_src;
-    std::vector<GuiTransientMarker> old_i;
-    for (const auto& m : app.transientmarkers.markers()) {
-        if (m.is_inserted) old_i.push_back(m);
-        else               old_d_by_src.emplace(m.src_frame, m);
-    }
-
-    std::vector<GuiTransientMarker> merged;
-    merged.reserve(fresh_src_frames.size() + old_i.size() + 1);
-    for (int64_t f : fresh_src_frames) {
-        auto it = old_d_by_src.find(f);
-        if (it != old_d_by_src.end()) {
-            merged.push_back(it->second);
-        } else {
-            GuiTransientMarker m;
-            m.src_frame   = f;
-            m.is_inserted = false;
-            merged.push_back(m);
-        }
-    }
-    for (auto& m : old_i) merged.push_back(std::move(m));
-
-    std::sort(merged.begin(), merged.end(),
-        [](const GuiTransientMarker& a, const GuiTransientMarker& b) {
-            return a.effective_frame() < b.effective_frame();
-        });
-
-    if (merged.empty() || merged.front().effective_frame() > 0) {
-        GuiTransientMarker zero;
-        zero.src_frame   = 0;
-        zero.is_inserted = true;
-        merged.insert(merged.begin(), zero);
-    }
-
-    app.transientmarkers.markers_mut() = std::move(merged);
-}
-
-// Run the engine's detection-only pass against the loaded source +
-// current marker set, then merge the results into app.transientmarkers.
-// After a successful merge, write the .transientmarkers sibling file
-// immediately — detection is not on the undo stack so the on-disk
-// file is the authoritative record. The transient_dirty bit is reset
-// explicitly: the merge mutated app.transientmarkers but no UndoEntry was
-// pushed, so the post-merge state is the one we want to call "saved".
-void GuiTransientMarkersOps::run_detect_now() {
-    if (app.source_audio_path.empty())   return;
-    if (audio.total_frames() <= 0)       return;
-
-    // Clear any in-flight transient selection — indices into the
-    // pre-merge list are not meaningful afterwards.
-    if (app.active_mode == 'T') app.last_selected_marker = -1;
-
-    DetectionRequest dr;
-    dr.source_audio_path    = app.source_audio_path;
-    dr.markers              = app.warpmarkers.markers();
-    dr.settings_passthrough = app.settings_passthrough;
-
-    std::vector<int64_t> fresh;
-    if (!do_detection(dr, fresh)) {
-        std::fprintf(stderr,
-            "warptempo_gui: detection failed; transients unchanged\n");
-        return;
-    }
-    std::sort(fresh.begin(), fresh.end());
-    fresh.erase(std::unique(fresh.begin(), fresh.end()), fresh.end());
-
-    merge_detection(fresh);
-
-    // Write the sibling file. Empty list (only the auto frame-0 head)
-    // would be unusual after detection, but the save path already
-    // handles the empty case.
-    if (!app.transientmarkers_path.empty()) {
-        if (app.transientmarkers.markers().empty()) {
-            app.transientmarkers.delete_file(app.transientmarkers_path);
-        } else if (!app.transientmarkers.save(app.transientmarkers_path)) {
-            std::fprintf(stderr,
-                "warptempo_gui: transient save failed: %s\n",
-                app.transientmarkers_path.c_str());
-        }
-    }
-
-    // Detection is not undoable. Reset the transient-side dirty bit
-    // so the dialog doesn't gate a subsequent close/revert because of
-    // the merge. Warp dirty is unaffected.
-    app.transient_dirty = false;
-    undo.recompute_dirty();
-    viewport.invalidate_all();
-    std::fprintf(stderr,
-        "warptempo_gui: detection produced %zu transients\n",
-        app.transientmarkers.markers().size());
-}
-
-// Ctrl+Alt+T entry point. Confirms before clobbering an existing
-// detection (any D entry in the list). With no prior detection (only
-// I entries or the auto frame-0 head), runs immediately.
-void GuiTransientMarkersOps::detect_transients() {
-    if (app.prompt.active)             return;
-    if (app.source_audio_path.empty()) return;
-    if (audio.total_frames() <= 0)     return;
-
-    bool has_prior_detection = false;
-    for (const auto& m : app.transientmarkers.markers()) {
-        if (!m.is_inserted) { has_prior_detection = true; break; }
-    }
-    if (has_prior_detection) {
-        open_prompt_detect_confirm();
-        return;
-    }
-    run_detect_now();
-}
-
-// Ctrl+Shift+Alt+T: drop all transients (both I and D), undoable. The
-// frame-0 invariant means a non-empty list always carries an entry at
-// 0; clearing wholesale removes that too — load() will re-materialize
-// it on the next read of an empty file (which is itself the empty
-// list, since save() removes the file when empty). The undo restores
-// the full pre-clear state.
-void GuiTransientMarkersOps::clear_all_transients() {
-    if (app.transientmarkers.markers().empty()) return;
-
-    std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
-    const int pre_last = app.last_selected_marker;
-
-    app.transientmarkers.clear();
-    if (app.active_mode == 'T') app.last_selected_marker = -1;
-
-    undo.push_undo_transient(std::move(pre_state), OpKind::Destroy, pre_last);
-    undo.recompute_dirty();
-    viewport.invalidate_all();
-}

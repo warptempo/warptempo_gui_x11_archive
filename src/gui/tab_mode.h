@@ -11,8 +11,8 @@
 // lambdas and the inline Ctrl+Tab block in the keyboard handler. Owns the
 // active-tab snapshot push (refresh_active_tab_from_app), the per-mode
 // selection-slot resolver (active_view_state), the W/T mode swap
-// (switch_active_mode_to), the `t`-keypress entry path with engine /
-// transients_enabled gating (toggle_active_mode), and the Ctrl+Tab
+// (switch_active_mode_to), the `t`-keypress entry path with engine
+// gating (toggle_active_mode), and the Ctrl+Tab
 // flip (switch_active_tab_to).
 //
 // The struct holds references to long-lived AppState/Viewport/Selection

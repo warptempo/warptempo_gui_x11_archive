@@ -614,7 +614,6 @@ int main(int argc, char** argv) {
     // references. Bodies are assigned later at their original definition
     // sites — same pattern as clear_hover_popup / stop_playback_if_playing.
     std::function<FlagLoc(bool, bool, int)> find_flag;
-    std::function<void()>                    open_prompt_detect_confirm;
 
     // X.7.6: forward-declared so GuiRenderView can capture a reference.
     // Body is assigned later at its original definition site — same
@@ -639,7 +638,7 @@ int main(int argc, char** argv) {
               clear_hover_popup, stop_playback_if_playing);
     GuiTransientMarkersOps transients(app, audio, viewport, selection, undo,
                                       clear_hover_popup, stop_playback_if_playing,
-                                      find_flag, open_prompt_detect_confirm);
+                                      find_flag);
     GuiWarpMarkersOps warpops(app, audio, gui, viewport, selection, undo,
                               clear_hover_popup, stop_playback_if_playing,
                               find_flag);
@@ -902,9 +901,6 @@ int main(int argc, char** argv) {
         case DialogTrigger::REVERT_TO_BLANK:
             revert_to_blank();
             break;
-        case DialogTrigger::DETECT_TRANSIENTS:
-            transients.run_detect_now();
-            break;
         }
     };
 
@@ -914,17 +910,6 @@ int main(int argc, char** argv) {
         app.prompt.response_keys   = {'s', 'd', 'c'};
         app.prompt.response_labels = {"[S]ave", "[D]iscard", "[C]ancel"};
         app.prompt.trigger         = t;
-        clear_hover_popup();
-        invalidate_all();
-    };
-
-    open_prompt_detect_confirm = [&]() {
-        app.prompt.active          = true;
-        app.prompt.text            =
-            "Re-detect transients? Existing detection will be replaced.";
-        app.prompt.response_keys   = {'d', 'c'};
-        app.prompt.response_labels = {"[D]etect", "[C]ancel"};
-        app.prompt.trigger         = DialogTrigger::DETECT_TRANSIENTS;
         clear_hover_popup();
         invalidate_all();
     };
@@ -955,21 +940,6 @@ int main(int argc, char** argv) {
                 proceed_with_trigger(trigger);
                 return;
             }
-            if (k == 'd') {
-                app.prompt.active = false;
-                invalidate_all();
-                proceed_with_trigger(trigger);
-                return;
-            }
-            if (k == 'c') {
-                app.prompt.active = false;
-                invalidate_all();
-                return;
-            }
-            return;
-        }
-
-        if (trigger == DialogTrigger::DETECT_TRANSIENTS) {
             if (k == 'd') {
                 app.prompt.active = false;
                 invalidate_all();

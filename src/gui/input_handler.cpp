@@ -999,22 +999,6 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // Ctrl+Shift+Alt+T: clear every transient marker (undoable).
-    // Checked before Ctrl+Alt+T so the more-specific binding wins.
-    if (ctrl && shift && alt &&
-        (keysym == XK_t || keysym == XK_T)) {
-        transients.clear_all_transients();
-        return;
-    }
-
-    // Ctrl+Alt+T: run transient detection (with a confirmation dialog
-    // when there's already a prior detection in the list).
-    if (ctrl && alt && !shift &&
-        (keysym == XK_t || keysym == XK_T)) {
-        transients.detect_transients();
-        return;
-    }
-
     // Space-bar is modifier-independent.
     if (keysym == XK_space) { toggle_playback(); return; }
 
@@ -1050,8 +1034,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // `t` (no modifiers) toggles transient mode globally. Brief
     // J.2: render-view shares the global active_mode flag, so a
     // single handler serves both views. Render-view inherits the
-    // engine / transients_enabled precondition checks from
-    // toggle_active_mode.
+    // engine precondition check from toggle_active_mode.
     if (keysym == XK_t && !ctrl && !shift && !alt) {
         tab_mode.toggle_active_mode();
         return;

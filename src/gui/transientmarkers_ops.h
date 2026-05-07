@@ -32,7 +32,6 @@ struct GuiTransientMarkersOps {
     std::function<void()>&                        clear_hover_popup;
     std::function<void()>&                        stop_playback_if_playing;
     std::function<FlagLoc(bool, bool, int)>&      find_flag;
-    std::function<void()>&                        open_prompt_detect_confirm;
 
     GuiTransientMarkersOps(AppState&                                     app_,
                            const GuiAudio&                               audio_,
@@ -41,8 +40,7 @@ struct GuiTransientMarkersOps {
                            Undo&                                         undo_,
                            std::function<void()>&                        clear_hover_popup_,
                            std::function<void()>&                        stop_playback_if_playing_,
-                           std::function<FlagLoc(bool, bool, int)>&      find_flag_,
-                           std::function<void()>&                        open_prompt_detect_confirm_)
+                           std::function<FlagLoc(bool, bool, int)>&      find_flag_)
         : app(app_),
           audio(audio_),
           viewport(viewport_),
@@ -50,8 +48,7 @@ struct GuiTransientMarkersOps {
           undo(undo_),
           clear_hover_popup(clear_hover_popup_),
           stop_playback_if_playing(stop_playback_if_playing_),
-          find_flag(find_flag_),
-          open_prompt_detect_confirm(open_prompt_detect_confirm_) {}
+          find_flag(find_flag_) {}
 
     void drop_transient_at_position(double time_seconds);
     void drop_transient_at_playhead();
@@ -62,8 +59,4 @@ struct GuiTransientMarkersOps {
     void jump_transient_selection_to_playhead();
     void toggle_transient_begin_time();
     void toggle_transient_end_time();
-    void merge_detection(const std::vector<int64_t>& fresh_src_frames);
-    void run_detect_now();
-    void detect_transients();
-    void clear_all_transients();
 };
