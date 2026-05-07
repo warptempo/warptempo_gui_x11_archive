@@ -887,8 +887,12 @@ int main(int argc, char** argv) {
     auto open_prompt_unsaved = [&](DialogTrigger t) {
         app.prompt.active          = true;
         app.prompt.text            = "Save unsaved changes?";
-        app.prompt.response_keys   = {'s', 'd', 'c'};
-        app.prompt.response_labels = {"[S]ave", "[D]iscard", "[C]ancel"};
+        // Sentinel chars for non-letter keys: 0x7F = Delete, 0x1B = Escape.
+        // The keysym → char mapping in input_handler.cpp's prompt dispatch
+        // produces these for XK_Delete / XK_Escape; the prompt machinery
+        // remains a vector<char> match.
+        app.prompt.response_keys   = {'s', '\x7f', '\x1b'};
+        app.prompt.response_labels = {"[S]ave", "[Delete]", "[Esc]"};
         app.prompt.trigger         = t;
         clear_hover_popup();
         invalidate_all();
@@ -902,6 +906,8 @@ int main(int argc, char** argv) {
     prompt_activate_response = [&](char k) {
         if (!app.prompt.active) return;
         const DialogTrigger trigger = app.prompt.trigger;
+        // Sentinels: '\x7f' = Delete (discard), '\x1b' = Escape (cancel).
+        // See open_prompt_unsaved above.
 
         if (trigger == DialogTrigger::CLOSE_WINDOW ||
             trigger == DialogTrigger::REVERT_TO_BLANK) {
@@ -909,9 +915,9 @@ int main(int argc, char** argv) {
                 const bool ok = save_markers();
                 if (!ok) {
                     app.prompt.text            = "Save failed.";
-                    app.prompt.response_keys   = {'r', 'd', 'c'};
+                    app.prompt.response_keys   = {'r', '\x7f', '\x1b'};
                     app.prompt.response_labels =
-                        {"[R]etry", "[D]iscard", "[C]ancel"};
+                        {"[R]etry", "[Delete]", "[Esc]"};
                     invalidate_all();
                     return;
                 }
@@ -920,13 +926,13 @@ int main(int argc, char** argv) {
                 proceed_with_trigger(trigger);
                 return;
             }
-            if (k == 'd') {
+            if (k == '\x7f') {
                 app.prompt.active = false;
                 invalidate_all();
                 proceed_with_trigger(trigger);
                 return;
             }
-            if (k == 'c') {
+            if (k == '\x1b') {
                 app.prompt.active = false;
                 invalidate_all();
                 return;

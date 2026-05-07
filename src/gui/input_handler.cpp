@@ -113,22 +113,21 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     const bool alt   = (mods & Mod1Mask)    != 0;
 
     // Bottom-strip prompt owns input while active. Only the prompt's
-    // own response keys (case-insensitive) and Esc (rightmost
-    // response = Cancel by convention) do anything; everything else
-    // is swallowed so marker edits / playback / viewport keys cannot
-    // sneak in while the prompt is up.
+    // own response keys do anything; everything else is swallowed so
+    // marker edits / playback / viewport keys cannot sneak in while
+    // the prompt is up. Letter keys are case-insensitive; Delete and
+    // Escape map to sentinel chars '\x7f' and '\x1b' so they participate
+    // in the same vector<char> match as letter responses.
     if (app.prompt.active) {
         char k = 0;
         if (keysym >= XK_a && keysym <= XK_z) {
             k = static_cast<char>('a' + (keysym - XK_a));
         } else if (keysym >= XK_A && keysym <= XK_Z) {
             k = static_cast<char>('a' + (keysym - XK_A));
-        }
-        if (keysym == XK_Escape) {
-            if (!app.prompt.response_keys.empty()) {
-                prompt_activate_response(app.prompt.response_keys.back());
-            }
-            return;
+        } else if (keysym == XK_Delete) {
+            k = '\x7f';
+        } else if (keysym == XK_Escape) {
+            k = '\x1b';
         }
         if (k != 0) {
             for (char rk : app.prompt.response_keys) {
