@@ -232,6 +232,30 @@ bool GuiX11::init(int width, int height, const char* title) {
     }
 
     XMapWindow(dpy_, win_);
+
+    // Request maximized state via EWMH. Sent to the root window (not win_)
+    // because the WM listens there for state-change requests. Sent after
+    // XMapWindow because some compositors drop pre-Map state requests.
+    // Both _HORZ and _VERT in one message so the maximize is atomic from
+    // the WM's perspective (no one-frame single-axis transition).
+    Atom net_wm_state       = XInternAtom(dpy_, "_NET_WM_STATE", False);
+    Atom net_wm_state_max_h = XInternAtom(dpy_, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+    Atom net_wm_state_max_v = XInternAtom(dpy_, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+
+    XEvent ev{};
+    ev.xclient.type         = ClientMessage;
+    ev.xclient.window       = win_;
+    ev.xclient.message_type = net_wm_state;
+    ev.xclient.format       = 32;
+    ev.xclient.data.l[0]    = 1;  // _NET_WM_STATE_ADD
+    ev.xclient.data.l[1]    = static_cast<long>(net_wm_state_max_h);
+    ev.xclient.data.l[2]    = static_cast<long>(net_wm_state_max_v);
+    ev.xclient.data.l[3]    = 1;  // source indication: normal application
+    ev.xclient.data.l[4]    = 0;
+
+    XSendEvent(dpy_, DefaultRootWindow(dpy_), False,
+               SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+
     XFlush(dpy_);
 
     return true;
