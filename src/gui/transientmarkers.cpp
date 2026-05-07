@@ -68,9 +68,11 @@ bool parse_frame_token(const std::string& tok, int64_t& out,
     return true;
 }
 
-// Parse "[b=|e=][#]<frame> <I|D>[ <displaced_frame>]" into a GuiTransientMarker.
-// Returns true on success; on failure, fills `err_msg` with a one-line
-// diagnostic.
+// Parse "[b=|e=][#]<frame>" into a GuiTransientMarker. Returns true on
+// success; on failure, fills `err_msg` with a one-line diagnostic. Files
+// written by pre-X.8.3 builds (carrying an i/d status code or a
+// displaced_frame token) are rejected with "unexpected status code" so the
+// upgrade requirement surfaces to the user instead of silently misparsing.
 bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& err_msg) {
     std::string t = trim_ws(raw);
     if (t.empty()) {
@@ -87,57 +89,22 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
         t.erase(0, 1);
     }
 
-    // Tokenize on whitespace. Expect 2 or 3 fields:
-    //   <frame> <status>
-    //   <frame> D <displaced_frame>
     std::vector<std::string> toks;
     {
         std::istringstream iss(t);
         std::string tk;
         while (iss >> tk) toks.push_back(std::move(tk));
     }
-    if (toks.size() < 2) {
-        err_msg = "missing status code";
+    if (toks.empty()) {
+        err_msg = "missing src_frame";
         return false;
     }
-    if (toks.size() > 3) {
-        err_msg = "too many fields";
+    if (toks.size() > 1) {
+        err_msg = "unexpected status code";
         return false;
     }
 
     if (!parse_frame_token(toks[0], out.src_frame, "src_frame", err_msg)) {
-        return false;
-    }
-
-    const std::string& status = toks[1];
-    // Accept both legacy uppercase and new-canonical lowercase. Save
-    // always emits lowercase per V.A1 Part 3.
-    if (status == "i" || status == "I") {
-        out.is_inserted = true;
-        if (toks.size() == 3) {
-            err_msg = "i status must not have a displaced_frame";
-            return false;
-        }
-    } else if (status == "d" || status == "D") {
-        out.is_inserted = false;
-        if (toks.size() == 3) {
-            int64_t df = 0;
-            if (!parse_frame_token(toks[2], df, "displaced_frame", err_msg)) {
-                return false;
-            }
-            if (df == 0) {
-                err_msg = "displaced_frame must be > 0";
-                return false;
-            }
-            if (df == out.src_frame) {
-                err_msg = "displaced_frame must differ from src_frame";
-                return false;
-            }
-            out.has_displacement = true;
-            out.displaced_frame  = df;
-        }
-    } else {
-        err_msg = "unknown status code: " + status + " (expected i or d)";
         return false;
     }
     return true;
@@ -216,13 +183,7 @@ bool GuiTransientMarkers::load(const std::string& path) {
     // omitted it. An empty file stays empty until the user authors.
     if (!markers_.empty() && markers_.front().effective_frame() > 0) {
         GuiTransientMarker zero;
-        zero.src_frame        = 0;
-        zero.is_inserted      = true;
-        zero.disabled         = false;
-        zero.is_begin_time    = false;
-        zero.is_end_time      = false;
-        zero.has_displacement = false;
-        zero.displaced_frame  = 0;
+        zero.src_frame = 0;
         markers_.insert(markers_.begin(), zero);
     }
     return true;
@@ -264,11 +225,7 @@ bool GuiTransientMarkers::save(const std::string& path,
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
         if (m.disabled)         out << '#';
-        out << m.src_frame << ' ' << (m.is_inserted ? 'i' : 'd');
-        if (!m.is_inserted && m.has_displacement) {
-            out << ' ' << m.displaced_frame;
-        }
-        out << '\n';
+        out << m.src_frame << '\n';
     }
     const std::string data = out.str();
 

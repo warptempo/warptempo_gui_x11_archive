@@ -652,8 +652,8 @@ bool do_render(const RenderRequest& req) {
             // Transients: locate each transient's effective_frame() in the
             // engine's frame_map via binary search and emit at synth_frame *
             // R_s — same placement convention the engine uses internally.
-            // Drop out-of-trim and disabled. Stripping displacement is
-            // intentional — the user-visible position lands in src_frame.
+            // Drop out-of-trim and disabled. src_frame on the emitted marker
+            // is the engine-domain render_frame.
             if (!req.transients.empty()) {
                 std::vector<GuiTransientMarker> warped_transients;
                 warped_transients.reserve(req.transients.size());
@@ -679,13 +679,10 @@ bool do_render(const RenderRequest& req) {
                         static_cast<int64_t>(m) *
                         static_cast<int64_t>(engine_R_s);
                     GuiTransientMarker w;
-                    w.src_frame        = render_frame;
-                    w.is_inserted      = t.is_inserted;
-                    w.disabled         = false;
-                    w.is_begin_time    = false;
-                    w.is_end_time      = false;
-                    w.has_displacement = false;
-                    w.displaced_frame  = 0;
+                    w.src_frame     = render_frame;
+                    w.disabled      = false;
+                    w.is_begin_time = false;
+                    w.is_end_time   = false;
                     warped_transients.push_back(std::move(w));
                 }
                 const std::string tmd_path =

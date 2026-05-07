@@ -702,17 +702,8 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
 namespace {
 
 std::string transient_flag_text(const GuiTransientMarker& m) {
-    std::string text;
-    if (m.is_begin_time)    text = "b=";
-    else if (m.is_end_time) text = "e=";
-    if (m.is_inserted) {
-        text += 'i';
-    } else if (m.has_displacement) {
-        text += "d*";
-    } else {
-        text += 'd';
-    }
-    return text;
+    (void)m;
+    return "t";
 }
 
 template <typename Emit>
@@ -804,8 +795,7 @@ void render_transient_markers(cairo_t* cr,
 
     // Two passes — one path per color — split by in-trim vs out-of-trim.
     // Disabled transients are skipped entirely (no stem); selection has no
-    // effect on stems under the brief H palette rules. is_inserted does
-    // not affect stem color either.
+    // effect on stems under the brief H palette rules.
     for (int pass = 0; pass < 2; pass++) {
         const bool out_of_trim_pass = (pass == 1);
         const GuiColor c = out_of_trim_pass ? dim(kMarker) : kMarker;

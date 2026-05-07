@@ -4,37 +4,17 @@
 #include <string>
 #include <vector>
 
-// One transient marker, the GUI's authoring view.
-//
-// `is_inserted == true`: a manually authored transient at `src_frame`. On
-// disk: `<src_frame> I` (with optional `b=`/`e=` prefix and `#` for disabled).
-//
-// `is_inserted == false`: a detected transient. `src_frame` is the immutable
-// detection anchor (used by the merge step to match across re-detections).
-// If `has_displacement`, the marker's effective on-screen position is
-// `displaced_frame`; otherwise it is `src_frame`. On disk:
-// `<src_frame> D` for plain detected, `<src_frame> D <displaced_frame>` for
-// detected-with-nudge (D*).
-//
-// `disabled` is freely toggleable on any transient (no label_def constraint
-// like warp markers have). `is_begin_time` and `is_end_time` mirror the
-// cross-file trim flag system from S.1: a `b=` or `e=` flag may live on
-// either a warp marker or a transient marker, and the engine consumes one
-// of each across both files.
+// One transient marker, the GUI's authoring view: a transient authored at
+// `src_frame`, with an optional `disabled` flag and optional cross-file
+// `b=`/`e=` trim flags (`is_begin_time` / `is_end_time`, mirroring the S.1
+// system shared with warp markers).
 struct GuiTransientMarker {
-    int64_t src_frame        = 0;     // anchor for D, position for I
-    bool    is_inserted      = true;  // false = D, true = I
-    bool    disabled         = false;
-    bool    is_begin_time    = false;
-    bool    is_end_time      = false;
-    bool    has_displacement = false; // only meaningful when !is_inserted
-    int64_t displaced_frame  = 0;     // user-nudged position (D*)
+    int64_t src_frame     = 0;
+    bool    disabled      = false;
+    bool    is_begin_time = false;
+    bool    is_end_time   = false;
 
-    // Returns the marker's effective on-screen position. For I and plain D,
-    // this is src_frame. For D-with-displacement, this is displaced_frame.
-    int64_t effective_frame() const {
-        return has_displacement ? displaced_frame : src_frame;
-    }
+    int64_t effective_frame() const { return src_frame; }
 };
 
 struct GuiTransientMarkerError {

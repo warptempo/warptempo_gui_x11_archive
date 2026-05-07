@@ -41,16 +41,14 @@ void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
     GuiTransientMarker nm;
-    nm.src_frame   = frame;
-    nm.is_inserted = true;
+    nm.src_frame = frame;
     int new_idx = app.transientmarkers.insert_marker(std::move(nm));
     // Frame-0 companion. If the post-insert list's head isn't at
     // frame 0, insert one. The companion always lands at index 0,
     // so the user's marker shifts up by one.
     if (app.transientmarkers.markers().front().effective_frame() != 0) {
         GuiTransientMarker zero;
-        zero.src_frame   = 0;
-        zero.is_inserted = true;
+        zero.src_frame = 0;
         app.transientmarkers.insert_marker(std::move(zero));
         new_idx += 1;
     }
@@ -87,9 +85,6 @@ void GuiTransientMarkersOps::delete_selected_transient() {
                 "warptempo_gui: transient delete rejected: stale index\n");
             return;
         }
-        // Detected entries can't be deleted; only disabled or merged
-        // away by re-running detection.
-        if (!tv[idx].is_inserted) return;
         if (idx == 0 || tv[idx].effective_frame() == 0) {
             std::fprintf(stderr,
                 "warptempo_gui: cannot delete first transient (frame 0)\n");
@@ -133,8 +128,7 @@ void GuiTransientMarkersOps::toggle_transient_disabled() {
 // Compute (delta_min, delta_max) sample bounds for shifting the
 // currently-selected transients by a uniform delta. Same shape as the
 // warp version: nearest non-selected neighbor on each side, intersected.
-// Operates on effective_frame (the visible position) — for a
-// D-with-displacement entry, that's displaced_frame.
+// Operates on effective_frame, which equals src_frame post X.8.3.
 // No trim clamp — transients aren't bounded by trim flags during edit.
 std::pair<int64_t, int64_t> GuiTransientMarkersOps::compute_transient_delta_bounds(bool& ok) {
     ok = false;

@@ -265,29 +265,10 @@ double current_samples_per_pixel(const AppState& a, const GuiAudio& audio) {
         a.zoom_level, area.w, audio.total_frames(), audio.sample_rate());
 }
 
-// Apply a position delta to one transient's effective frame.
-//   I:                src_frame += delta.
-//   D, no displace:   set has_displacement=true unless the new effective
-//                     equals src_frame (delta==0 → no-op).
-//   D, with displace: update displaced_frame; if the new effective lands
-//                     back on the anchor src_frame, revert the
-//                     displacement.
-// Caller is responsible for delta != 0; this is a noop on delta == 0.
+// Applies a position delta to the transient's src_frame.
 void apply_transient_position_delta(GuiTransientMarker& m, int64_t delta) {
     if (delta == 0) return;
-    if (m.is_inserted) {
-        m.src_frame += delta;
-        return;
-    }
-    const int64_t old_eff = m.effective_frame();
-    const int64_t new_eff = old_eff + delta;
-    if (new_eff == m.src_frame) {
-        m.has_displacement = false;
-        m.displaced_frame  = 0;
-    } else {
-        m.has_displacement = true;
-        m.displaced_frame  = new_eff;
-    }
+    m.src_frame += delta;
 }
 
 void clamp_viewport_start(AppState& a, const GuiAudio& audio) {
