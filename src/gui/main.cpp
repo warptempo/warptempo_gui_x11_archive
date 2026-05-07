@@ -289,17 +289,6 @@ double playhead_pixel_x(const AppState& a, const GuiAudio& audio) {
     return static_cast<double>(a.playhead_sample - a.viewport_start_sample) / spp;
 }
 
-// Computes a viewport_start such that `sample` renders at pixel column
-// `target_pixel_x`, then clamps. Used for playhead-centered zoom.
-int64_t viewport_start_for_pixel(int64_t sample,
-                                 double target_pixel_x,
-                                 double samples_per_pixel) {
-    const double start = static_cast<double>(sample) -
-                         target_pixel_x * samples_per_pixel;
-    if (start <= 0.0) return 0;
-    return static_cast<int64_t>(std::llround(start));
-}
-
 // Shrink-and-pad: produce a union rectangle covering both inputs. Used to
 // bundle the two playhead-column invalidations into a single expose when
 // they overlap (e.g., arrow key at zoom level 0 moves by 1 pixel).

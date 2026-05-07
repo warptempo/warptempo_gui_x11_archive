@@ -157,8 +157,18 @@ struct UndoHistory {
 // only positions the playhead (with a 3px snap-to-marker magnet); selection
 // is set at press time and never mutated by motion. The gesture ends on
 // release (or on Escape, which ends at current position).
+//
+// Brief six: a click that reseats the playhead in the waveform area keeps
+// playback alive (the press site reseeks the audio device to the new
+// position). A drag — i.e. button-1 motion observed while the gesture is
+// active — converts the gesture into a scrub and stops playback the moment
+// motion is detected. `was_playing_at_press` carries the press-time playback
+// state into the motion handler; `drag_motion_stopped_audio` is the one-shot
+// guard so the stop fires at most once per drag.
 struct PlayheadDragState {
-    bool active = false;
+    bool active                    = false;
+    bool was_playing_at_press      = false;
+    bool drag_motion_stopped_audio = false;
 };
 
 // Cross-file flag scan result. `valid` is false when the requested flag
@@ -500,9 +510,6 @@ int64_t samples_visible(const AppState& a, const GuiAudio& audio);
 double  current_samples_per_pixel(const AppState& a, const GuiAudio& audio);
 void    clamp_viewport_start(AppState& a, const GuiAudio& audio);
 double  playhead_pixel_x(const AppState& a, const GuiAudio& audio);
-int64_t viewport_start_for_pixel(int64_t sample,
-                                 double target_pixel_x,
-                                 double samples_per_pixel);
 int     max_valid_numeric_level(int waveform_width_px,
                                 int64_t total_frames,
                                 int sample_rate);

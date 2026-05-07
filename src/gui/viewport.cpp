@@ -128,20 +128,14 @@ void Viewport::apply_zoom_change(int new_zoom_level) {
     if (audio.total_frames() <= 0) return;
     if (new_zoom_level == app.zoom_level) return;
 
-    const double old_spp = current_samples_per_pixel(app, audio);
-    const double old_px  = (old_spp > 0.0)
-        ? static_cast<double>(app.playhead_sample -
-                              app.viewport_start_sample) / old_spp
-        : 0.0;
-
     app.zoom_level = new_zoom_level;
 
     if (app.zoom_level == kFitFileLevel) {
         app.viewport_start_sample = 0;
     } else {
-        const double new_spp = current_samples_per_pixel(app, audio);
+        const int64_t visible = samples_visible(app, audio);
         app.viewport_start_sample =
-            viewport_start_for_pixel(app.playhead_sample, old_px, new_spp);
+            app.playhead_sample - visible / 2;
         clamp_viewport_start(app, audio);
     }
 
