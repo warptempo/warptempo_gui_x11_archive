@@ -458,7 +458,6 @@ std::string format_default_settings_template(const std::string& stem,
     s += "engine=warptempo\n";
     s += "N=4096\n";
     s += "fftw_threads=16\n";
-    s += "transients_tau_back_ms=30.0\n";
     s += "limiter_enabled=false\n";
     s += "follow=true\n";
     s += "tab_a_viewport_start=0\n";
