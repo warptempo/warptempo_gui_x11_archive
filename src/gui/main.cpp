@@ -60,13 +60,9 @@ namespace {
 constexpr double   kTopStripRatio     = 0.10;
 constexpr double   kBottomStripRatio  = 0.10;
 
-// Half-width in pixels of the selection-hit window when clicking on a marker.
-constexpr int kMarkerHitHalfPx = 3;
-
-// Double-click detection thresholds. X11 doesn't synthesize DoubleClick; we
-// roll it from ButtonPress timing + position deltas.
-constexpr int kDoubleClickMs      = 300;
-constexpr int kDoubleClickPixels  = 5;
+// X.7.8b-2: kMarkerHitHalfPx, kDoubleClickMs, kDoubleClickPixels moved to
+// app_state.h so the hit_test_* free functions and the GuiInputHandler
+// mouse handler can reach them.
 
 // Time the cursor must dwell on a popup-eligible flag rect before the
 // hover popup appears. Distinct from kDoubleClickMs (point-event window
@@ -695,9 +691,11 @@ int main(int argc, char** argv) {
     // X.7.8a so paint_handler.cpp can reach it without a capture.
 
     // V.A3b Addendum 3: forward-declared so the viewport methods below can
-    // invoke it. The body is assigned later (after hit_test_flag and
-    // clear_hover_popup are in scope). Guarded inside Viewport with a
-    // truthiness check because callbacks are wired after this assignment.
+    // invoke it. The body is assigned later (after clear_hover_popup is in
+    // scope; X.7.8b-2 made hit_test_flag a free function in app_state.{h,
+    // cpp} so it's no longer a scope concern). Guarded inside Viewport
+    // with a truthiness check because callbacks are wired after this
+    // assignment.
     std::function<void()> recompute_hover_at_cursor;
 
     // X.7.3: forward-declared so the Undo struct can capture references.
@@ -759,10 +757,10 @@ int main(int argc, char** argv) {
     auto invalidate_timestamp_area   = [&]() { viewport.invalidate_timestamp_area(); };
     auto invalidate_playhead_columns = [&](double a, double b) { viewport.invalidate_playhead_columns(a, b); };
     auto move_playhead_to            = [&](int64_t s) { viewport.move_playhead_to(s); };
-    auto move_playhead_pixels        = [&](int dx) { viewport.move_playhead_pixels(dx); };
-    auto zoom_in                     = [&]() { viewport.zoom_in(); };
-    auto zoom_out                    = [&]() { viewport.zoom_out(); };
-    auto scroll_viewport             = [&](int64_t d) { viewport.scroll_viewport(d); };
+    // X.7.8b-2: move_playhead_pixels, zoom_in, zoom_out, scroll_viewport
+    // had no callers outside the handle_wheel lambda after that lambda
+    // moved onto GuiInputHandler. Their forwarders are dropped; the
+    // methods stay public on Viewport.
     auto follow_scroll_if_needed     = [&]() { viewport.follow_scroll_if_needed(); };
 
     // -- Redraw -------------------------------------------------------------
@@ -775,7 +773,12 @@ int main(int argc, char** argv) {
         paint_handler.on_resize(w, h);
     });
 
-    auto invalidate_marker_column = [&](int i) { viewport.invalidate_marker_column(i); };
+    // X.7.8b-2: invalidate_marker_column had no callers outside the
+    // button-press / button-release lambdas after they moved onto
+    // GuiInputHandler. Its forwarder is dropped; the method stays
+    // public on Viewport. invalidate_top_strip remains because
+    // clear_hover_popup, recompute_hover_at_cursor, on_motion, and
+    // the on_tick handler still call it.
     auto invalidate_top_strip     = [&]() { viewport.invalidate_top_strip(); };
 
     // V.A3b: a warp marker is hover-popup-eligible iff its rect doesn't
@@ -816,9 +819,11 @@ int main(int argc, char** argv) {
         if (was_visible) invalidate_top_strip();
     };
 
-    auto set_single_selection        = [&](int idx) { selection.set_single_selection(idx); };
-    auto clear_selection             = [&]() { selection.clear_selection(); };
-    auto toggle_selection_membership = [&](int idx) { return selection.toggle_selection_membership(idx); };
+    // X.7.8b-2: set_single_selection, clear_selection,
+    // toggle_selection_membership had no callers outside the
+    // button-press / button-release lambdas after they moved onto
+    // GuiInputHandler. Their forwarders are dropped; the methods stay
+    // public on Selection.
 
     // -- Undo/redo helpers --------------------------------------------------
     //
@@ -842,10 +847,10 @@ int main(int argc, char** argv) {
     // exit_bpm_mode had no external callers after the on_key body moved
     // out, so their forwarders are dropped — they remain public on
     // GuiFlagEditor and on_key calls them directly through flag_editor.
-    auto exit_top_flag_edit_no_commit = [&]() { flag_editor.exit_top_flag_edit_no_commit(); };
-    auto enter_top_flag_edit          = [&](int idx) { flag_editor.enter_top_flag_edit(idx); };
-    auto enter_iter_edit              = [&](int idx) { flag_editor.enter_iter_edit(idx); };
-    auto enter_bpm_edit                = [&](int idx) { flag_editor.enter_bpm_edit(idx); };
+    // X.7.8b-2: exit_top_flag_edit_no_commit, enter_top_flag_edit,
+    // enter_iter_edit, enter_bpm_edit had no callers outside the
+    // button-press lambda after it moved onto GuiInputHandler. Their
+    // forwarders are dropped; the methods stay public on GuiFlagEditor.
 
     // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
     // scan. The (excl_trans, excl_idx) pair excludes one marker from the
@@ -907,19 +912,19 @@ int main(int argc, char** argv) {
     // undo / selection / warpops.
 
     // X.7.5a: the warp-authoring lambdas have been hoisted onto the
-    // GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}. drop_marker
-    // remains as a forwarder because it has callers elsewhere in main()
-    // (mouse handler drag-create path).
-    auto drop_marker                    = [&](double t, bool inh) { warpops.drop_marker(t, inh); };
+    // GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}.
+    // X.7.8b-2: drop_marker had no callers outside the button-press
+    // lambda after it moved onto GuiInputHandler; its forwarder is
+    // dropped. The method stays public on GuiWarpMarkersOps.
 
     // -- Transient-mode editing helpers (chunk S.2.2) -----------------------
 
     // X.7.4: the transient-authoring lambdas have been hoisted onto the
-    // Transients struct in transients.{cpp,h}. drop_transient_at_position
-    // remains because it has callers elsewhere in main() (mouse handler
-    // drag-create path); the rest had no external callers after the
-    // on_key body moved out and were dropped in X.7.8b-1.
-    auto drop_transient_at_position          = [&](double t) { transients.drop_transient_at_position(t); };
+    // Transients struct in transients.{cpp,h}.
+    // X.7.8b-2: drop_transient_at_position had no callers outside the
+    // button-press lambda after it moved onto GuiInputHandler; its
+    // forwarder is dropped. The method stays public on
+    // GuiTransientMarkersOps.
 
     // X.7.7: the mode/tab-management lambdas have been hoisted onto the
     // GuiTabMode struct in tab_mode.{cpp,h}. refresh_active_tab_from_app
@@ -1208,164 +1213,11 @@ int main(int argc, char** argv) {
         if (playback.is_playing()) playback.resync_predictor();
     };
 
-    // Hit-test a marker line in the waveform area. Returns index or -1.
-    // Mode-aware: iterates the active list (render-view markers when
-    // render-view is on; otherwise warp markers or transients).
-    auto hit_test_marker_line = [&](int mouse_x) -> int {
-        const GuiRect area = waveform_area(app);
-        const double spp = current_samples_per_pixel(app, audio);
-        if (spp <= 0.0) return -1;
-        const int sr = audio.sample_rate();
-        const int click_rel_x = mouse_x - area.x;
-        const double vp = static_cast<double>(app.viewport_start_sample);
-        const int64_t visible = samples_visible(app, audio);
-        int best_hit = -1;
-        int best_dist = kMarkerHitHalfPx + 1;
-        const bool rv = app.render_view_enabled;
-        // Brief F Section 3: in render-view, the visible sub-view's
-        // list drives hit-testing. 'T' reads transient frames via
-        // effective_frame() (matching source-view's transient branch).
-        const bool rv_trans = rv && app.active_mode == 'T';
-        const int n =
-            rv_trans
-                ? static_cast<int>(app.render_view_transients.size())
-                : rv
-                    ? static_cast<int>(app.render_view_markers.size())
-                    : (app.active_mode == 'T')
-                        ? static_cast<int>(app.transientmarkers.markers().size())
-                        : static_cast<int>(app.warpmarkers.markers().size());
-        for (int i = 0; i < n; ++i) {
-            double ms;
-            if (rv_trans) {
-                ms = static_cast<double>(
-                    app.render_view_transients[i].effective_frame());
-            } else if (rv) {
-                ms = app.render_view_markers[i].time_seconds *
-                     static_cast<double>(sr);
-            } else if (app.active_mode == 'T') {
-                ms = static_cast<double>(
-                    app.transientmarkers.markers()[i].effective_frame());
-            } else {
-                ms = app.warpmarkers.markers()[i].time_seconds *
-                     static_cast<double>(sr);
-            }
-            if (ms < vp) continue;
-            if (ms >= vp + static_cast<double>(visible)) continue;
-            const int m_px = static_cast<int>(std::llround((ms - vp) / spp));
-            const int d = std::abs(m_px - click_rel_x);
-            if (d <= kMarkerHitHalfPx && d < best_dist) {
-                best_dist = d;
-                best_hit  = i;
-            }
-        }
-        return best_hit;
-    };
-
-    // Hit-test a flag rectangle in the top strip. Returns marker index or -1.
-    // Mode-aware: dispatches to the warp- or transient-flag pack.
-    auto hit_test_flag = [&](int mouse_x, int mouse_y) -> int {
-        // Brief F Section 3: render-view's transient sub-view paints no
-        // flags; short-circuit to no-hit so click and hover paths see a
-        // bare top strip.
-        if (app.render_view_enabled &&
-            app.active_mode == 'T') {
-            return -1;
-        }
-        const GuiRect area = waveform_area(app);
-        const GuiRect top  = top_strip_area(app);
-        cairo_surface_t* scratch_s = cairo_image_surface_create(
-            CAIRO_FORMAT_ARGB32, 1, 1);
-        cairo_t* scratch_cr = cairo_create(scratch_s);
-        const double spp = current_samples_per_pixel(app, audio);
-        const int64_t vp_start = app.viewport_start_sample;
-        const int64_t vp_end = vp_start +
-            static_cast<int64_t>(std::llround(spp * area.w));
-        std::vector<FlagHitRect> rects;
-        if (app.render_view_enabled) {
-            rects = compute_flag_hit_rects(
-                scratch_cr, top, app.render_view_markers,
-                vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-        } else if (app.active_mode == 'T') {
-            rects = compute_transient_flag_hit_rects(
-                scratch_cr, top, app.transientmarkers.markers(),
-                vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-        } else {
-            rects = compute_flag_hit_rects(
-                scratch_cr, top, app.warpmarkers.markers(),
-                vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-        }
-        cairo_destroy(scratch_cr);
-        cairo_surface_destroy(scratch_s);
-        for (const auto& r : rects) {
-            if (mouse_x >= r.x && mouse_x < r.x + r.w &&
-                mouse_y >= r.y && mouse_y < r.y + r.h) {
-                return r.marker_index;
-            }
-        }
-        return -1;
-    };
-
-    // V.B: iteration popup hit-test. Returns the marker index whose
-    // iteration popup contains (mouse_x, mouse_y), or -1. Always returns
-    // -1 when iteration mode is off or in transient mode (no popups).
-    auto hit_test_iter_popup = [&](int mouse_x, int mouse_y) -> int {
-        if (!app.iteration_mode_enabled) return -1;
-        if (app.active_mode != 'W') return -1;
-        const GuiRect area = waveform_area(app);
-        const GuiRect top  = top_strip_area(app);
-        cairo_surface_t* scratch_s = cairo_image_surface_create(
-            CAIRO_FORMAT_ARGB32, 1, 1);
-        cairo_t* scratch_cr = cairo_create(scratch_s);
-        const double spp = current_samples_per_pixel(app, audio);
-        const int64_t vp_start = app.viewport_start_sample;
-        const int64_t vp_end = vp_start +
-            static_cast<int64_t>(std::llround(spp * area.w));
-        auto hits = compute_iter_popup_hits(
-            scratch_cr, top, app.warpmarkers.markers(),
-            vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-        cairo_destroy(scratch_cr);
-        cairo_surface_destroy(scratch_s);
-        for (const auto& h : hits) {
-            if (mouse_x >= h.hit_rect.x &&
-                mouse_x < h.hit_rect.x + h.hit_rect.w &&
-                mouse_y >= h.hit_rect.y &&
-                mouse_y < h.hit_rect.y + h.hit_rect.h) {
-                return h.marker_index;
-            }
-        }
-        return -1;
-    };
-
-    // Brief X.2: BPM popup hit-test. Mirrors hit_test_iter_popup. The
-    // two modes are mutually exclusive so at most one of these returns
-    // a positive index for a given (x, y).
-    auto hit_test_bpm_popup = [&](int mouse_x, int mouse_y) -> int {
-        if (!app.bpm_mode_enabled) return -1;
-        if (app.active_mode != 'W') return -1;
-        const GuiRect area = waveform_area(app);
-        const GuiRect top  = top_strip_area(app);
-        cairo_surface_t* scratch_s = cairo_image_surface_create(
-            CAIRO_FORMAT_ARGB32, 1, 1);
-        cairo_t* scratch_cr = cairo_create(scratch_s);
-        const double spp = current_samples_per_pixel(app, audio);
-        const int64_t vp_start = app.viewport_start_sample;
-        const int64_t vp_end = vp_start +
-            static_cast<int64_t>(std::llround(spp * area.w));
-        auto hits = compute_bpm_popup_hits(
-            scratch_cr, top, app.warpmarkers.markers(),
-            vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-        cairo_destroy(scratch_cr);
-        cairo_surface_destroy(scratch_s);
-        for (const auto& h : hits) {
-            if (mouse_x >= h.hit_rect.x &&
-                mouse_x < h.hit_rect.x + h.hit_rect.w &&
-                mouse_y >= h.hit_rect.y &&
-                mouse_y < h.hit_rect.y + h.hit_rect.h) {
-                return h.marker_index;
-            }
-        }
-        return -1;
-    };
+    // X.7.8b-2: hit_test_marker_line, hit_test_flag, hit_test_iter_popup,
+    // hit_test_bpm_popup moved to free functions in app_state.{h,cpp}.
+    // The button-press / button-release / motion handlers reach them
+    // directly; recompute_hover_at_cursor below uses the new
+    // (app, audio, x, y) signature.
 
     // V.A3b Addendum 3: re-evaluate hover at the cursor's last on_motion
     // coordinates. Called after viewport mutations (zoom, scroll, center,
@@ -1392,7 +1244,8 @@ int main(int argc, char** argv) {
             clear_hover_popup();
             return;
         }
-        const int hit = hit_test_flag(app.last_mouse_x, app.last_mouse_y);
+        const int hit = hit_test_flag(app, audio,
+                                      app.last_mouse_x, app.last_mouse_y);
         if (hit != app.hover_popup.marker_index) {
             if (app.hover_popup.visible) invalidate_top_strip();
             app.hover_popup.marker_index = hit;
@@ -1422,12 +1275,11 @@ int main(int argc, char** argv) {
     };
 
     // X.7.5a: the drag and selection-shift lambdas have been hoisted onto
-    // the GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}. begin_drag,
-    // apply_drag_motion, commit_drag remain as forwarders because mouse
-    // handlers still call them. X.7.8b-1: nudge_selected_markers and
-    // jump_selection_to_playhead had no callers outside the on_key body
-    // and were dropped.
-    auto begin_drag                 = [&](int hit, int x) { return warpops.begin_drag(hit, x); };
+    // the GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}.
+    // X.7.8b-2: begin_drag had no callers outside the button-press lambda
+    // after it moved onto GuiInputHandler; its forwarder is dropped.
+    // apply_drag_motion and commit_drag remain because the on_motion
+    // lambda (still in main.cpp until X.7.8b-3) calls them.
     auto apply_drag_motion          = [&](double d) { warpops.apply_drag_motion(d); };
     auto commit_drag                = [&]() { warpops.commit_drag(); };
 
@@ -1436,35 +1288,9 @@ int main(int argc, char** argv) {
     // had no callers outside the on_key body, so all were dropped. on_key
     // calls render_view methods directly.
 
-    // Shared wheel handler covering source-view and render-view. Ctrl+Alt =
-    // fine-pan (2% of viewport), Alt = coarse-pan (10%), plain = zoom.
-    // Ctrl+wheel moves the playhead by one pixel (and stops playback),
-    // matching the bare Left/Right keyboard binding; this applies to both
-    // views since the playhead is interactive in render-view too.
-    auto handle_wheel = [&](unsigned int button,
-                            bool ctrl, bool alt,
-                            bool inside_waveform, bool inside_top) {
-        if (!inside_waveform && !inside_top) return;
-        if (ctrl && alt) {
-            const int64_t step = std::max<int64_t>(
-                1, samples_visible(app, audio) / 50);
-            scroll_viewport(button == 4 ? -step : +step);
-            return;
-        }
-        if (ctrl) {
-            stop_playback_if_playing();
-            move_playhead_pixels(button == 4 ? -1 : +1);
-            return;
-        }
-        if (alt) {
-            const int64_t step = std::max<int64_t>(
-                1, samples_visible(app, audio) / 10);
-            scroll_viewport(button == 4 ? -step : +step);
-            return;
-        }
-        if (button == 4) zoom_out();
-        else             zoom_in();
-    };
+    // X.7.8b-2: the shared wheel handler (handle_wheel) moved to
+    // GuiInputHandler as a private helper method. on_button_press is
+    // its only caller after this brief.
 
     // X.7.8b-1: the multi-render queue runner (run_render_batch +
     // RenderBatchResult) had no callers outside the on_key body. It moved
@@ -1482,441 +1308,12 @@ int main(int argc, char** argv) {
 
     gui.set_on_button_press([&](unsigned int button, int x, int y,
                                 unsigned int mods) {
-        if constexpr (kDebugPerf) {
-            app.last_input_event_time = std::chrono::steady_clock::now();
-        }
-        // Prompt-modal input handling: while the bottom-strip prompt is
-        // active, all mouse events are swallowed. Responses go through
-        // the keyboard.
-        if (app.prompt.active) return;
-        if (app.loading || audio.total_frames() <= 0) return;
-        const GuiRect area = waveform_area(app);
-        const GuiRect top  = top_strip_area(app);
-        const bool inside_waveform =
-            x >= area.x && x < area.x + area.w &&
-            y >= area.y && y < area.y + area.h;
-        const bool inside_top =
-            x >= top.x && x < top.x + top.w &&
-            y >= top.y && y < top.y + top.h;
-        const bool ctrl  = (mods & ControlMask) != 0;
-        const bool shift = (mods & ShiftMask)   != 0;
-        const bool alt   = (mods & Mod1Mask) != 0;
-
-        // Defensive: a second press during a drag is ignored (left button
-        // should still be held down for a drag to exist).
-        if (app.drag.active) return;
-
-        // Chunk W: render-view mouse gate. Left-click on a marker line
-        // (in the waveform area) or a flag rect (in the top strip)
-        // toggles selection and jumps the playhead to the marker;
-        // left-click elsewhere in the waveform area positions the
-        // playhead (with playback stop) and clears the selection unless
-        // Shift is held. All wheel chords (zoom, Alt/Ctrl+Alt pan,
-        // Ctrl+wheel playhead-move) are pure viewport / playhead ops and
-        // pass through unchanged. Drag-create and top-strip playhead
-        // movement are silent no-ops so the read-only invariant on
-        // marker state is preserved. Hover-popup motion still runs in
-        // the motion handler against render_view_markers.
-        if (app.render_view_enabled) {
-            if (button == 4 || button == 5) {
-                handle_wheel(button, ctrl, alt,
-                             inside_waveform, inside_top);
-                return;
-            }
-            if (button != 1) return;
-            // Brief F Section 3: in transient sub-view, top-strip clicks
-            // are silent no-ops (transients have no flag rects). Bail
-            // before hit-testing so we don't attempt selection bookkeeping
-            // on a non-existent flag pack.
-            if (app.active_mode == 'T' && inside_top) return;
-            int hit = -1;
-            if (inside_waveform)  hit = hit_test_marker_line(x);
-            else if (inside_top)  hit = hit_test_flag(x, y);
-            else                  return;
-            // Brief J.2 Section 3: live selection lives in the global
-            // pair regardless of view domain. active_mode tells us
-            // which marker list the indices map to.
-            const bool sub_t = (app.active_mode == 'T');
-            std::set<int>& sel = app.selected_markers;
-            int& last_sel      = app.last_selected_marker;
-            const int n = sub_t
-                ? static_cast<int>(app.render_view_transients.size())
-                : static_cast<int>(app.render_view_markers.size());
-            if (hit >= 0 && hit < n) {
-                if (shift) {
-                    auto it = sel.find(hit);
-                    if (it == sel.end()) {
-                        sel.insert(hit);
-                        last_sel = hit;
-                    } else {
-                        sel.erase(it);
-                        if (last_sel == hit) {
-                            last_sel = sel.empty()
-                                ? -1
-                                : *sel.rbegin();
-                        }
-                    }
-                } else {
-                    sel.clear();
-                    sel.insert(hit);
-                    last_sel = hit;
-                }
-                gui.invalidate_region(0, 0, app.width, app.height);
-                const int sr = audio.sample_rate();
-                int64_t sample;
-                if (sub_t) {
-                    sample = app.render_view_transients[hit].effective_frame();
-                } else {
-                    sample = static_cast<int64_t>(std::llround(
-                        app.render_view_markers[hit].time_seconds *
-                        static_cast<double>(sr)));
-                }
-                move_playhead_to(sample);
-                // Brief F Section 2: any waveform-area press starts a
-                // playhead-drag gesture. Top-strip flag-click does not.
-                if (inside_waveform) {
-                    app.playhead_drag.active = true;
-                }
-                return;
-            }
-            // Empty-space click in the waveform area: clear the active
-            // sub-view's selection (unless Shift) and move the playhead.
-            // Brief F Section 2: also start a playhead-drag gesture so
-            // the motion handler's snap logic kicks in.
-            if (inside_waveform) {
-                if (!shift &&
-                    (!sel.empty() || last_sel != -1)) {
-                    sel.clear();
-                    last_sel = -1;
-                    gui.invalidate_region(0, 0, app.width, app.height);
-                }
-                stop_playback_if_playing();
-                const double spp = current_samples_per_pixel(app, audio);
-                int rel = x - area.x;
-                if (rel < 0) rel = 0;
-                if (rel >= area.w) rel = area.w - 1;
-                const int64_t sample =
-                    app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(rel * spp));
-                move_playhead_to(sample);
-                app.playhead_drag.active = true;
-            }
-            return;
-        }
-
-        if (button == 1) {
-            // Any button-1 press on the waveform / top strip stops
-            // playback. Per Part 4 of chunk P patch 1: the user pressed
-            // a mouse button, they want attention — even a Ctrl+press on
-            // empty space (a no-op for the playhead) stops the audio.
-            if (inside_waveform || inside_top) stop_playback_if_playing();
-
-            // V.A1 / V.B editor: mouse handling.
-            //   click inside top strip on the editing target: no-op
-            //   click inside top strip on a different popup/flag: switch
-            //     target (iter popup wins over the flag below it when
-            //     iteration mode is on)
-            //   click anywhere else: exit edit (no commit), then fall
-            //     through so the click routes through normal handling.
-            if (text_editor::is_active(app.top_flag_editor)) {
-                if (inside_top) {
-                    const int iter_hit = hit_test_iter_popup(x, y);
-                    if (iter_hit >= 0) {
-                        if (app.top_flag_editor.kind ==
-                                text_editor::Kind::IterationBracket &&
-                            iter_hit == app.top_flag_editor.target) {
-                            return; // no-op on same popup
-                        }
-                        enter_iter_edit(iter_hit);
-                        return;
-                    }
-                    const int bpm_hit = hit_test_bpm_popup(x, y);
-                    if (bpm_hit >= 0) {
-                        if (app.top_flag_editor.kind ==
-                                text_editor::Kind::BpmBracket &&
-                            bpm_hit == app.top_flag_editor.target) {
-                            return; // no-op on same popup
-                        }
-                        enter_bpm_edit(bpm_hit);
-                        return;
-                    }
-                    const int hit_now = hit_test_flag(x, y);
-                    if (app.top_flag_editor.kind ==
-                            text_editor::Kind::FlagPayload &&
-                        hit_now == app.top_flag_editor.target) {
-                        return; // no-op on same flag
-                    }
-                    if (hit_now >= 0 && app.active_mode != 'T') {
-                        enter_top_flag_edit(hit_now);
-                        return;
-                    }
-                    // Top strip click that isn't on a popup or flag: exit
-                    // and fall through to normal handling.
-                    exit_top_flag_edit_no_commit();
-                } else {
-                    exit_top_flag_edit_no_commit();
-                    // Fall through so the click can drive a playhead
-                    // drag, marker click, etc.
-                }
-            }
-
-            // Detect double-click from timing + position deltas.
-            const auto now = std::chrono::steady_clock::now();
-            const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - app.last_click_time).count();
-            const bool is_double =
-                !app.last_click_consumed &&
-                dt_ms <= kDoubleClickMs &&
-                std::abs(x - app.last_click_x) <= kDoubleClickPixels &&
-                std::abs(y - app.last_click_y) <= kDoubleClickPixels;
-
-            // A double-click in the waveform area creates a new marker at
-            // the click position (not the playhead). In warp mode, drops a
-            // warp marker (Shift forces inherit). In transient mode, drops
-            // a transient (Shift is ignored — no inherit concept). The
-            // first single-click already moved the playhead via the
-            // playhead-drag-press logic below.
-            if (is_double && inside_waveform && !ctrl) {
-                const double spp = current_samples_per_pixel(app, audio);
-                const int click_rel_x = x - area.x;
-                const int sr = audio.sample_rate();
-                const int64_t sample = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(click_rel_x * spp));
-                const double t = (sr > 0)
-                    ? static_cast<double>(sample) / static_cast<double>(sr)
-                    : 0.0;
-                if (app.active_mode == 'T') {
-                    drop_transient_at_position(t);
-                } else {
-                    drop_marker(t, /*inherit=*/shift);
-                }
-                // Consume this click so a triple-click doesn't double-fire.
-                app.last_click_consumed = true;
-                return;
-            }
-
-            // Store this click for the next one to compare against.
-            app.last_click_time     = now;
-            app.last_click_x        = x;
-            app.last_click_y        = y;
-            app.last_click_consumed = false;
-
-            // Iteration popup click takes priority over flag click when
-            // iteration mode is on. The popup sits above the flag rect so
-            // their hit zones don't overlap, but checking the popup first
-            // makes the intent unambiguous when the flag-strip extents
-            // change shape.
-            if (inside_top && !ctrl) {
-                const int iter_hit = hit_test_iter_popup(x, y);
-                if (iter_hit >= 0) {
-                    enter_iter_edit(iter_hit);
-                    return;
-                }
-                const int bpm_hit = hit_test_bpm_popup(x, y);
-                if (bpm_hit >= 0) {
-                    enter_bpm_edit(bpm_hit);
-                    return;
-                }
-            }
-
-            // Consolidated hit-test across waveform (marker line) and top
-            // strip (flag rect). A flag click behaves exactly like a click
-            // on its marker line.
-            int hit = -1;
-            bool in_click_region = false;
-            if (inside_waveform) {
-                hit = hit_test_marker_line(x);
-                in_click_region = true;
-            } else if (inside_top) {
-                hit = hit_test_flag(x, y);
-                in_click_region = true;
-            }
-
-            if (!in_click_region) return;
-
-            if (ctrl) {
-                // Ctrl branch: marker-reposition drag or no-op on empty.
-                if (hit >= 0) {
-                    // begin_drag preserves the multi-selection if `hit` is in
-                    // it, else collapses to just `hit`. Motion decides whether
-                    // it actually becomes a drag vs. a plain click.
-                    begin_drag(hit, x);
-                }
-                // else: Ctrl+press on empty space is a silent no-op.
-                return;
-            }
-
-            // Non-Ctrl: plain or Shift press. In the waveform area this
-            // starts a playhead-drag gesture. In the top strip (flag click)
-            // a warp-mode flag click enters the V.A1 text editor; in
-            // transient mode we keep the legacy select-on-click behavior.
-            if (inside_top) {
-                if (hit >= 0) {
-                    if (app.active_mode != 'T' && !shift) {
-                        // V.A1: plain click on a warp flag enters edit
-                        // mode. Selects the marker as well so the rest of
-                        // the UI tracks (timestamp jumps, marker column
-                        // highlights). Shift+click keeps the legacy
-                        // multi-select toggle.
-                        set_single_selection(hit);
-                        const int sr = audio.sample_rate();
-                        const int64_t sample = static_cast<int64_t>(std::llround(
-                            app.warpmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                        move_playhead_to(sample);
-                        enter_top_flag_edit(hit);
-                        return;
-                    }
-                    if (shift) toggle_selection_membership(hit);
-                    else       set_single_selection(hit);
-                    const int sr = audio.sample_rate();
-                    int64_t sample;
-                    if (app.active_mode == 'T') {
-                        sample = app.transientmarkers.markers()[hit].effective_frame();
-                    } else {
-                        sample = static_cast<int64_t>(std::llround(
-                            app.warpmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    }
-                    move_playhead_to(sample);
-                }
-                return;
-            }
-
-            // Waveform-area press: start playhead drag gesture.
-            {
-                const int sr = audio.sample_rate();
-                if (hit >= 0) {
-                    // Press on a marker (within 3px).
-                    if (!shift) {
-                        set_single_selection(hit);
-                    } else {
-                        // Shift+press on marker: selection otherwise preserved;
-                        // add hit if not already present.
-                        const bool was_in = app.selected_markers.count(hit) > 0;
-                        if (!was_in) {
-                            app.selected_markers.insert(hit);
-                            invalidate_marker_column(hit);
-                            invalidate_top_strip();
-                        }
-                        app.last_selected_marker = hit;
-                    }
-                    int64_t sample;
-                    if (app.active_mode == 'T') {
-                        sample = app.transientmarkers.markers()[hit].effective_frame();
-                    } else {
-                        sample = static_cast<int64_t>(std::llround(
-                            app.warpmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    }
-                    move_playhead_to(sample);
-                    app.playhead_drag.active = true;
-                } else {
-                    // Press on empty waveform.
-                    const double spp = current_samples_per_pixel(app, audio);
-                    const int click_rel_x = x - area.x;
-                    if (click_rel_x < 0 || click_rel_x >= area.w) {
-                        if (!shift) clear_selection();
-                        return;
-                    }
-                    const int64_t sample = app.viewport_start_sample +
-                        static_cast<int64_t>(std::llround(click_rel_x * spp));
-                    if (!shift) clear_selection();
-                    move_playhead_to(sample);
-                    app.playhead_drag.active = true;
-                }
-            }
-        } else if (button == 4 || button == 5) {
-            handle_wheel(button, ctrl, alt,
-                         inside_waveform, inside_top);
-        }
+        input_handler.on_button_press(button, x, y, mods);
     });
 
-    gui.set_on_button_release([&](unsigned int button, int, int,
+    gui.set_on_button_release([&](unsigned int button, int x, int y,
                                   unsigned int mods) {
-        if (app.prompt.active) return;
-        if (button != 1) return;
-        if (app.playhead_drag.active) {
-            // Brief F Section 1: if the playhead snapped onto a marker
-            // during the drag, commit selection on release. Plain release
-            // sets the snapped marker as the single selection; Shift
-            // release adds it to the existing set without removing
-            // anything. Off-marker release leaves selection alone.
-            const bool shift = (mods & ShiftMask) != 0;
-            const int  sr    = audio.sample_rate();
-            int snapped = -1;
-            if (sr > 0) {
-                const int64_t ph = app.playhead_sample;
-                if (app.render_view_enabled) {
-                    if (app.active_mode == 'T') {
-                        const auto& mv = app.render_view_transients;
-                        for (size_t i = 0; i < mv.size(); ++i) {
-                            if (mv[i].effective_frame() == ph) {
-                                snapped = static_cast<int>(i);
-                                break;
-                            }
-                        }
-                    } else {
-                        const auto& mv = app.render_view_markers;
-                        for (size_t i = 0; i < mv.size(); ++i) {
-                            const int64_t s = static_cast<int64_t>(
-                                std::llround(mv[i].time_seconds *
-                                             static_cast<double>(sr)));
-                            if (s == ph) {
-                                snapped = static_cast<int>(i);
-                                break;
-                            }
-                        }
-                    }
-                } else if (app.active_mode == 'T') {
-                    const auto& mv = app.transientmarkers.markers();
-                    for (size_t i = 0; i < mv.size(); ++i) {
-                        if (mv[i].effective_frame() == ph) {
-                            snapped = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                } else {
-                    const auto& mv = app.warpmarkers.markers();
-                    for (size_t i = 0; i < mv.size(); ++i) {
-                        const int64_t s = static_cast<int64_t>(
-                            std::llround(mv[i].time_seconds *
-                                         static_cast<double>(sr)));
-                        if (s == ph) {
-                            snapped = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                }
-            }
-            if (snapped >= 0) {
-                if (app.render_view_enabled) {
-                    // Brief J.2 Section 3: render-view writes the
-                    // global live pair. active_mode tells us which
-                    // marker list the indices map to.
-                    if (shift) {
-                        app.selected_markers.insert(snapped);
-                        app.last_selected_marker = snapped;
-                    } else {
-                        app.selected_markers.clear();
-                        app.selected_markers.insert(snapped);
-                        app.last_selected_marker = snapped;
-                    }
-                    gui.invalidate_region(0, 0, app.width, app.height);
-                } else if (shift) {
-                    app.selected_markers.insert(snapped);
-                    app.last_selected_marker = snapped;
-                    invalidate_marker_column(snapped);
-                    invalidate_top_strip();
-                } else {
-                    set_single_selection(snapped);
-                }
-            }
-            app.playhead_drag = PlayheadDragState{};
-            return;
-        }
-        if (!app.drag.active) return;
-        commit_drag();
+        input_handler.on_button_release(button, x, y, mods);
     });
 
     gui.set_on_motion([&](int mouse_x, int mouse_y, unsigned int mods) {
@@ -1949,7 +1346,7 @@ int main(int argc, char** argv) {
                 const GuiRect area = waveform_area(app);
                 const double spp = current_samples_per_pixel(app, audio);
                 if (spp <= 0.0) return;
-                const int hit = hit_test_marker_line(mouse_x);
+                const int hit = hit_test_marker_line(app, audio, mouse_x);
                 int64_t new_playhead;
                 if (hit >= 0) {
                     if (app.active_mode == 'T') {
@@ -1972,7 +1369,7 @@ int main(int argc, char** argv) {
                 }
                 return;
             }
-            const int hit = hit_test_flag(mouse_x, mouse_y);
+            const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
             if (hit != app.hover_popup.marker_index) {
                 if (app.hover_popup.visible) invalidate_top_strip();
                 app.hover_popup.marker_index = hit;
@@ -2005,7 +1402,7 @@ int main(int argc, char** argv) {
             // Marker snap test — uses the same 3px epsilon as marker hit-test.
             // Selection is fixed at press time and is NOT mutated here; the
             // snap is purely a playhead-positioning magnet.
-            const int hit = hit_test_marker_line(mouse_x);
+            const int hit = hit_test_marker_line(app, audio, mouse_x);
             int64_t new_playhead;
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
@@ -2039,7 +1436,7 @@ int main(int argc, char** argv) {
                 !app.iteration_mode_enabled &&
                 !text_editor::is_active(app.top_flag_editor) &&
                 !app.queue_running) {
-                const int hit = hit_test_flag(mouse_x, mouse_y);
+                const int hit = hit_test_flag(app, audio, mouse_x, mouse_y);
                 if (hit != app.hover_popup.marker_index) {
                     if (app.hover_popup.visible) invalidate_top_strip();
                     app.hover_popup.marker_index = hit;

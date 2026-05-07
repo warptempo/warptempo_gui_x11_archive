@@ -24,6 +24,13 @@ constexpr int kNumZoomLevels = 8;
 // resize time, not stored as a fixed ms/pixel.
 constexpr int kFitFileLevel = kNumZoomLevels;
 
+// X.7.8b-2: hoisted from main.cpp's anonymous namespace so the hit_test_*
+// free functions (in app_state.cpp) and the GuiInputHandler mouse handler
+// (in input_handler.cpp) can reach them.
+constexpr int kMarkerHitHalfPx    = 3;
+constexpr int kDoubleClickMs      = 300;
+constexpr int kDoubleClickPixels  = 5;
+
 // Op-kind tag carried on every undo/redo entry. Marker selection collapses
 // per kind on undo: Create restores selection to the just-created marker,
 // Destroy restores to the hint-last-selected captured pre-op so the user
@@ -523,3 +530,33 @@ std::string settings_get(const AppState& app, const std::string& key,
 // queue progress message is showing. Drives timestamp_invalidate_rect
 // width selection in the redraw path. Pure read against AppState.
 bool bottom_strip_wide(const AppState& app);
+
+// X.7.8b-2: promoted from lambdas in main(). Mode-aware hit-tests against
+// the visible marker / flag / popup geometry. Bodies live in app_state.cpp
+// and pull in cairo + paint_handler.h for the popup-rect math; the
+// signatures stay free of cairo so the header keeps a clean include list.
+//
+// hit_test_marker_line: scan the active list (render-view markers in
+// render-view; transients in 'T' mode; warp markers otherwise) and return
+// the index whose pixel column is within kMarkerHitHalfPx of `mouse_x`,
+// or -1 if no marker line is within reach.
+int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
+                         int mouse_x);
+
+// hit_test_flag: scan the active flag-pack rects in the top strip and
+// return the marker index under (mouse_x, mouse_y), or -1. Returns -1
+// in render-view's transient sub-view (no flag rects there).
+int hit_test_flag(const AppState& app, const GuiAudio& audio,
+                  int mouse_x, int mouse_y);
+
+// hit_test_iter_popup: V.B iteration-popup hit-test. Returns the marker
+// index whose iteration popup contains (mouse_x, mouse_y), or -1. Always
+// -1 when iteration mode is off, in transient mode, or in render-view.
+int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
+                        int mouse_x, int mouse_y);
+
+// hit_test_bpm_popup: brief X.2 BPM-popup hit-test. Mirrors
+// hit_test_iter_popup. Iter and BPM modes are mutually exclusive so at
+// most one of these returns >= 0 for a given (x, y).
+int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
+                       int mouse_x, int mouse_y);

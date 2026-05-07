@@ -1372,3 +1372,480 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         }
     }
 }
+
+// X.7.8b-2: shared wheel handler. Verbatim from the lambda at the original
+// main.cpp:1444 — only difference is the captured viewport / playhead
+// helpers now resolve through this struct's reference members.
+void GuiInputHandler::handle_wheel(unsigned int button,
+                                   bool ctrl, bool alt,
+                                   bool inside_waveform, bool inside_top) {
+    if (!inside_waveform && !inside_top) return;
+    if (ctrl && alt) {
+        const int64_t step = std::max<int64_t>(
+            1, samples_visible(app, audio) / 50);
+        viewport.scroll_viewport(button == 4 ? -step : +step);
+        return;
+    }
+    if (ctrl) {
+        stop_playback_if_playing();
+        viewport.move_playhead_pixels(button == 4 ? -1 : +1);
+        return;
+    }
+    if (alt) {
+        const int64_t step = std::max<int64_t>(
+            1, samples_visible(app, audio) / 10);
+        viewport.scroll_viewport(button == 4 ? -step : +step);
+        return;
+    }
+    if (button == 4) viewport.zoom_out();
+    else             viewport.zoom_in();
+}
+
+// X.7.8b-2: button-press handler. Verbatim from the lambda at the original
+// main.cpp:1483; the captured operation-struct lambdas (begin_drag,
+// drop_marker, drop_transient_at_position, set_single_selection, etc.)
+// are rewritten to direct method calls on the appropriate operation
+// struct ref. The four hit_test_* lambdas are now free functions taking
+// (app, audio, ...) explicit args. The handle_wheel lambda is now a
+// private method on this struct.
+void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
+                                      unsigned int mods) {
+    if constexpr (kDebugPerf) {
+        app.last_input_event_time = std::chrono::steady_clock::now();
+    }
+    // Prompt-modal input handling: while the bottom-strip prompt is
+    // active, all mouse events are swallowed. Responses go through
+    // the keyboard.
+    if (app.prompt.active) return;
+    if (app.loading || audio.total_frames() <= 0) return;
+    const GuiRect area = waveform_area(app);
+    const GuiRect top  = top_strip_area(app);
+    const bool inside_waveform =
+        x >= area.x && x < area.x + area.w &&
+        y >= area.y && y < area.y + area.h;
+    const bool inside_top =
+        x >= top.x && x < top.x + top.w &&
+        y >= top.y && y < top.y + top.h;
+    const bool ctrl  = (mods & ControlMask) != 0;
+    const bool shift = (mods & ShiftMask)   != 0;
+    const bool alt   = (mods & Mod1Mask) != 0;
+
+    // Defensive: a second press during a drag is ignored (left button
+    // should still be held down for a drag to exist).
+    if (app.drag.active) return;
+
+    // Chunk W: render-view mouse gate. Left-click on a marker line
+    // (in the waveform area) or a flag rect (in the top strip)
+    // toggles selection and jumps the playhead to the marker;
+    // left-click elsewhere in the waveform area positions the
+    // playhead (with playback stop) and clears the selection unless
+    // Shift is held. All wheel chords (zoom, Alt/Ctrl+Alt pan,
+    // Ctrl+wheel playhead-move) are pure viewport / playhead ops and
+    // pass through unchanged. Drag-create and top-strip playhead
+    // movement are silent no-ops so the read-only invariant on
+    // marker state is preserved. Hover-popup motion still runs in
+    // the motion handler against render_view_markers.
+    if (app.render_view_enabled) {
+        if (button == 4 || button == 5) {
+            handle_wheel(button, ctrl, alt,
+                         inside_waveform, inside_top);
+            return;
+        }
+        if (button != 1) return;
+        // Brief F Section 3: in transient sub-view, top-strip clicks
+        // are silent no-ops (transients have no flag rects). Bail
+        // before hit-testing so we don't attempt selection bookkeeping
+        // on a non-existent flag pack.
+        if (app.active_mode == 'T' && inside_top) return;
+        int hit = -1;
+        if (inside_waveform)  hit = hit_test_marker_line(app, audio, x);
+        else if (inside_top)  hit = hit_test_flag(app, audio, x, y);
+        else                  return;
+        // Brief J.2 Section 3: live selection lives in the global
+        // pair regardless of view domain. active_mode tells us
+        // which marker list the indices map to.
+        const bool sub_t = (app.active_mode == 'T');
+        std::set<int>& sel = app.selected_markers;
+        int& last_sel      = app.last_selected_marker;
+        const int n = sub_t
+            ? static_cast<int>(app.render_view_transients.size())
+            : static_cast<int>(app.render_view_markers.size());
+        if (hit >= 0 && hit < n) {
+            if (shift) {
+                auto it = sel.find(hit);
+                if (it == sel.end()) {
+                    sel.insert(hit);
+                    last_sel = hit;
+                } else {
+                    sel.erase(it);
+                    if (last_sel == hit) {
+                        last_sel = sel.empty()
+                            ? -1
+                            : *sel.rbegin();
+                    }
+                }
+            } else {
+                sel.clear();
+                sel.insert(hit);
+                last_sel = hit;
+            }
+            gui.invalidate_region(0, 0, app.width, app.height);
+            const int sr = audio.sample_rate();
+            int64_t sample;
+            if (sub_t) {
+                sample = app.render_view_transients[hit].effective_frame();
+            } else {
+                sample = static_cast<int64_t>(std::llround(
+                    app.render_view_markers[hit].time_seconds *
+                    static_cast<double>(sr)));
+            }
+            viewport.move_playhead_to(sample);
+            // Brief F Section 2: any waveform-area press starts a
+            // playhead-drag gesture. Top-strip flag-click does not.
+            if (inside_waveform) {
+                app.playhead_drag.active = true;
+            }
+            return;
+        }
+        // Empty-space click in the waveform area: clear the active
+        // sub-view's selection (unless Shift) and move the playhead.
+        // Brief F Section 2: also start a playhead-drag gesture so
+        // the motion handler's snap logic kicks in.
+        if (inside_waveform) {
+            if (!shift &&
+                (!sel.empty() || last_sel != -1)) {
+                sel.clear();
+                last_sel = -1;
+                gui.invalidate_region(0, 0, app.width, app.height);
+            }
+            stop_playback_if_playing();
+            const double spp = current_samples_per_pixel(app, audio);
+            int rel = x - area.x;
+            if (rel < 0) rel = 0;
+            if (rel >= area.w) rel = area.w - 1;
+            const int64_t sample =
+                app.viewport_start_sample +
+                static_cast<int64_t>(std::llround(rel * spp));
+            viewport.move_playhead_to(sample);
+            app.playhead_drag.active = true;
+        }
+        return;
+    }
+
+    if (button == 1) {
+        // Any button-1 press on the waveform / top strip stops
+        // playback. Per Part 4 of chunk P patch 1: the user pressed
+        // a mouse button, they want attention — even a Ctrl+press on
+        // empty space (a no-op for the playhead) stops the audio.
+        if (inside_waveform || inside_top) stop_playback_if_playing();
+
+        // V.A1 / V.B editor: mouse handling.
+        //   click inside top strip on the editing target: no-op
+        //   click inside top strip on a different popup/flag: switch
+        //     target (iter popup wins over the flag below it when
+        //     iteration mode is on)
+        //   click anywhere else: exit edit (no commit), then fall
+        //     through so the click routes through normal handling.
+        if (text_editor::is_active(app.top_flag_editor)) {
+            if (inside_top) {
+                const int iter_hit = hit_test_iter_popup(app, audio, x, y);
+                if (iter_hit >= 0) {
+                    if (app.top_flag_editor.kind ==
+                            text_editor::Kind::IterationBracket &&
+                        iter_hit == app.top_flag_editor.target) {
+                        return; // no-op on same popup
+                    }
+                    flag_editor.enter_iter_edit(iter_hit);
+                    return;
+                }
+                const int bpm_hit = hit_test_bpm_popup(app, audio, x, y);
+                if (bpm_hit >= 0) {
+                    if (app.top_flag_editor.kind ==
+                            text_editor::Kind::BpmBracket &&
+                        bpm_hit == app.top_flag_editor.target) {
+                        return; // no-op on same popup
+                    }
+                    flag_editor.enter_bpm_edit(bpm_hit);
+                    return;
+                }
+                const int hit_now = hit_test_flag(app, audio, x, y);
+                if (app.top_flag_editor.kind ==
+                        text_editor::Kind::FlagPayload &&
+                    hit_now == app.top_flag_editor.target) {
+                    return; // no-op on same flag
+                }
+                if (hit_now >= 0 && app.active_mode != 'T') {
+                    flag_editor.enter_top_flag_edit(hit_now);
+                    return;
+                }
+                // Top strip click that isn't on a popup or flag: exit
+                // and fall through to normal handling.
+                flag_editor.exit_top_flag_edit_no_commit();
+            } else {
+                flag_editor.exit_top_flag_edit_no_commit();
+                // Fall through so the click can drive a playhead
+                // drag, marker click, etc.
+            }
+        }
+
+        // Detect double-click from timing + position deltas.
+        const auto now = std::chrono::steady_clock::now();
+        const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - app.last_click_time).count();
+        const bool is_double =
+            !app.last_click_consumed &&
+            dt_ms <= kDoubleClickMs &&
+            std::abs(x - app.last_click_x) <= kDoubleClickPixels &&
+            std::abs(y - app.last_click_y) <= kDoubleClickPixels;
+
+        // A double-click in the waveform area creates a new marker at
+        // the click position (not the playhead). In warp mode, drops a
+        // warp marker (Shift forces inherit). In transient mode, drops
+        // a transient (Shift is ignored — no inherit concept). The
+        // first single-click already moved the playhead via the
+        // playhead-drag-press logic below.
+        if (is_double && inside_waveform && !ctrl) {
+            const double spp = current_samples_per_pixel(app, audio);
+            const int click_rel_x = x - area.x;
+            const int sr = audio.sample_rate();
+            const int64_t sample = app.viewport_start_sample +
+                static_cast<int64_t>(std::llround(click_rel_x * spp));
+            const double t = (sr > 0)
+                ? static_cast<double>(sample) / static_cast<double>(sr)
+                : 0.0;
+            if (app.active_mode == 'T') {
+                transients.drop_transient_at_position(t);
+            } else {
+                warpops.drop_marker(t, /*inherit=*/shift);
+            }
+            // Consume this click so a triple-click doesn't double-fire.
+            app.last_click_consumed = true;
+            return;
+        }
+
+        // Store this click for the next one to compare against.
+        app.last_click_time     = now;
+        app.last_click_x        = x;
+        app.last_click_y        = y;
+        app.last_click_consumed = false;
+
+        // Iteration popup click takes priority over flag click when
+        // iteration mode is on. The popup sits above the flag rect so
+        // their hit zones don't overlap, but checking the popup first
+        // makes the intent unambiguous when the flag-strip extents
+        // change shape.
+        if (inside_top && !ctrl) {
+            const int iter_hit = hit_test_iter_popup(app, audio, x, y);
+            if (iter_hit >= 0) {
+                flag_editor.enter_iter_edit(iter_hit);
+                return;
+            }
+            const int bpm_hit = hit_test_bpm_popup(app, audio, x, y);
+            if (bpm_hit >= 0) {
+                flag_editor.enter_bpm_edit(bpm_hit);
+                return;
+            }
+        }
+
+        // Consolidated hit-test across waveform (marker line) and top
+        // strip (flag rect). A flag click behaves exactly like a click
+        // on its marker line.
+        int hit = -1;
+        bool in_click_region = false;
+        if (inside_waveform) {
+            hit = hit_test_marker_line(app, audio, x);
+            in_click_region = true;
+        } else if (inside_top) {
+            hit = hit_test_flag(app, audio, x, y);
+            in_click_region = true;
+        }
+
+        if (!in_click_region) return;
+
+        if (ctrl) {
+            // Ctrl branch: marker-reposition drag or no-op on empty.
+            if (hit >= 0) {
+                // begin_drag preserves the multi-selection if `hit` is in
+                // it, else collapses to just `hit`. Motion decides whether
+                // it actually becomes a drag vs. a plain click.
+                warpops.begin_drag(hit, x);
+            }
+            // else: Ctrl+press on empty space is a silent no-op.
+            return;
+        }
+
+        // Non-Ctrl: plain or Shift press. In the waveform area this
+        // starts a playhead-drag gesture. In the top strip (flag click)
+        // a warp-mode flag click enters the V.A1 text editor; in
+        // transient mode we keep the legacy select-on-click behavior.
+        if (inside_top) {
+            if (hit >= 0) {
+                if (app.active_mode != 'T' && !shift) {
+                    // V.A1: plain click on a warp flag enters edit
+                    // mode. Selects the marker as well so the rest of
+                    // the UI tracks (timestamp jumps, marker column
+                    // highlights). Shift+click keeps the legacy
+                    // multi-select toggle.
+                    selection.set_single_selection(hit);
+                    const int sr = audio.sample_rate();
+                    const int64_t sample = static_cast<int64_t>(std::llround(
+                        app.warpmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                    viewport.move_playhead_to(sample);
+                    flag_editor.enter_top_flag_edit(hit);
+                    return;
+                }
+                if (shift) selection.toggle_selection_membership(hit);
+                else       selection.set_single_selection(hit);
+                const int sr = audio.sample_rate();
+                int64_t sample;
+                if (app.active_mode == 'T') {
+                    sample = app.transientmarkers.markers()[hit].effective_frame();
+                } else {
+                    sample = static_cast<int64_t>(std::llround(
+                        app.warpmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                }
+                viewport.move_playhead_to(sample);
+            }
+            return;
+        }
+
+        // Waveform-area press: start playhead drag gesture.
+        {
+            const int sr = audio.sample_rate();
+            if (hit >= 0) {
+                // Press on a marker (within 3px).
+                if (!shift) {
+                    selection.set_single_selection(hit);
+                } else {
+                    // Shift+press on marker: selection otherwise preserved;
+                    // add hit if not already present.
+                    const bool was_in = app.selected_markers.count(hit) > 0;
+                    if (!was_in) {
+                        app.selected_markers.insert(hit);
+                        viewport.invalidate_marker_column(hit);
+                        viewport.invalidate_top_strip();
+                    }
+                    app.last_selected_marker = hit;
+                }
+                int64_t sample;
+                if (app.active_mode == 'T') {
+                    sample = app.transientmarkers.markers()[hit].effective_frame();
+                } else {
+                    sample = static_cast<int64_t>(std::llround(
+                        app.warpmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                }
+                viewport.move_playhead_to(sample);
+                app.playhead_drag.active = true;
+            } else {
+                // Press on empty waveform.
+                const double spp = current_samples_per_pixel(app, audio);
+                const int click_rel_x = x - area.x;
+                if (click_rel_x < 0 || click_rel_x >= area.w) {
+                    if (!shift) selection.clear_selection();
+                    return;
+                }
+                const int64_t sample = app.viewport_start_sample +
+                    static_cast<int64_t>(std::llround(click_rel_x * spp));
+                if (!shift) selection.clear_selection();
+                viewport.move_playhead_to(sample);
+                app.playhead_drag.active = true;
+            }
+        }
+    } else if (button == 4 || button == 5) {
+        handle_wheel(button, ctrl, alt,
+                     inside_waveform, inside_top);
+    }
+}
+
+// X.7.8b-2: button-release handler. Verbatim from the lambda at the
+// original main.cpp:1835; commit_drag and set_single_selection are
+// rewritten to direct method calls on warpops / selection respectively.
+void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
+                                        int /*y*/, unsigned int mods) {
+    if (app.prompt.active) return;
+    if (button != 1) return;
+    if (app.playhead_drag.active) {
+        // Brief F Section 1: if the playhead snapped onto a marker
+        // during the drag, commit selection on release. Plain release
+        // sets the snapped marker as the single selection; Shift
+        // release adds it to the existing set without removing
+        // anything. Off-marker release leaves selection alone.
+        const bool shift = (mods & ShiftMask) != 0;
+        const int  sr    = audio.sample_rate();
+        int snapped = -1;
+        if (sr > 0) {
+            const int64_t ph = app.playhead_sample;
+            if (app.render_view_enabled) {
+                if (app.active_mode == 'T') {
+                    const auto& mv = app.render_view_transients;
+                    for (size_t i = 0; i < mv.size(); ++i) {
+                        if (mv[i].effective_frame() == ph) {
+                            snapped = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                } else {
+                    const auto& mv = app.render_view_markers;
+                    for (size_t i = 0; i < mv.size(); ++i) {
+                        const int64_t s = static_cast<int64_t>(
+                            std::llround(mv[i].time_seconds *
+                                         static_cast<double>(sr)));
+                        if (s == ph) {
+                            snapped = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
+            } else if (app.active_mode == 'T') {
+                const auto& mv = app.transientmarkers.markers();
+                for (size_t i = 0; i < mv.size(); ++i) {
+                    if (mv[i].effective_frame() == ph) {
+                        snapped = static_cast<int>(i);
+                        break;
+                    }
+                }
+            } else {
+                const auto& mv = app.warpmarkers.markers();
+                for (size_t i = 0; i < mv.size(); ++i) {
+                    const int64_t s = static_cast<int64_t>(
+                        std::llround(mv[i].time_seconds *
+                                     static_cast<double>(sr)));
+                    if (s == ph) {
+                        snapped = static_cast<int>(i);
+                        break;
+                    }
+                }
+            }
+        }
+        if (snapped >= 0) {
+            if (app.render_view_enabled) {
+                // Brief J.2 Section 3: render-view writes the
+                // global live pair. active_mode tells us which
+                // marker list the indices map to.
+                if (shift) {
+                    app.selected_markers.insert(snapped);
+                    app.last_selected_marker = snapped;
+                } else {
+                    app.selected_markers.clear();
+                    app.selected_markers.insert(snapped);
+                    app.last_selected_marker = snapped;
+                }
+                gui.invalidate_region(0, 0, app.width, app.height);
+            } else if (shift) {
+                app.selected_markers.insert(snapped);
+                app.last_selected_marker = snapped;
+                viewport.invalidate_marker_column(snapped);
+                viewport.invalidate_top_strip();
+            } else {
+                selection.set_single_selection(snapped);
+            }
+        }
+        app.playhead_drag = PlayheadDragState{};
+        return;
+    }
+    if (!app.drag.active) return;
+    warpops.commit_drag();
+}

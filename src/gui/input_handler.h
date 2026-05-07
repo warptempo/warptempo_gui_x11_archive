@@ -31,10 +31,13 @@
 // references is forward-declared. Lifetime is the same scope as the other
 // operation structs.
 //
-// X.7.8b-2 / X.7.8b-3 will add on_button_press / on_button_release /
-// on_motion as further methods on this struct; the reference list below
-// already covers every dependency the keyboard handler needs and will be
-// extended (not rewritten) when the mouse handlers move.
+// X.7.8b-2 adds on_button_press / on_button_release as public methods plus
+// the shared wheel handler as a private helper. Bodies are byte-identical
+// to the lambdas they replaced in main.cpp (set_on_button_press at the
+// original main.cpp:1483; set_on_button_release at main.cpp:1835; the
+// handle_wheel lambda at main.cpp:1444). The reference list this struct
+// already carries covers every dependency the new bodies need; nothing
+// new is captured. X.7.8b-3 will add on_motion the same way.
 //
 // Residual-cluster lambdas the brief listed (revert_to_blank,
 // restore_playhead_to_lsp, load_then_drain) are intentionally absent: a
@@ -158,6 +161,9 @@ struct GuiInputHandler {
           set_playback_speed(set_playback_speed_) {}
 
     void on_key(KeySym keysym, unsigned int mods);
+    void on_button_press(unsigned int button, int x, int y, unsigned int mods);
+    void on_button_release(unsigned int button, int x, int y,
+                           unsigned int mods);
 
 private:
     struct RenderBatchResult {
@@ -171,4 +177,12 @@ private:
     // Returns rendered count and whether Esc cut the run short.
     RenderBatchResult run_render_batch(const std::vector<RenderRequest>& reqs,
                                        const std::string& batch_label);
+
+    // X.7.8b-2: shared wheel handler covering source-view and render-view.
+    // Promoted from a lambda in main.cpp:1444 because on_button_press is
+    // its only caller. Ctrl+Alt = fine-pan (2% of viewport), Alt = coarse-
+    // pan (10%), plain = zoom; Ctrl+wheel moves the playhead by one pixel
+    // (and stops playback), matching the bare Left/Right keyboard binding.
+    void handle_wheel(unsigned int button, bool ctrl, bool alt,
+                      bool inside_waveform, bool inside_top);
 };
