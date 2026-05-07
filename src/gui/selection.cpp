@@ -215,6 +215,10 @@ void Selection::sync_playhead_to_last_selected() {
         target_sample = static_cast<int64_t>(std::llround(
             mv[last].time_seconds * static_cast<double>(sr)));
     }
+    jump_playhead_to(target_sample);
+}
+
+void Selection::jump_playhead_to(int64_t target_sample) {
     app.playhead_sample = target_sample;
 
     const int64_t visible = samples_visible(app, audio);

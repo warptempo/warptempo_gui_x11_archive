@@ -1,5 +1,7 @@
 #include "undo.h"
 
+#include "audio.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -101,6 +103,31 @@ void Undo::apply_post_restore_rules_warp(const UndoEntry& entry,
         }
         want_playhead_jump = !target_set.empty();
     } else if (after.size() < before.size()) {
+        const int sr = selection.audio.sample_rate();
+        if (sr > 0) {
+            std::vector<double> after_times;
+            after_times.reserve(after.size());
+            for (const auto& m : after) after_times.push_back(m.time_seconds);
+            std::sort(after_times.begin(), after_times.end());
+            double rightmost = 0.0;
+            bool   any       = false;
+            for (const auto& m : before) {
+                const double t = m.time_seconds;
+                auto it = std::lower_bound(after_times.begin(),
+                                           after_times.end(), t - kEps);
+                const bool matched = (it != after_times.end() &&
+                                      std::abs(*it - t) < kEps);
+                if (!matched && (!any || t > rightmost)) {
+                    rightmost = t;
+                    any       = true;
+                }
+            }
+            if (any) {
+                const int64_t target_sample = static_cast<int64_t>(
+                    std::llround(rightmost * static_cast<double>(sr)));
+                selection.jump_playhead_to(target_sample);
+            }
+        }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         return;
@@ -146,6 +173,18 @@ void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
         }
         want_playhead_jump = !target_set.empty();
     } else if (after.size() < before.size()) {
+        std::set<int64_t> after_frames;
+        for (const auto& m : after) after_frames.insert(m.effective_frame());
+        int64_t rightmost = 0;
+        bool    any       = false;
+        for (const auto& m : before) {
+            const int64_t f = m.effective_frame();
+            if (!after_frames.count(f) && (!any || f > rightmost)) {
+                rightmost = f;
+                any       = true;
+            }
+        }
+        if (any) selection.jump_playhead_to(rightmost);
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         return;

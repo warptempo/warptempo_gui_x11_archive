@@ -37,4 +37,5 @@ struct Selection {
     void select_prev_marker();
     void prune_live_selection();
     void sync_playhead_to_last_selected();
+    void jump_playhead_to(int64_t target_sample);
 };
