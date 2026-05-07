@@ -15,14 +15,6 @@ struct EngineParams {
 
     int    N                          = 4096;
     int    fftw_threads               = 0;   // 0 = auto
-    bool   transients_enabled         = true;
-    double transients_xover_low       = 120.0;
-    double transients_xover_high      = 3500.0;
-    double transients_tau_back_ms     = 30.0;
-    double transients_thresh_db       = -20.0;
-    double transients_refractory_ms   = 1500.0;
-    double transients_anticipation_ms = 100.0;
-    bool   transients_diag            = false;
     bool   limiter_enabled            = true;
     double limiter_ceiling_dbfs       = -0.3;
     double limiter_tolerance_db       = 0.01;
@@ -43,23 +35,3 @@ struct EngineParams {
 bool run_warptempo_engine(const EngineParams& p,
                           std::vector<int64_t>* out_frame_map = nullptr,
                           int* out_R_s = nullptr);
-
-// Standalone detection entry point. Runs only the transient detection pass
-// (no phase vocoder, no limiter, no synthesis). On success, populates
-// `out_src_frames` with detected transient positions in the source-frame
-// domain, sorted ascending. On failure, logs to stderr and returns false.
-struct DetectionParams {
-    std::string source_audio_path;
-    std::vector<std::pair<size_t, size_t>> timemap;  // src_frame, tgt_frame
-    int    N                          = 4096;
-    int    fftw_threads               = 0;
-    double transients_xover_low       = 120.0;
-    double transients_xover_high      = 3500.0;
-    double transients_tau_back_ms     = 30.0;
-    double transients_thresh_db       = -20.0;
-    double transients_refractory_ms   = 1500.0;
-    double transients_anticipation_ms = 100.0;
-};
-
-bool run_warptempo_detection(const DetectionParams& p,
-                             std::vector<int64_t>& out_src_frames);

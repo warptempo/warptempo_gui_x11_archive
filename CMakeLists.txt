@@ -42,7 +42,6 @@ add_executable(warptempo_gui
     src/gui/input_handler.cpp
     src/gui/miniaudio_impl.cpp
     src/engine/engine.cpp
-    src/engine/transients.cpp
     src/engine/limiter.cpp
     src/engine/synthesis.cpp
 )

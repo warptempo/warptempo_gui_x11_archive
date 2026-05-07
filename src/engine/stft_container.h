@@ -18,16 +18,6 @@ struct TransientMarker {
     int64_t src_frame;
 };
 
-struct TransientsParams {
-    bool   enabled          = true;
-    double xover_low        = 120.0;
-    double xover_high       = 3500.0;
-    double tau_back_ms      = 30.0;
-    double thresh_db        = -20.0;
-    double refractory_ms    = 1500.0;
-    double anticipation_ms  = 100.0;
-};
-
 struct LimiterParams {
     bool   enabled               = true;
     double ceiling_dbfs          = -0.3;
@@ -132,10 +122,6 @@ struct AudioSTFT {
 
     // Transient phase reset
     std::vector<TransientMarker> transient_markers;
-
-    // Automatic transient detector
-    TransientsParams transients_params;
-    bool transients_diag = false;
 
     // Spectral limiter
     LimiterParams limiter_params;
