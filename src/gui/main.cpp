@@ -662,13 +662,6 @@ int main(int argc, char** argv) {
     auto trim_end_sample             = [&]() { return viewport.trim_end_sample(); };
     auto invalidate_timestamp_area   = [&]() { viewport.invalidate_timestamp_area(); };
     auto invalidate_playhead_columns = [&](double a, double b) { viewport.invalidate_playhead_columns(a, b); };
-    // X.7.8b-2: move_playhead_pixels, zoom_in, zoom_out, scroll_viewport
-    // had no callers outside the handle_wheel lambda after that lambda
-    // moved onto GuiInputHandler. Their forwarders are dropped; the
-    // methods stay public on Viewport.
-    // X.7.8b-3: move_playhead_to had no callers outside the on_motion
-    // lambda after it moved onto GuiInputHandler; its forwarder is
-    // dropped. The method stays public on Viewport.
     auto follow_scroll_if_needed     = [&]() { viewport.follow_scroll_if_needed(); };
 
     // -- Redraw -------------------------------------------------------------
@@ -681,12 +674,6 @@ int main(int argc, char** argv) {
         paint_handler.on_resize(w, h);
     });
 
-    // X.7.8b-2: invalidate_marker_column had no callers outside the
-    // button-press / button-release lambdas after they moved onto
-    // GuiInputHandler. Its forwarder is dropped; the method stays
-    // public on Viewport. invalidate_top_strip remains because
-    // clear_hover_popup, recompute_hover_at_cursor, on_motion, and
-    // the on_tick handler still call it.
     auto invalidate_top_strip     = [&]() { viewport.invalidate_top_strip(); };
 
     // X.7.8b-3: popup_eligible_marker moved to a free function in
@@ -704,12 +691,6 @@ int main(int argc, char** argv) {
         if (was_visible) invalidate_top_strip();
     };
 
-    // X.7.8b-2: set_single_selection, clear_selection,
-    // toggle_selection_membership had no callers outside the
-    // button-press / button-release lambdas after they moved onto
-    // GuiInputHandler. Their forwarders are dropped; the methods stay
-    // public on Selection.
-
     // -- Undo/redo helpers --------------------------------------------------
     //
     // X.7.3: the undo-cluster lambdas have been hoisted onto the Undo struct
@@ -720,22 +701,6 @@ int main(int argc, char** argv) {
     // the Undo struct for consistency.
 
     auto recompute_dirty = [&]() { undo.recompute_dirty(); };
-
-    // X.7.8b-1: push_undo_both had no external callers after the on_key
-    // body moved out, so its forwarder is dropped. Remaining callsite is
-    // input_handler.cpp's on_key, which calls undo.push_undo_both directly.
-
-    // -- X.7.5b flag-editor cluster forwarders ------------------------------
-    // Bodies live on GuiFlagEditor (flag_editor.{h,cpp}). The lambdas
-    // remain as one-line forwarders for the call sites elsewhere in this
-    // function. X.7.8b-1: commit_*_edit, bulk_clear_*_values, enter_bpm_mode,
-    // exit_bpm_mode had no external callers after the on_key body moved
-    // out, so their forwarders are dropped — they remain public on
-    // GuiFlagEditor and on_key calls them directly through flag_editor.
-    // X.7.8b-2: exit_top_flag_edit_no_commit, enter_top_flag_edit,
-    // enter_iter_edit, enter_bpm_edit had no callers outside the
-    // button-press lambda after it moved onto GuiInputHandler. Their
-    // forwarders are dropped; the methods stay public on GuiFlagEditor.
 
     // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
     // scan. The (excl_trans, excl_idx) pair excludes one marker from the
@@ -788,35 +753,6 @@ int main(int argc, char** argv) {
         app.last_space_sample = app.playhead_sample;
     };
 
-    // X.7.8b-1: do_undo, do_redo, select_next_marker, select_prev_marker,
-    // drop_marker_at_playhead, drop_inherit_marker_at_playhead,
-    // delete_selected_marker, force_delete_selected_marker, toggle_inherits,
-    // toggle_disabled, toggle_begin_time, toggle_end_time, adjust_tempo,
-    // clear_trim had no external callers after the on_key body moved out,
-    // so their forwarders are dropped. on_key calls them directly through
-    // undo / selection / warpops.
-
-    // X.7.5a: the warp-authoring lambdas have been hoisted onto the
-    // GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}.
-    // X.7.8b-2: drop_marker had no callers outside the button-press
-    // lambda after it moved onto GuiInputHandler; its forwarder is
-    // dropped. The method stays public on GuiWarpMarkersOps.
-
-    // -- Transient-mode editing helpers (chunk S.2.2) -----------------------
-
-    // X.7.4: the transient-authoring lambdas have been hoisted onto the
-    // Transients struct in transients.{cpp,h}.
-    // X.7.8b-2: drop_transient_at_position had no callers outside the
-    // button-press lambda after it moved onto GuiInputHandler; its
-    // forwarder is dropped. The method stays public on
-    // GuiTransientMarkersOps.
-
-    // X.7.7: the mode/tab-management lambdas have been hoisted onto the
-    // GuiTabMode struct in tab_mode.{cpp,h}. refresh_active_tab_from_app
-    // covers the only remaining callsite (save_markers + the std::function
-    // ref captured by GuiRenderView). X.7.8b-1: toggle_active_mode no
-    // longer has external callers and its forwarder was dropped; on_key
-    // calls tab_mode.toggle_active_mode() directly.
     refresh_active_tab_from_app = [&]() { tab_mode.refresh_active_tab_from_app(); };
 
     save_markers = [&]() -> bool {
@@ -1058,13 +994,6 @@ int main(int argc, char** argv) {
         else           proceed_with_trigger(t);
     };
 
-    // -- Transient detection (chunk S.3) ------------------------------------
-    //
-    // X.7.4: detection lambdas have been hoisted onto the Transients struct.
-    // X.7.8b-1: detect_transients and clear_all_transients had no callers
-    // outside the on_key body, so their forwarders were dropped.
-    // input_handler.cpp's on_key calls them directly via `transients.`.
-
     // Space-bar: start/stop playback. Playback runs from the playhead to
     // trim_end (or total_frames if no e= marker). Pressing space with the
     // playhead at or past trim-end is a silent no-op. Space-to-stop
@@ -1097,12 +1026,6 @@ int main(int argc, char** argv) {
         // entire elapsed-since-anchor period.
         if (playback.is_playing()) playback.resync_predictor();
     };
-
-    // X.7.8b-2: hit_test_marker_line, hit_test_flag, hit_test_iter_popup,
-    // hit_test_bpm_popup moved to free functions in app_state.{h,cpp}.
-    // The button-press / button-release / motion handlers reach them
-    // directly; recompute_hover_at_cursor below uses the new
-    // (app, audio, x, y) signature.
 
     // V.A3b Addendum 3: re-evaluate hover at the cursor's last on_motion
     // coordinates. Called after viewport mutations (zoom, scroll, center,
@@ -1161,16 +1084,6 @@ int main(int argc, char** argv) {
 
     // X.7.5a: the drag and selection-shift lambdas have been hoisted onto
     // the GuiWarpMarkersOps struct in warpmarkers_ops.{cpp,h}.
-    // X.7.8b-2: begin_drag had no callers outside the button-press lambda
-    // after it moved onto GuiInputHandler; its forwarder is dropped.
-    // X.7.8b-3: apply_drag_motion and commit_drag had no callers outside
-    // the on_motion lambda after it moved onto GuiInputHandler; their
-    // forwarders are dropped. The methods stay public on GuiWarpMarkersOps.
-
-    // X.7.6: the render-view cluster has been hoisted onto the GuiRenderView
-    // struct in render_view.{cpp,h}. X.7.8b-1: every render-view forwarder
-    // had no callers outside the on_key body, so all were dropped. on_key
-    // calls render_view methods directly.
 
     // X.7.8b-2: the shared wheel handler (handle_wheel) moved to
     // GuiInputHandler as a private helper method. on_button_press is
