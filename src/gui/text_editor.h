@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -59,6 +60,13 @@ struct State {
     // Byte index into `pending`. Clamped to [0, pending.size()].
     int cursor_pos = 0;
 
+    // -1 means no selection. When >= 0, the selected range is
+    // [min(selection_anchor, cursor_pos), max(...)). Set by shift-
+    // extended motion (Shift+Left/Right/Home/End) and Ctrl+A; cleared
+    // by non-shift motion, any printable insertion, any delete /
+    // backspace, and by enter/deactivate.
+    int selection_anchor = -1;
+
     // True after a failed commit. Cleared by any keystroke that mutates
     // `pending`.
     bool red = false;
@@ -71,6 +79,19 @@ struct State {
 };
 
 inline bool is_active(const State& s) { return s.target >= 0; }
+
+inline bool has_selection(const State& s) {
+    return s.selection_anchor >= 0 &&
+           s.selection_anchor != s.cursor_pos;
+}
+inline int selection_start(const State& s) {
+    if (!has_selection(s)) return 0;
+    return std::min(s.selection_anchor, s.cursor_pos);
+}
+inline int selection_end(const State& s) {
+    if (!has_selection(s)) return 0;
+    return std::max(s.selection_anchor, s.cursor_pos);
+}
 
 // Reset `s` so `is_active` returns false.
 void deactivate(State& s);

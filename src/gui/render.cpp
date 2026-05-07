@@ -620,6 +620,45 @@ void render_flags(cairo_t* cr,
         cairo_move_to(cr, e.text_left + hl_pad, e.baseline_y);
         cairo_show_text(cr, draw_text.c_str());
 
+        // Brief seven: foreground/background swap over the selected
+        // substring. Drawn after the regular text paint and before the
+        // cursor so the cursor stays visible inside the highlight rect
+        // (standard inverted-cursor look). The fill color is the
+        // current text color (`txt`); the re-paint color is the canvas
+        // background, dimmed in lockstep when out-of-trim.
+        if (is_editing && editor.has_selection) {
+            const int sel_a = editor.selection_start;
+            const int sel_b = editor.selection_end;
+            cairo_text_extents_t a_ext;
+            cairo_text_extents(cr,
+                draw_text.substr(0,
+                    static_cast<size_t>(sel_a)).c_str(),
+                &a_ext);
+            cairo_text_extents_t b_ext;
+            cairo_text_extents(cr,
+                draw_text.substr(0,
+                    static_cast<size_t>(sel_b)).c_str(),
+                &b_ext);
+            const double hi_x = e.text_left + hl_pad + a_ext.x_advance;
+            const double hi_w = b_ext.x_advance - a_ext.x_advance;
+            const double hi_y = e.baseline_y + uniform_ext.y_bearing
+                              - hl_pad - kVPadExtraPx;
+            const double hi_h = uniform_ext.height + 2 * hl_pad
+                              + 2 * kVPadExtraPx;
+            cairo_set_source_rgb(cr, txt.r, txt.g, txt.b);
+            cairo_rectangle(cr, hi_x, hi_y, hi_w, hi_h);
+            cairo_fill(cr);
+            const GuiColor bg_swap =
+                out_of_trim ? dim(kBackground) : kBackground;
+            cairo_set_source_rgb(cr,
+                bg_swap.r, bg_swap.g, bg_swap.b);
+            cairo_move_to(cr, hi_x, e.baseline_y);
+            cairo_show_text(cr,
+                draw_text.substr(static_cast<size_t>(sel_a),
+                                 static_cast<size_t>(sel_b - sel_a))
+                    .c_str());
+        }
+
         if (is_editing && editor.cursor_visible) {
             double cursor_x_offset = 0.0;
             if (editor.cursor_pos > 0) {

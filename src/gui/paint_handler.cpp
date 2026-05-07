@@ -466,6 +466,15 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     overlay.cursor_visible =
                         text_editor::cursor_visible_now(
                             app.top_flag_editor);
+                    overlay.has_selection =
+                        text_editor::has_selection(
+                            app.top_flag_editor);
+                    overlay.selection_start =
+                        text_editor::selection_start(
+                            app.top_flag_editor);
+                    overlay.selection_end =
+                        text_editor::selection_end(
+                            app.top_flag_editor);
                 } else if (text_editor::is_active(app.top_flag_editor) &&
                            app.top_flag_editor.kind ==
                                text_editor::Kind::IterationBracket) {
@@ -655,6 +664,49 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                                 static_cast<double>(anchor.x), baseline_y);
                             cairo_show_text(cr, pending.c_str());
 
+                            // Brief seven: selection swap over the
+                            // selected substring. Same shape as the
+                            // flag-payload site in render.cpp; the
+                            // re-paint color is kBackground (the
+                            // canvas-bg used by render_flag_text_bg_fill).
+                            if (text_editor::has_selection(
+                                    app.top_flag_editor)) {
+                                const int sel_a = text_editor::selection_start(
+                                    app.top_flag_editor);
+                                const int sel_b = text_editor::selection_end(
+                                    app.top_flag_editor);
+                                cairo_text_extents_t a_ext;
+                                cairo_text_extents(cr,
+                                    pending.substr(0,
+                                        static_cast<size_t>(sel_a)).c_str(),
+                                    &a_ext);
+                                cairo_text_extents_t b_ext;
+                                cairo_text_extents(cr,
+                                    pending.substr(0,
+                                        static_cast<size_t>(sel_b)).c_str(),
+                                    &b_ext);
+                                const double hi_x =
+                                    static_cast<double>(anchor.x) +
+                                    a_ext.x_advance;
+                                const double hi_w =
+                                    b_ext.x_advance - a_ext.x_advance;
+                                cairo_set_source_rgb(cr,
+                                    txt.r, txt.g, txt.b);
+                                cairo_rectangle(cr, hi_x, bg_y,
+                                                hi_w, bg_h);
+                                cairo_fill(cr);
+                                const GuiColor bg_swap =
+                                    oot ? dim(kBackground) : kBackground;
+                                cairo_set_source_rgb(cr,
+                                    bg_swap.r, bg_swap.g, bg_swap.b);
+                                cairo_move_to(cr, hi_x, baseline_y);
+                                cairo_show_text(cr,
+                                    pending.substr(
+                                        static_cast<size_t>(sel_a),
+                                        static_cast<size_t>(sel_b - sel_a))
+                                        .c_str());
+                            }
+
                             if (text_editor::cursor_visible_now(
                                     app.top_flag_editor)) {
                                 std::string left = pending.substr(
@@ -793,6 +845,46 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             cairo_move_to(cr,
                                 static_cast<double>(anchor.x), baseline_y);
                             cairo_show_text(cr, pending.c_str());
+
+                            // Brief seven: selection swap. Mirrors the
+                            // iter-popup and flag-payload sites.
+                            if (text_editor::has_selection(
+                                    app.top_flag_editor)) {
+                                const int sel_a = text_editor::selection_start(
+                                    app.top_flag_editor);
+                                const int sel_b = text_editor::selection_end(
+                                    app.top_flag_editor);
+                                cairo_text_extents_t a_ext;
+                                cairo_text_extents(cr,
+                                    pending.substr(0,
+                                        static_cast<size_t>(sel_a)).c_str(),
+                                    &a_ext);
+                                cairo_text_extents_t b_ext;
+                                cairo_text_extents(cr,
+                                    pending.substr(0,
+                                        static_cast<size_t>(sel_b)).c_str(),
+                                    &b_ext);
+                                const double hi_x =
+                                    static_cast<double>(anchor.x) +
+                                    a_ext.x_advance;
+                                const double hi_w =
+                                    b_ext.x_advance - a_ext.x_advance;
+                                cairo_set_source_rgb(cr,
+                                    txt.r, txt.g, txt.b);
+                                cairo_rectangle(cr, hi_x, bg_y,
+                                                hi_w, bg_h);
+                                cairo_fill(cr);
+                                const GuiColor bg_swap =
+                                    oot ? dim(kBackground) : kBackground;
+                                cairo_set_source_rgb(cr,
+                                    bg_swap.r, bg_swap.g, bg_swap.b);
+                                cairo_move_to(cr, hi_x, baseline_y);
+                                cairo_show_text(cr,
+                                    pending.substr(
+                                        static_cast<size_t>(sel_a),
+                                        static_cast<size_t>(sel_b - sel_a))
+                                        .c_str());
+                            }
 
                             if (text_editor::cursor_visible_now(
                                     app.top_flag_editor)) {

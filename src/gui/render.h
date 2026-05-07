@@ -212,6 +212,15 @@ struct FlagEditorOverlay {
     int         popup_editor_target = -1;
     std::string pending;
     int         cursor_pos          = 0;
+    // Brief seven: selection range within `pending`. When
+    // `has_selection` is true, the renderer paints a foreground/
+    // background swap over [selection_start, selection_end). The
+    // cursor continues to paint normally on top, producing the
+    // standard inverted-cursor look when the cursor sits inside the
+    // selection.
+    bool        has_selection       = false;
+    int         selection_start     = 0;
+    int         selection_end       = 0;
     bool        is_red              = false;
     bool        cursor_visible      = false;
 };
