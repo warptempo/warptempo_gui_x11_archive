@@ -200,7 +200,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
         const double  spp        = current_samples_per_pixel(app, audio);
         const int64_t vp_start   = app.viewport_start_sample;
         const int64_t vp_end     = vp_start +
-            static_cast<int64_t>(std::llround(spp * area.w));
+            static_cast<int64_t>(std::nearbyint(spp * area.w));
         const int     sr         = audio.sample_rate();
 
         // In render-view the audio buffer is already render-domain

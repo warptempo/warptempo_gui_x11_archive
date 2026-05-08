@@ -2,6 +2,7 @@
 
 #include "render.h"
 #include "text_editor.h"
+#include "time_format.h"
 
 #include <algorithm>
 #include <cctype>
@@ -59,16 +60,7 @@ std::string GuiFlagEditor::build_locked_prefix(const GuiWarpMarker& m) {
     else if (m.is_end_time) out = "e=";
     if (m.disabled) out += '#';
     // MM:SS.SSS
-    double sec = m.time_seconds;
-    if (sec < 0) sec = 0;
-    long total_ms = static_cast<long>(std::llround(sec * 1000.0));
-    const long mn = total_ms / 60000;
-    total_ms     -= mn * 60000;
-    const long s  = total_ms / 1000;
-    const long ms = total_ms - s * 1000;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%02ld:%02ld.%03ld", mn, s, ms);
-    out += buf;
+    out += format_timestamp(m.time_seconds);
     out += '|';
     return out;
 }
@@ -117,7 +109,7 @@ void GuiFlagEditor::enter_top_flag_edit(int idx, double click_x) {
     selection.set_single_selection(idx);
     {
         const int sr = audio.sample_rate();
-        const int64_t sample = static_cast<int64_t>(std::llround(
+        const int64_t sample = static_cast<int64_t>(std::nearbyint(
             mv[idx].time_seconds * static_cast<double>(sr)));
         viewport.move_playhead_to(sample);
     }
@@ -318,7 +310,7 @@ void GuiFlagEditor::enter_iter_edit(int idx, double click_x,
     selection.set_single_selection(idx);
     {
         const int sr = audio.sample_rate();
-        const int64_t sample = static_cast<int64_t>(std::llround(
+        const int64_t sample = static_cast<int64_t>(std::nearbyint(
             mv[idx].time_seconds * static_cast<double>(sr)));
         viewport.move_playhead_to(sample);
     }
@@ -560,7 +552,7 @@ void GuiFlagEditor::enter_bpm_edit(int idx, double click_x,
     selection.set_single_selection(idx);
     {
         const int sr = audio.sample_rate();
-        const int64_t sample = static_cast<int64_t>(std::llround(
+        const int64_t sample = static_cast<int64_t>(std::nearbyint(
             mv[idx].time_seconds * static_cast<double>(sr)));
         viewport.move_playhead_to(sample);
     }

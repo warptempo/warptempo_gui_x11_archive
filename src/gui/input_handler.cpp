@@ -1494,11 +1494,11 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const int sr = audio.sample_rate();
             int64_t sample;
             if (sub_t) {
-                sample = static_cast<int64_t>(std::llround(
+                sample = static_cast<int64_t>(std::nearbyint(
                     app.render_view_transients[hit].time_seconds *
                     static_cast<double>(sr)));
             } else {
-                sample = static_cast<int64_t>(std::llround(
+                sample = static_cast<int64_t>(std::nearbyint(
                     app.render_view_markers[hit].time_seconds *
                     static_cast<double>(sr)));
             }
@@ -1536,7 +1536,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             if (rel >= area.w) rel = area.w - 1;
             const int64_t sample =
                 app.viewport_start_sample +
-                static_cast<int64_t>(std::llround(rel * spp));
+                static_cast<int64_t>(std::nearbyint(rel * spp));
             viewport.move_playhead_to(sample);
             // Brief six: empty-space click in render-view keeps
             // playback alive by reseeking to the new position.
@@ -1631,7 +1631,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const int click_rel_x = x - area.x;
             const int sr = audio.sample_rate();
             const int64_t sample = app.viewport_start_sample +
-                static_cast<int64_t>(std::llround(click_rel_x * spp));
+                static_cast<int64_t>(std::nearbyint(click_rel_x * spp));
             const double t = (sr > 0)
                 ? static_cast<double>(sample) / static_cast<double>(sr)
                 : 0.0;
@@ -1723,11 +1723,11 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 const int sr = audio.sample_rate();
                 int64_t sample;
                 if (app.active_mode == 'T') {
-                    sample = static_cast<int64_t>(std::llround(
+                    sample = static_cast<int64_t>(std::nearbyint(
                         app.transientmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
-                    sample = static_cast<int64_t>(std::llround(
+                    sample = static_cast<int64_t>(std::nearbyint(
                         app.warpmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 }
@@ -1756,11 +1756,11 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 }
                 int64_t sample;
                 if (app.active_mode == 'T') {
-                    sample = static_cast<int64_t>(std::llround(
+                    sample = static_cast<int64_t>(std::nearbyint(
                         app.transientmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
-                    sample = static_cast<int64_t>(std::llround(
+                    sample = static_cast<int64_t>(std::nearbyint(
                         app.warpmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 }
@@ -1784,7 +1784,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                     return;
                 }
                 const int64_t sample = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(click_rel_x * spp));
+                    static_cast<int64_t>(std::nearbyint(click_rel_x * spp));
                 if (!shift) selection.clear_selection();
                 viewport.move_playhead_to(sample);
                 // Brief six: empty-space click in the waveform area
@@ -1826,7 +1826,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                     const auto& mv = app.render_view_transients;
                     for (size_t i = 0; i < mv.size(); ++i) {
                         const int64_t s = static_cast<int64_t>(
-                            std::llround(mv[i].time_seconds *
+                            std::nearbyint(mv[i].time_seconds *
                                          static_cast<double>(sr)));
                         if (s == ph) {
                             snapped = static_cast<int>(i);
@@ -1837,7 +1837,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                     const auto& mv = app.render_view_markers;
                     for (size_t i = 0; i < mv.size(); ++i) {
                         const int64_t s = static_cast<int64_t>(
-                            std::llround(mv[i].time_seconds *
+                            std::nearbyint(mv[i].time_seconds *
                                          static_cast<double>(sr)));
                         if (s == ph) {
                             snapped = static_cast<int>(i);
@@ -1849,7 +1849,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                 const auto& mv = app.transientmarkers.markers();
                 for (size_t i = 0; i < mv.size(); ++i) {
                     const int64_t s = static_cast<int64_t>(
-                        std::llround(mv[i].time_seconds *
+                        std::nearbyint(mv[i].time_seconds *
                                      static_cast<double>(sr)));
                     if (s == ph) {
                         snapped = static_cast<int>(i);
@@ -1860,7 +1860,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                 const auto& mv = app.warpmarkers.markers();
                 for (size_t i = 0; i < mv.size(); ++i) {
                     const int64_t s = static_cast<int64_t>(
-                        std::llround(mv[i].time_seconds *
+                        std::nearbyint(mv[i].time_seconds *
                                      static_cast<double>(sr)));
                     if (s == ph) {
                         snapped = static_cast<int>(i);
@@ -1953,11 +1953,11 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
             int64_t new_playhead;
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
-                    new_playhead = static_cast<int64_t>(std::llround(
+                    new_playhead = static_cast<int64_t>(std::nearbyint(
                         app.render_view_transients[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
-                    new_playhead = static_cast<int64_t>(std::llround(
+                    new_playhead = static_cast<int64_t>(std::nearbyint(
                         app.render_view_markers[hit].time_seconds *
                         static_cast<double>(sr)));
                 }
@@ -1966,7 +1966,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
                 if (rel < 0) rel = 0;
                 if (rel >= area.w) rel = area.w - 1;
                 new_playhead = app.viewport_start_sample +
-                    static_cast<int64_t>(std::llround(rel * spp));
+                    static_cast<int64_t>(std::nearbyint(rel * spp));
             }
             if (new_playhead != app.playhead_sample) {
                 viewport.move_playhead_to(new_playhead);
@@ -2018,11 +2018,11 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
         int64_t new_playhead;
         if (hit >= 0) {
             if (app.active_mode == 'T') {
-                new_playhead = static_cast<int64_t>(std::llround(
+                new_playhead = static_cast<int64_t>(std::nearbyint(
                     app.transientmarkers.markers()[hit].time_seconds *
                     static_cast<double>(sr)));
             } else {
-                new_playhead = static_cast<int64_t>(std::llround(
+                new_playhead = static_cast<int64_t>(std::nearbyint(
                     app.warpmarkers.markers()[hit].time_seconds *
                     static_cast<double>(sr)));
             }
@@ -2032,7 +2032,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
             if (rel < 0) rel = 0;
             if (rel >= area.w) rel = area.w - 1;
             new_playhead = app.viewport_start_sample +
-                static_cast<int64_t>(std::llround(rel * spp));
+                static_cast<int64_t>(std::nearbyint(rel * spp));
         }
 
         if (new_playhead != app.playhead_sample) {
@@ -2101,10 +2101,10 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     if (hit_idx >= 0 && hit_idx < n) {
         int64_t ph;
         if (transient_drag) {
-            ph = static_cast<int64_t>(std::llround(
+            ph = static_cast<int64_t>(std::nearbyint(
                 app.transientmarkers.markers()[hit_idx].time_seconds * sr_d));
         } else {
-            ph = static_cast<int64_t>(std::llround(
+            ph = static_cast<int64_t>(std::nearbyint(
                 app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));
         }
         if (ph != app.playhead_sample) {

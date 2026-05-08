@@ -124,7 +124,7 @@ void Undo::apply_post_restore_rules_warp(const UndoEntry& entry,
             }
             if (any) {
                 const int64_t target_sample = static_cast<int64_t>(
-                    std::llround(rightmost * static_cast<double>(sr)));
+                    std::nearbyint(rightmost * static_cast<double>(sr)));
                 selection.jump_playhead_to(target_sample);
             }
         }
@@ -198,7 +198,7 @@ void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
         }
         if (any) {
             const int sr = selection.audio.sample_rate();
-            selection.jump_playhead_to(static_cast<int64_t>(std::llround(
+            selection.jump_playhead_to(static_cast<int64_t>(std::nearbyint(
                 rightmost * static_cast<double>(sr))));
         }
         app.selected_markers.clear();

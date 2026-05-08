@@ -78,7 +78,7 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
         }
         if (ms < vp) continue;
         if (ms >= vp + static_cast<double>(visible)) continue;
-        const int m_px = static_cast<int>(std::llround((ms - vp) / spp));
+        const int m_px = static_cast<int>(std::nearbyint((ms - vp) / spp));
         const int d = std::abs(m_px - click_rel_x);
         if (d <= kMarkerHitHalfPx && d < best_dist) {
             best_dist = d;
@@ -105,7 +105,7 @@ int hit_test_flag(const AppState& app, const GuiAudio& audio,
     const double spp = current_samples_per_pixel(app, audio);
     const int64_t vp_start = app.viewport_start_sample;
     const int64_t vp_end = vp_start +
-        static_cast<int64_t>(std::llround(spp * area.w));
+        static_cast<int64_t>(std::nearbyint(spp * area.w));
     std::vector<FlagHitRect> rects;
     if (app.render_view_enabled) {
         rects = compute_flag_hit_rects(
@@ -144,7 +144,7 @@ int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
     const double spp = current_samples_per_pixel(app, audio);
     const int64_t vp_start = app.viewport_start_sample;
     const int64_t vp_end = vp_start +
-        static_cast<int64_t>(std::llround(spp * area.w));
+        static_cast<int64_t>(std::nearbyint(spp * area.w));
     auto hits = compute_iter_popup_hits(
         scratch_cr, top, app.warpmarkers.markers(),
         vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
@@ -201,7 +201,7 @@ int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
     const double spp = current_samples_per_pixel(app, audio);
     const int64_t vp_start = app.viewport_start_sample;
     const int64_t vp_end = vp_start +
-        static_cast<int64_t>(std::llround(spp * area.w));
+        static_cast<int64_t>(std::nearbyint(spp * area.w));
     auto hits = compute_bpm_popup_hits(
         scratch_cr, top, app.warpmarkers.markers(),
         vp_start, vp_end, audio.sample_rate(), kFlagFontSize);

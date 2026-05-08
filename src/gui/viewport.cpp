@@ -89,7 +89,7 @@ void Viewport::move_playhead_to(int64_t new_sample) {
         viewport_changed = true;
     } else if (new_sample >= vp_end) {
         const double spp = current_samples_per_pixel(app, audio);
-        const int64_t one_px = static_cast<int64_t>(std::llround(spp));
+        const int64_t one_px = static_cast<int64_t>(std::nearbyint(spp));
         app.viewport_start_sample =
             new_sample - (visible - std::max<int64_t>(one_px, 1));
         viewport_changed = true;
@@ -117,7 +117,7 @@ void Viewport::move_playhead_pixels(int delta_px) {
     if (audio.total_frames() <= 0) return;
     const double spp = current_samples_per_pixel(app, audio);
     const int64_t delta_samples =
-        static_cast<int64_t>(std::llround(delta_px * spp));
+        static_cast<int64_t>(std::nearbyint(delta_px * spp));
     move_playhead_to(app.playhead_sample + delta_samples);
 }
 

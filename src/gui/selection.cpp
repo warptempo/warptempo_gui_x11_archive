@@ -80,11 +80,11 @@ void Selection::cycle_selection(bool forward) {
     // Helper to read frame-of-index in source samples regardless of mode.
     auto frame_of = [&](int i) -> int64_t {
         if (transient) {
-            return static_cast<int64_t>(std::llround(
+            return static_cast<int64_t>(std::nearbyint(
                 app.transientmarkers.markers()[i].time_seconds *
                 static_cast<double>(sr)));
         }
-        return static_cast<int64_t>(std::llround(
+        return static_cast<int64_t>(std::nearbyint(
             app.warpmarkers.markers()[i].time_seconds *
             static_cast<double>(sr)));
     };
@@ -159,7 +159,7 @@ void Selection::cycle_selection(bool forward) {
         } else if (sample >= vp_end) {
             const double spp = current_samples_per_pixel(app, audio);
             const int64_t one_px =
-                static_cast<int64_t>(std::llround(spp));
+                static_cast<int64_t>(std::nearbyint(spp));
             app.viewport_start_sample =
                 sample - (visible - std::max<int64_t>(one_px, 1));
         }
@@ -212,12 +212,12 @@ void Selection::sync_playhead_to_last_selected() {
     if (app.active_mode == 'T') {
         const auto& tv = app.transientmarkers.markers();
         if (last >= static_cast<int>(tv.size())) return;
-        target_sample = static_cast<int64_t>(std::llround(
+        target_sample = static_cast<int64_t>(std::nearbyint(
             tv[last].time_seconds * static_cast<double>(sr)));
     } else {
         const auto& mv = app.warpmarkers.markers();
         if (last >= static_cast<int>(mv.size())) return;
-        target_sample = static_cast<int64_t>(std::llround(
+        target_sample = static_cast<int64_t>(std::nearbyint(
             mv[last].time_seconds * static_cast<double>(sr)));
     }
     jump_playhead_to(target_sample);

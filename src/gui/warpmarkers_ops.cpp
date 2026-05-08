@@ -83,7 +83,7 @@ void GuiWarpMarkersOps::drop_marker(double time_seconds, bool inherit) {
     // Move the playhead to the new marker for consistency with click-
     // to-select behavior. Done last so invalidations in the helper
     // don't double-paint with the ones above.
-    const int64_t sample = static_cast<int64_t>(std::llround(
+    const int64_t sample = static_cast<int64_t>(std::nearbyint(
         time_seconds * static_cast<double>(sr)));
     viewport.move_playhead_to(sample);
 }
@@ -295,7 +295,7 @@ void GuiWarpMarkersOps::toggle_begin_time() {
     if (idx >= static_cast<int>(mv.size())) return;
 
     const int sr = audio.sample_rate();
-    const int64_t m_frame = static_cast<int64_t>(std::llround(
+    const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
         mv[idx].time_seconds * static_cast<double>(sr)));
 
     std::vector<GuiWarpMarker>    warp_pre  = mv;
@@ -363,7 +363,7 @@ void GuiWarpMarkersOps::toggle_end_time() {
     if (idx >= static_cast<int>(mv.size())) return;
 
     const int sr = audio.sample_rate();
-    const int64_t m_frame = static_cast<int64_t>(std::llround(
+    const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
         mv[idx].time_seconds * static_cast<double>(sr)));
 
     std::vector<GuiWarpMarker>    warp_pre  = mv;

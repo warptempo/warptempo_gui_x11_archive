@@ -624,7 +624,7 @@ bool do_render(const RenderRequest& req) {
                 // Trim-range filter (inclusive both ends — matches the
                 // post-pass at timemap.cpp line 209).
                 const int64_t sf_abs = static_cast<int64_t>(
-                    std::llround(g.time_seconds * sr_d));
+                    std::nearbyint(g.time_seconds * sr_d));
                 if (sf_abs < trim_begin || sf_abs > trim_end) continue;
 
                 if (seg_idx >= seg.size()) break;
@@ -660,7 +660,7 @@ bool do_render(const RenderRequest& req) {
                 for (const auto& t : req.transients) {
                     if (t.disabled) continue;
                     const int64_t sf_abs = static_cast<int64_t>(
-                        std::llround(t.time_seconds * sr_d));
+                        std::nearbyint(t.time_seconds * sr_d));
                     if (sf_abs < trim_begin || sf_abs > trim_end) continue;
                     if (engine_frame_map.empty()) continue;
                     const int64_t sf_rel = sf_abs - trim_begin;

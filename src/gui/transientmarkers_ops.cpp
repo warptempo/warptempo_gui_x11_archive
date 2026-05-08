@@ -71,7 +71,7 @@ void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     viewport.invalidate_timestamp_area();
     // Match drop_marker: move playhead to the new transient. When
     // dropping at the current playhead, this is a no-op.
-    viewport.move_playhead_to(static_cast<int64_t>(std::llround(
+    viewport.move_playhead_to(static_cast<int64_t>(std::nearbyint(
         time_seconds * static_cast<double>(sr))));
 }
 
@@ -274,7 +274,7 @@ void GuiTransientMarkersOps::toggle_transient_begin_time() {
     }
 
     const int sr_b = audio.sample_rate();
-    const int64_t m_frame = static_cast<int64_t>(std::llround(
+    const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
         tv[idx].time_seconds * static_cast<double>(sr_b)));
     const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
                                       /*excl_idx_is_transient=*/false, -1);
@@ -338,7 +338,7 @@ void GuiTransientMarkersOps::toggle_transient_end_time() {
     }
 
     const int sr_e = audio.sample_rate();
-    const int64_t m_frame = static_cast<int64_t>(std::llround(
+    const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
         tv[idx].time_seconds * static_cast<double>(sr_e)));
     const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
                                       /*excl_idx_is_transient=*/false, -1);

@@ -13,7 +13,7 @@ inline double parse_timestamp(const std::string& s) {
 
 inline std::string format_timestamp(double seconds) {
     if (seconds < 0) seconds = 0;
-    long total_ms = static_cast<long>(std::llround(seconds * 1000.0));
+    long total_ms = static_cast<long>(std::nearbyint(seconds * 1000.0));
     const long m  = total_ms / 60000;
     total_ms     -= m * 60000;
     const long s  = total_ms / 1000;

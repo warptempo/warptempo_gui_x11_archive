@@ -1,6 +1,7 @@
 #include "render.h"
 #include "app_state.h"
 #include "audio.h"
+#include "time_format.h"
 
 #include <algorithm>
 #include <cmath>
@@ -254,8 +255,8 @@ void render_waveform(cairo_t* cr,
                           (span * i)     / area.w;
         const double f1 = static_cast<double>(viewport_start_sample) +
                           (span * (i+1)) / area.w;
-        const long long s0 = static_cast<long long>(std::llround(f0));
-        long long       s1 = static_cast<long long>(std::llround(f1));
+        const long long s0 = static_cast<long long>(std::nearbyint(f0));
+        long long       s1 = static_cast<long long>(std::nearbyint(f1));
         if (s1 <= s0) s1 = s0 + 1;
 
         const auto mm = audio.get_peak_range(channel, level, s0, s1);
@@ -358,14 +359,7 @@ void render_timestamp(cairo_t* cr,
     // within its fixed buffer.
     if (seconds > 5999.999) seconds = 5999.999;
 
-    int total_ms = static_cast<int>(seconds * 1000.0 + 0.5);
-    const int minutes = total_ms / 60000;
-    total_ms         -= minutes * 60000;
-    const int secs    = total_ms / 1000;
-    const int ms      = total_ms - secs * 1000;
-
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%02d:%02d.%03d", minutes, secs, ms);
+    const std::string buf = format_timestamp(seconds);
 
     cairo_save(cr);
     cairo_set_source_rgb(cr, color.r, color.g, color.b);
@@ -374,7 +368,7 @@ void render_timestamp(cairo_t* cr,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, kFlagFontSize);
     cairo_move_to(cr, x, y);
-    cairo_show_text(cr, buf);
+    cairo_show_text(cr, buf.c_str());
     cairo_restore(cr);
 }
 
@@ -416,7 +410,7 @@ void render_markers(cairo_t* cr,
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
             const int64_t pos = static_cast<int64_t>(
-                std::llround(m.time_seconds * sr));
+                std::nearbyint(m.time_seconds * sr));
             if (marker_out_of_trim(pos, trim) != out_of_trim_pass) continue;
             const double x_raw =
                 (ms - static_cast<double>(viewport_start_sample))
@@ -568,7 +562,7 @@ void render_flags(cairo_t* cr,
         const bool is_parse_fail = is_editing && editor.is_red;
 
         const int64_t source_pos = static_cast<int64_t>(
-            std::llround(markers[e.i].time_seconds * sr_d));
+            std::nearbyint(markers[e.i].time_seconds * sr_d));
         const bool out_of_trim = marker_out_of_trim(source_pos, trim);
 
         const int marker_col_px = static_cast<int>(std::round(e.text_left));
@@ -1063,7 +1057,7 @@ double flag_pending_text_left_x(
     if (spp <= 0.0) return -1.0;
     const int64_t vp_start = app.viewport_start_sample;
     const int64_t vp_end = vp_start +
-        static_cast<int64_t>(std::llround(spp * top.w));
+        static_cast<int64_t>(std::nearbyint(spp * top.w));
     const double sr = static_cast<double>(audio.sample_rate());
     const double ms = mv[marker_idx].time_seconds * sr;
     if (ms <  static_cast<double>(vp_start)) return -1.0;

@@ -176,12 +176,12 @@ std::pair<long long, long long> compute_trim_samples(
 
     for (const auto& m : warp_markers) {
         if (m.is_begin_time) {
-            begin = static_cast<long long>(std::llround(
+            begin = static_cast<long long>(std::nearbyint(
                 m.time_seconds * static_cast<double>(sample_rate)));
             have_begin_warp = true;
         }
         if (m.is_end_time) {
-            end = static_cast<long long>(std::llround(
+            end = static_cast<long long>(std::nearbyint(
                 m.time_seconds * static_cast<double>(sample_rate)));
             have_end_warp = true;
         }
@@ -258,7 +258,7 @@ int64_t samples_visible(const AppState& a, const GuiAudio& audio) {
     const GuiRect area = waveform_area(a);
     const double spp = samples_per_pixel_at(
         a.zoom_level, area.w, audio.total_frames(), audio.sample_rate());
-    return static_cast<int64_t>(std::llround(spp * area.w));
+    return static_cast<int64_t>(std::nearbyint(spp * area.w));
 }
 
 double current_samples_per_pixel(const AppState& a, const GuiAudio& audio) {
@@ -694,7 +694,7 @@ int main(int argc, char** argv) {
             f.valid     = true;
             f.transient = false;
             f.idx       = i;
-            f.frame     = static_cast<int64_t>(std::llround(
+            f.frame     = static_cast<int64_t>(std::nearbyint(
                 mv[i].time_seconds * static_cast<double>(sr)));
             return f;
         }
@@ -707,7 +707,7 @@ int main(int argc, char** argv) {
             f.valid     = true;
             f.transient = true;
             f.idx       = i;
-            f.frame     = static_cast<int64_t>(std::llround(
+            f.frame     = static_cast<int64_t>(std::nearbyint(
                 tv[i].time_seconds * static_cast<double>(sr)));
             return f;
         }
