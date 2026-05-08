@@ -1718,20 +1718,23 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                         hit, static_cast<double>(x));
                     return;
                 }
-                if (shift) selection.toggle_selection_membership(hit);
+                bool added = true;
+                if (shift) added = selection.toggle_selection_membership(hit);
                 else       selection.set_single_selection(hit);
-                const int sr = audio.sample_rate();
-                int64_t sample;
-                if (app.active_mode == 'T') {
-                    sample = static_cast<int64_t>(std::nearbyint(
-                        app.transientmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
-                } else {
-                    sample = static_cast<int64_t>(std::nearbyint(
-                        app.warpmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
+                if (added) {
+                    const int sr = audio.sample_rate();
+                    int64_t sample;
+                    if (app.active_mode == 'T') {
+                        sample = static_cast<int64_t>(std::nearbyint(
+                            app.transientmarkers.markers()[hit].time_seconds *
+                            static_cast<double>(sr)));
+                    } else {
+                        sample = static_cast<int64_t>(std::nearbyint(
+                            app.warpmarkers.markers()[hit].time_seconds *
+                            static_cast<double>(sr)));
+                    }
+                    viewport.move_playhead_to(sample);
                 }
-                viewport.move_playhead_to(sample);
             }
             return;
         }
@@ -1741,37 +1744,35 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const int sr = audio.sample_rate();
             if (hit >= 0) {
                 // Press on a marker (within 3px).
+                bool added = true;
                 if (!shift) {
                     selection.set_single_selection(hit);
                 } else {
-                    // Shift+press on marker: selection otherwise preserved;
-                    // add hit if not already present.
-                    const bool was_in = app.selected_markers.count(hit) > 0;
-                    if (!was_in) {
-                        app.selected_markers.insert(hit);
-                        viewport.invalidate_marker_column(hit);
-                        viewport.invalidate_top_strip();
+                    // Shift+press on marker: toggles membership in the
+                    // selection, last_selected repaired by the helper.
+                    // Plain press collapses to single selection.
+                    added = selection.toggle_selection_membership(hit);
+                }
+                if (added) {
+                    int64_t sample;
+                    if (app.active_mode == 'T') {
+                        sample = static_cast<int64_t>(std::nearbyint(
+                            app.transientmarkers.markers()[hit].time_seconds *
+                            static_cast<double>(sr)));
+                    } else {
+                        sample = static_cast<int64_t>(std::nearbyint(
+                            app.warpmarkers.markers()[hit].time_seconds *
+                            static_cast<double>(sr)));
                     }
-                    app.last_selected_marker = hit;
-                }
-                int64_t sample;
-                if (app.active_mode == 'T') {
-                    sample = static_cast<int64_t>(std::nearbyint(
-                        app.transientmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
-                } else {
-                    sample = static_cast<int64_t>(std::nearbyint(
-                        app.warpmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
-                }
-                viewport.move_playhead_to(sample);
-                // Brief six: marker-line click in the waveform area
-                // keeps playback alive by reseeking the audio device
-                // to the marker's sample. Skip the reseek when the
-                // click landed on the marker the playhead was already
-                // on — it'd be a no-op move + a wasted teardown.
-                if (was_playing && sample != playhead_at_click_entry) {
-                    playback.play(sample, viewport.trim_end_sample());
+                    viewport.move_playhead_to(sample);
+                    // Brief six: marker-line click in the waveform area
+                    // keeps playback alive by reseeking the audio device
+                    // to the marker's sample. Skip the reseek when the
+                    // click landed on the marker the playhead was already
+                    // on — it'd be a no-op move + a wasted teardown.
+                    if (was_playing && sample != playhead_at_click_entry) {
+                        playback.play(sample, viewport.trim_end_sample());
+                    }
                 }
                 app.playhead_drag.active = true;
                 app.playhead_drag.was_playing_at_press = was_playing;

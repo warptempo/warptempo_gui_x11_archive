@@ -416,7 +416,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                         }
                         if (anchor.w > 0 && anchor.h > 0) {
                             const int64_t pos = static_cast<int64_t>(
-                                std::llround(
+                                std::nearbyint(
                                     mv[hidx].time_seconds *
                                     static_cast<double>(sr)));
                             const bool oot =
@@ -538,7 +538,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                         }
                         if (anchor.w > 0 && anchor.h > 0) {
                             const int64_t pos = static_cast<int64_t>(
-                                std::llround(
+                                std::nearbyint(
                                     mv[hidx].time_seconds *
                                     static_cast<double>(sr)));
                             const bool oot =
@@ -596,7 +596,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             h.flag_rect.h
                         };
                         const int64_t pos = static_cast<int64_t>(
-                            std::llround(
+                            std::nearbyint(
                                 mv[h.marker_index].time_seconds *
                                 static_cast<double>(sr)));
                         const bool oot =
@@ -789,7 +789,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             h.flag_rect.h
                         };
                         const int64_t pos = static_cast<int64_t>(
-                            std::llround(
+                            std::nearbyint(
                                 mv[h.marker_index].time_seconds *
                                 static_cast<double>(sr)));
                         const bool oot =
