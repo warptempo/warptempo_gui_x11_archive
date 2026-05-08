@@ -61,6 +61,14 @@ constexpr double kVPadExtraPx = 1.0;
 // boundary row eliminates the boundary-paint fragility from Brief I.
 constexpr double kFlagBottomLiftPx = 11.0;
 
+// Editor pixel size for the flag-payload editor, iter popup, and BPM
+// popup. Computed as 11 pt at 96 DPI (the conventional Linux default
+// at non-HiDPI). WarpTempo does not currently support HiDPI; this is
+// a fixed pixel value rather than a runtime pt->px conversion. The
+// literal computation form makes the pt origin self-documenting --
+// the compiler folds it to a constant at compile time.
+constexpr double kFlagFontSize = 11.0 * 96.0 / 72.0;
+
 // Half-blend toward background. The single derivation function for
 // "subordinate" / "out-of-trim" state under the new palette.
 constexpr GuiColor dim(GuiColor c) {

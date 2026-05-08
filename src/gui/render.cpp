@@ -371,7 +371,7 @@ void render_timestamp(cairo_t* cr,
     cairo_select_font_face(cr, "monospace",
                            CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14.0);
+    cairo_set_font_size(cr, kFlagFontSize);
     cairo_move_to(cr, x, y);
     cairo_show_text(cr, buf);
     cairo_restore(cr);
@@ -1019,7 +1019,7 @@ double measure_timestamp_width(cairo_t* cr, double seconds) {
     cairo_select_font_face(cr, "monospace",
                            CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14.0);
+    cairo_set_font_size(cr, kFlagFontSize);
     cairo_text_extents_t ext;
     cairo_text_extents(cr, buf, &ext);
     cairo_restore(cr);

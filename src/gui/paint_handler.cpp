@@ -968,7 +968,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                 cairo_select_font_face(cr, "monospace",
                                        CAIRO_FONT_SLANT_NORMAL,
                                        CAIRO_FONT_WEIGHT_NORMAL);
-                cairo_set_font_size(cr, 14.0);
+                cairo_set_font_size(cr, kFlagFontSize);
                 cairo_move_to(cr, kTimestampPadX, baseline_y);
                 cairo_show_text(cr, app.prompt.text.c_str());
                 cairo_text_extents_t pext;
@@ -990,7 +990,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                 cairo_select_font_face(cr, "monospace",
                                        CAIRO_FONT_SLANT_NORMAL,
                                        CAIRO_FONT_WEIGHT_NORMAL);
-                cairo_set_font_size(cr, 14.0);
+                cairo_set_font_size(cr, kFlagFontSize);
                 cairo_move_to(cr, kTimestampPadX, baseline_y);
                 cairo_show_text(cr, app.queue_progress_text.c_str());
                 cairo_restore(cr);
@@ -1034,7 +1034,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
-                    cairo_set_font_size(cr, 14.0);
+                    cairo_set_font_size(cr, kFlagFontSize);
                     cairo_text_extents_t ext;
                     cairo_text_extents(cr, letter_buf, &ext);
                     cairo_move_to(cr, letter_x, baseline_y);
@@ -1051,7 +1051,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
-                    cairo_set_font_size(cr, 14.0);
+                    cairo_set_font_size(cr, kFlagFontSize);
                     cairo_move_to(cr, cx, baseline_y);
                     cairo_show_text(cr, "*");
                     cairo_restore(cr);
@@ -1077,7 +1077,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     cairo_select_font_face(cr, "monospace",
                                            CAIRO_FONT_SLANT_NORMAL,
                                            CAIRO_FONT_WEIGHT_NORMAL);
-                    cairo_set_font_size(cr, 14.0);
+                    cairo_set_font_size(cr, kFlagFontSize);
                     cairo_text_extents_t ext;
                     cairo_text_extents(cr, label.c_str(), &ext);
                     const double rx = static_cast<double>(app.width) -

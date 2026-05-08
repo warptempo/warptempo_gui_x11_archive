@@ -43,7 +43,8 @@
 
 constexpr int      kProgressBarHeight        = 4;
 constexpr int      kChannelGapPx             = 2;
-constexpr double   kFlagFontSize             = 13.0;
+// kFlagFontSize lives in render.h so render.cpp can reach it without
+// pulling paint_handler.h into the lower-layer include graph.
 
 // Timestamp text layout (bottom-left of the status strip).
 constexpr int      kTimestampPadX            = 8;
