@@ -82,12 +82,12 @@ void GuiTransientMarkersOps::delete_selected_transient() {
     for (int idx : app.selected_markers) {
         if (idx < 0 || idx >= static_cast<int>(tv.size())) {
             std::fprintf(stderr,
-                "warptempo_gui: transient delete rejected: stale index\n");
+                "warptempo_gui: transient delete rejected: stale selection index\n");
             return;
         }
         if (idx == 0 || tv[idx].time_seconds == 0.0) {
             std::fprintf(stderr,
-                "warptempo_gui: cannot delete first transient (time 0)\n");
+                "warptempo_gui: cannot delete first transient marker (time 0)\n");
             return;
         }
     }
@@ -266,9 +266,9 @@ void GuiTransientMarkersOps::toggle_transient_begin_time() {
     const int64_t m_frame = static_cast<int64_t>(std::llround(
         tv[idx].time_seconds * static_cast<double>(sr_b)));
     const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
-                                      /*excl_trans=*/false, -1);
+                                      /*excl_idx_is_transient=*/false, -1);
     const FlagLoc b_other = find_flag(/*want_begin=*/true,
-                                      /*excl_trans=*/true, idx);
+                                      /*excl_idx_is_transient=*/true, idx);
 
     const bool needs_swap   = e_loc.valid && (m_frame >= e_loc.frame);
     const bool equal_frames = e_loc.valid && (m_frame == e_loc.frame);
@@ -330,9 +330,9 @@ void GuiTransientMarkersOps::toggle_transient_end_time() {
     const int64_t m_frame = static_cast<int64_t>(std::llround(
         tv[idx].time_seconds * static_cast<double>(sr_e)));
     const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
-                                      /*excl_trans=*/false, -1);
+                                      /*excl_idx_is_transient=*/false, -1);
     const FlagLoc e_other = find_flag(/*want_begin=*/false,
-                                      /*excl_trans=*/true, idx);
+                                      /*excl_idx_is_transient=*/true, idx);
 
     const bool needs_swap   = b_loc.valid && (m_frame <= b_loc.frame);
     const bool equal_frames = b_loc.valid && (m_frame == b_loc.frame);

@@ -118,7 +118,7 @@ void GuiWarpMarkersOps::delete_selected_marker() {
         }
         if (mv[idx].time_seconds == 0.0) {
             std::fprintf(stderr,
-                "warptempo_gui: cannot delete first marker (time 0)\n");
+                "warptempo_gui: cannot delete first warp marker (time 0)\n");
             return;
         }
         if (mv[idx].label_def.empty()) continue;
@@ -195,7 +195,7 @@ void GuiWarpMarkersOps::force_delete_selected_marker() {
         }
         if (mv[idx].time_seconds == 0.0) {
             std::fprintf(stderr,
-                "warptempo_gui: cannot delete first marker (time 0)\n");
+                "warptempo_gui: cannot delete first warp marker (time 0)\n");
             return;
         }
     }
@@ -313,9 +313,9 @@ void GuiWarpMarkersOps::toggle_begin_time() {
 
     // Find the existing e= and OTHER b= across both lists.
     const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
-                                      /*excl_trans=*/false, -1);
+                                      /*excl_idx_is_transient=*/false, -1);
     const FlagLoc b_other = find_flag(/*want_begin=*/true,
-                                      /*excl_trans=*/false, idx);
+                                      /*excl_idx_is_transient=*/false, idx);
 
     const bool needs_swap   = e_loc.valid && (m_frame >= e_loc.frame);
     const bool equal_frames = e_loc.valid && (m_frame == e_loc.frame);
@@ -380,9 +380,9 @@ void GuiWarpMarkersOps::toggle_end_time() {
     }
 
     const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
-                                      /*excl_trans=*/false, -1);
+                                      /*excl_idx_is_transient=*/false, -1);
     const FlagLoc e_other = find_flag(/*want_begin=*/false,
-                                      /*excl_trans=*/false, idx);
+                                      /*excl_idx_is_transient=*/false, idx);
 
     const bool needs_swap   = b_loc.valid && (m_frame <= b_loc.frame);
     const bool equal_frames = b_loc.valid && (m_frame == b_loc.frame);
@@ -460,11 +460,15 @@ void GuiWarpMarkersOps::adjust_tempo(double delta) {
     viewport.invalidate_timestamp_area();
 }
 
-// Clear any b= / e= flags so the whole file becomes editable again.
+// Clear any b= / e= flags across both warp and transient lists so the
+// whole file becomes editable again. Trim is a cross-list invariant —
+// only one b= and one e= can exist file-wide — so this clear is
+// naturally cross-list too.
 // No-op if no marker carries either flag.
 void GuiWarpMarkersOps::clear_trim() {
-    std::vector<GuiWarpMarker> pre_state = app.warpmarkers.markers();
-    const int              hint_last = app.last_selected_marker;
+    std::vector<GuiWarpMarker>      warp_pre  = app.warpmarkers.markers();
+    std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
+    const int                 hint_last = app.last_selected_marker;
     bool changed = false;
     for (auto& m : app.warpmarkers.markers_mut()) {
         if (m.is_begin_time || m.is_end_time) {
@@ -473,8 +477,16 @@ void GuiWarpMarkersOps::clear_trim() {
             changed = true;
         }
     }
+    for (auto& m : app.transientmarkers.markers_mut()) {
+        if (m.is_begin_time || m.is_end_time) {
+            m.is_begin_time = false;
+            m.is_end_time   = false;
+            changed = true;
+        }
+    }
     if (!changed) return;
-    undo.push_undo(std::move(pre_state), OpKind::Other, hint_last);
+    undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
+                   app.active_mode, OpKind::Other, hint_last);
     undo.recompute_dirty();
     viewport.invalidate_waveform_area();
     viewport.invalidate_timestamp_area();

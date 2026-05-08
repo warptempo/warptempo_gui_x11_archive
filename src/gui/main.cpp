@@ -674,12 +674,14 @@ int main(int argc, char** argv) {
     auto recompute_dirty = [&]() { undo.recompute_dirty(); };
 
     // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
-    // scan. The (excl_trans, excl_idx) pair excludes one marker from the
-    // search — used by toggle to skip the marker the user just toggled.
+    // scan. The (excl_idx_is_transient, excl_idx) pair excludes one marker
+    // from the search; `excl_idx` is the index, and `excl_idx_is_transient`
+    // selects which list it indexes into — true means `excl_idx` is a
+    // transient-list index, false means it's a warp-list index.
     // Pass excl_idx == -1 for no exclusion. Warp list is scanned first;
     // on a duplicate (parser-protected, only via hand-edit), the warp-
     // side hit wins to match compute_trim_samples.
-    find_flag = [&](bool want_begin, bool excl_trans, int excl_idx)
+    find_flag = [&](bool want_begin, bool excl_idx_is_transient, int excl_idx)
         -> FlagLoc {
         FlagLoc f;
         const int sr = audio.sample_rate();
@@ -688,7 +690,7 @@ int main(int argc, char** argv) {
             const bool has = want_begin ? mv[i].is_begin_time
                                         : mv[i].is_end_time;
             if (!has) continue;
-            if (!excl_trans && i == excl_idx) continue;
+            if (!excl_idx_is_transient && i == excl_idx) continue;
             f.valid     = true;
             f.transient = false;
             f.idx       = i;
@@ -701,7 +703,7 @@ int main(int argc, char** argv) {
             const bool has = want_begin ? tv[i].is_begin_time
                                         : tv[i].is_end_time;
             if (!has) continue;
-            if (excl_trans && i == excl_idx) continue;
+            if (excl_idx_is_transient && i == excl_idx) continue;
             f.valid     = true;
             f.transient = true;
             f.idx       = i;
