@@ -44,6 +44,7 @@ void GuiWarpMarkersOps::drop_marker(double time_seconds, bool inherit) {
     if (sr <= 0) return;
     const double one_sample = 1.0 / static_cast<double>(sr);
     const auto& mv = app.warpmarkers.markers();
+    // Intentionally absent from drop_transient_at_position: transient nudges may transit through equality, and save dedups.
     for (const auto& m : mv) {
         if (std::abs(m.time_seconds - time_seconds) < one_sample) {
             std::fprintf(stderr,
@@ -69,14 +70,6 @@ void GuiWarpMarkersOps::drop_marker(double time_seconds, bool inherit) {
         nm.tempo_scale.clear();
     }
     const int new_idx = app.warpmarkers.insert_marker(std::move(nm));
-    // Insertion may have shifted indices of existing selections.
-    // Rebuild selected_markers to reflect the shift.
-    std::set<int> shifted;
-    for (int i : app.selected_markers) {
-        shifted.insert(i >= new_idx ? i + 1 : i);
-    }
-    app.selected_markers = std::move(shifted);
-    if (app.last_selected_marker >= new_idx) app.last_selected_marker += 1;
     // Newly-dropped marker becomes the sole selection per chunk I.
     app.selected_markers.clear();
     app.selected_markers.insert(new_idx);

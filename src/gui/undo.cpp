@@ -159,27 +159,39 @@ void Undo::apply_post_restore_rules_warp(const UndoEntry& entry,
 void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
                                               const std::vector<GuiTransientMarker>& before) {
     const auto& after = app.transientmarkers.markers();
+    constexpr double kEps = 1e-9;
 
     std::set<int> target_set;
     bool want_playhead_jump = false;
 
     if (after.size() > before.size()) {
-        std::set<double> before_times;
-        for (const auto& m : before) before_times.insert(m.time_seconds);
+        std::vector<double> before_times;
+        before_times.reserve(before.size());
+        for (const auto& m : before) before_times.push_back(m.time_seconds);
+        std::sort(before_times.begin(), before_times.end());
         for (size_t i = 0; i < after.size(); ++i) {
-            if (!before_times.count(after[i].time_seconds)) {
-                target_set.insert(static_cast<int>(i));
-            }
+            const double t = after[i].time_seconds;
+            auto it = std::lower_bound(before_times.begin(),
+                                       before_times.end(), t - kEps);
+            const bool matched = (it != before_times.end() &&
+                                  std::abs(*it - t) < kEps);
+            if (!matched) target_set.insert(static_cast<int>(i));
         }
         want_playhead_jump = !target_set.empty();
     } else if (after.size() < before.size()) {
-        std::set<double> after_times;
-        for (const auto& m : after) after_times.insert(m.time_seconds);
+        std::vector<double> after_times;
+        after_times.reserve(after.size());
+        for (const auto& m : after) after_times.push_back(m.time_seconds);
+        std::sort(after_times.begin(), after_times.end());
         double rightmost = 0.0;
         bool   any       = false;
         for (const auto& m : before) {
             const double t = m.time_seconds;
-            if (!after_times.count(t) && (!any || t > rightmost)) {
+            auto it = std::lower_bound(after_times.begin(),
+                                       after_times.end(), t - kEps);
+            const bool matched = (it != after_times.end() &&
+                                  std::abs(*it - t) < kEps);
+            if (!matched && (!any || t > rightmost)) {
                 rightmost = t;
                 any       = true;
             }
@@ -194,7 +206,8 @@ void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
         return;
     } else if (entry.op_kind == OpKind::Move) {
         for (size_t i = 0; i < after.size(); ++i) {
-            if (after[i].time_seconds != before[i].time_seconds) {
+            if (std::abs(after[i].time_seconds -
+                         before[i].time_seconds) > kEps) {
                 target_set.insert(static_cast<int>(i));
             }
         }

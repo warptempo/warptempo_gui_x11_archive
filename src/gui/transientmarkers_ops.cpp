@@ -36,6 +36,7 @@
 void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
+    // No duplicate-position guard here is intentional — see drop_marker for the warp side's contrasting behavior.
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
     GuiTransientMarker nm;
