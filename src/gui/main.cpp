@@ -126,8 +126,12 @@ struct ParsedSettings {
     int     tab_b_zoom     = 0;
     bool    has_tab_b_ph   = false;
     int64_t tab_b_ph       = 0;
-    bool    has_follow     = false;
-    bool    follow         = true;
+    bool    has_follow         = false;
+    bool    follow             = true;
+    bool    has_active_mode    = false;
+    char    active_mode        = 'W';
+    bool    has_playback_speed = false;
+    float   playback_speed     = 1.0f;
     std::vector<std::pair<std::string, std::string>> passthrough;
 };
 
@@ -383,6 +387,17 @@ bool parse_int_full(const std::string& s, int& out) {
     return true;
 }
 
+bool parse_float_full(const std::string& s, float& out) {
+    if (s.empty()) return false;
+    errno = 0;
+    char* end = nullptr;
+    const float v = std::strtof(s.c_str(), &end);
+    if (errno != 0 || end == s.c_str() || *end != '\0') return false;
+    if (!std::isfinite(v)) return false;
+    out = v;
+    return true;
+}
+
 // Parse `.settings`. Missing file → empty result (all has_* false, empty
 // passthrough). Returns false only on a file-open failure of an existing
 // file; per-line errors are silent-skip. Tab values are stored raw, without
@@ -429,6 +444,17 @@ bool parse_settings_file(const std::string& path, ParsedSettings& out) {
             if (lower == "true")       { out.has_follow = true; out.follow = true;  }
             else if (lower == "false") { out.has_follow = true; out.follow = false; }
             // Any other value: silent-skip; default (true) applies at the call site.
+        } else if (key == "active_mode") {
+            // Case-sensitive "W" / "T" — these literals cross the engine
+            // boundary. Anything else silent-skips like the `follow` parser.
+            if (value == "W") { out.has_active_mode = true; out.active_mode = 'W'; }
+            else if (value == "T") { out.has_active_mode = true; out.active_mode = 'T'; }
+        } else if (key == "playback_speed") {
+            float v;
+            if (parse_float_full(value, v) && v > 0.0f) {
+                out.has_playback_speed = true;
+                out.playback_speed = v;
+            }
         } else {
             out.passthrough.emplace_back(key, value);
         }
@@ -450,6 +476,8 @@ std::string format_default_settings_template(const std::string& stem,
     s += "N=4096\n";
     s += "fftw_threads=16\n";
     s += "limiter_enabled=false\n";
+    s += "active_mode=W\n";
+    s += "playback_speed=1.000000\n";
     s += "follow=true\n";
     s += "tab_a_viewport_start=0\n";
     s += "tab_a_zoom=0\n";
@@ -468,6 +496,8 @@ bool write_settings_file(
     const ViewState& tab_a,
     const ViewState& tab_b,
     bool follow,
+    char active_mode,
+    float playback_speed,
     const std::vector<std::pair<std::string, std::string>>& passthrough) {
     std::string data;
     for (const auto& kv : passthrough) {
@@ -478,6 +508,14 @@ bool write_settings_file(
     }
     data += "follow=";
     data += follow ? "true" : "false";
+    data += '\n';
+    data += "active_mode=";
+    data += active_mode;
+    data += '\n';
+    char fbuf[32];
+    std::snprintf(fbuf, sizeof(fbuf), "%.6f", playback_speed);
+    data += "playback_speed=";
+    data += fbuf;
     data += '\n';
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%lld",
@@ -785,6 +823,8 @@ int main(int argc, char** argv) {
             if (!write_settings_file(app.settings_path,
                                      app.tab_a, app.tab_b,
                                      app.follow_mode,
+                                     app.active_mode,
+                                     app.playback_speed,
                                      app.settings_passthrough)) {
                 std::fprintf(stderr,
                     "warptempo_gui: settings save failed: %s: %s\n",
@@ -1274,7 +1314,9 @@ int main(int argc, char** argv) {
             apply(ps.has_tab_b_vp, ps.tab_b_vp,
                   ps.has_tab_b_zoom, ps.tab_b_zoom,
                   ps.has_tab_b_ph, ps.tab_b_ph, app.tab_b);
-            app.follow_mode = ps.has_follow ? ps.follow : true;
+            app.follow_mode    = ps.has_follow         ? ps.follow         : true;
+            app.active_mode    = ps.has_active_mode    ? ps.active_mode    : 'W';
+            app.playback_speed = ps.has_playback_speed ? ps.playback_speed : 1.0f;
             app.settings_passthrough = std::move(ps.passthrough);
         }
 
@@ -1291,6 +1333,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                 "warptempo_gui: playback disabled; space bar will no-op.\n");
         }
+        // Push the loaded speed to the engine so playback starts at the
+        // persisted rate rather than the engine's default 1.0.
+        playback.set_speed(app.playback_speed);
 
         const double load_ms =
             std::chrono::duration<double, std::milli>(t1 - t0).count();
