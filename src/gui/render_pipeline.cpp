@@ -305,6 +305,14 @@ bool do_render(const RenderRequest& req) {
 
     // --- Build timemap from in-memory markers. ---
     TimemapBuildInput tmin;
+    for (const auto& t : req.transients) {
+        if (t.disabled) continue;
+        TrimFlagSource s;
+        s.time_seconds  = t.time_seconds;
+        s.is_begin_time = t.is_begin_time;
+        s.is_end_time   = t.is_end_time;
+        tmin.transient_trim_flags.push_back(s);
+    }
     tmin.markers      = resolve_markers_for_render(req.markers);
     tmin.scale        = scale;
     tmin.sample_rate  = sample_rate;
@@ -342,7 +350,7 @@ bool do_render(const RenderRequest& req) {
             !(engine == "warptempo" && tmres.trimmed);
         std::string out_filename;
         if (output_unlimited) {
-            out_filename = "engine=" + engine + ";limiter=false;" + title
+            out_filename = "engine=" + engine + ";limiter_enabled=false;" + title
                          + (midi_engine ? ".mid" : ".wav");
         } else {
             out_filename = title + (midi_engine ? ".mid" : ".wav");

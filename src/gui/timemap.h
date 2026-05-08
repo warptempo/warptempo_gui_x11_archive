@@ -32,8 +32,21 @@ struct MarkerForRender {
     bool        is_end_time   = false;
 };
 
+struct TrimFlagSource {
+    double time_seconds  = 0.0;
+    bool   is_begin_time = false;
+    bool   is_end_time   = false;
+};
+
 struct TimemapBuildInput {
     std::vector<MarkerForRender> markers;
+
+    // Trim flags (is_begin_time / is_end_time) sourced from the GUI's
+    // transient marker list. Warp markers in `markers` take precedence on
+    // conflict; this list contributes only when the warp list has no flag of
+    // the same kind. Empty for callers that don't author trim flags on
+    // transients.
+    std::vector<TrimFlagSource> transient_trim_flags;
 
     double scale        = 1.0;   // from settings; 1.0 default
     long   sample_rate  = 0;     // from the source audio file

@@ -24,13 +24,22 @@ struct RenderRequest {
     // the GUI-to-engine boundary via banker's rounding.
     std::vector<int64_t>   transient_frames;
 
-    // Full transient store snapshot. Only consumed when batch_folder is set
-    // — written verbatim as `<batch_folder>/<batch_basename>.transientmarkers`
-    // alongside the rendered .wav so render-view can later display the
-    // transients this render was produced from. When empty, no
-    // .transientmarkers sidecar is written. The single-transient sidecar
-    // path used by the source-directory render branch (Ctrl+Alt+R) does not
-    // read this field.
+    // Full transient store snapshot. Two readers:
+    //   1. Trim flag source for build_timemaps. Transient markers carrying
+    //      is_begin_time / is_end_time contribute to the render-time trim
+    //      detection, with warp markers (in `markers`) winning on conflict —
+    //      same precedence as the GUI's compute_trim_samples display logic.
+    //      Disabled transients are filtered out at the build_timemaps caller.
+    //   2. Batch sidecar payload. When batch_folder is set and this list is
+    //      non-empty, written verbatim as
+    //      `<batch_folder>/<batch_basename>.transientmarkers` so render-view
+    //      can later display the transient set this render was produced from.
+    //      A second sidecar `<batch_basename>.rendertransientmarkers` carries
+    //      the same set warped into render-domain frame coordinates. The
+    //      single-transient sidecar path used by the immediate Ctrl+Alt+R
+    //      render branch does not read this field for sidecar emission.
+    // Empty list disables both readers cleanly: trim detection sees no
+    // transient flags; the batch sidecar isn't written.
     std::vector<GuiTransientMarker> transients;
 
     // Batch render output. When `batch_folder` is non-empty, do_render
