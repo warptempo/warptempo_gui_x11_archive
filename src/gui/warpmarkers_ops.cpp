@@ -500,8 +500,7 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     const double sr_d = static_cast<double>(sr);
     auto t_of = [&](int idx) -> double {
         if (transient) {
-            return static_cast<double>(
-                app.transientmarkers.markers()[idx].effective_frame()) / sr_d;
+            return app.transientmarkers.markers()[idx].time_seconds;
         }
         return app.warpmarkers.markers()[idx].time_seconds;
     };
@@ -625,12 +624,9 @@ void GuiWarpMarkersOps::apply_drag_motion(double raw_delta) {
         if (transient) {
             GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
             if (!m) continue;
-            old_t = static_cast<double>(m->effective_frame()) / sr_d;
-            const int64_t new_frame = static_cast<int64_t>(
-                std::llround(new_t * sr_d));
-            const int64_t cur_frame = m->effective_frame();
-            if (cur_frame == new_frame) continue;
-            apply_transient_position_delta(*m, new_frame - cur_frame);
+            old_t = m->time_seconds;
+            if (old_t == new_t) continue;
+            apply_transient_position_delta(*m, new_t - old_t);
         } else {
             GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;

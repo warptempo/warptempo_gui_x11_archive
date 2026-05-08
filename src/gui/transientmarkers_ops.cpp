@@ -36,19 +36,17 @@
 void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
-    const int64_t frame = static_cast<int64_t>(std::llround(
-        time_seconds * static_cast<double>(sr)));
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
     GuiTransientMarker nm;
-    nm.src_frame = frame;
+    nm.time_seconds = time_seconds;
     int new_idx = app.transientmarkers.insert_marker(std::move(nm));
-    // Frame-0 companion. If the post-insert list's head isn't at
-    // frame 0, insert one. The companion always lands at index 0,
+    // Time-0 companion. If the post-insert list's head isn't at
+    // time 0.0, insert one. The companion always lands at index 0,
     // so the user's marker shifts up by one.
-    if (app.transientmarkers.markers().front().effective_frame() != 0) {
+    if (app.transientmarkers.markers().front().time_seconds != 0.0) {
         GuiTransientMarker zero;
-        zero.src_frame = 0;
+        zero.time_seconds = 0.0;
         app.transientmarkers.insert_marker(std::move(zero));
         new_idx += 1;
     }
@@ -61,7 +59,8 @@ void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     viewport.invalidate_timestamp_area();
     // Match drop_marker: move playhead to the new transient. When
     // dropping at the current playhead, this is a no-op.
-    viewport.move_playhead_to(frame);
+    viewport.move_playhead_to(static_cast<int64_t>(std::llround(
+        time_seconds * static_cast<double>(sr))));
 }
 
 void GuiTransientMarkersOps::drop_transient_at_playhead() {
@@ -85,9 +84,9 @@ void GuiTransientMarkersOps::delete_selected_transient() {
                 "warptempo_gui: transient delete rejected: stale index\n");
             return;
         }
-        if (idx == 0 || tv[idx].effective_frame() == 0) {
+        if (idx == 0 || tv[idx].time_seconds == 0.0) {
             std::fprintf(stderr,
-                "warptempo_gui: cannot delete first transient (frame 0)\n");
+                "warptempo_gui: cannot delete first transient (time 0)\n");
             return;
         }
     }
@@ -125,34 +124,40 @@ void GuiTransientMarkersOps::toggle_transient_disabled() {
     viewport.invalidate_timestamp_area();
 }
 
-// Compute (delta_min, delta_max) sample bounds for shifting the
+// Compute (delta_min, delta_max) seconds bounds for shifting the
 // currently-selected transients by a uniform delta. Same shape as the
-// warp version: nearest non-selected neighbor on each side, intersected.
-// Operates on effective_frame, which equals src_frame post X.8.3.
-// No trim clamp — transients aren't bounded by trim flags during edit.
-std::pair<int64_t, int64_t> GuiTransientMarkersOps::compute_transient_delta_bounds(bool& ok) {
+// warp version: nearest non-selected neighbor on each side, intersected,
+// with a 3-pixel-at-current-zoom visual gap enforced via eps. No trim
+// clamp — transients aren't bounded by trim flags during edit.
+std::pair<double, double> GuiTransientMarkersOps::compute_transient_delta_bounds(bool& ok) {
     ok = false;
     const auto& tv = app.transientmarkers.markers();
-    if (app.selected_markers.empty()) return {0, 0};
+    if (app.selected_markers.empty()) return {0.0, 0.0};
+    const int sr = audio.sample_rate();
+    if (sr <= 0) return {0.0, 0.0};
     for (int idx : app.selected_markers) {
-        if (idx < 0 || idx >= static_cast<int>(tv.size())) return {0, 0};
-        if (idx == 0 || tv[idx].effective_frame() == 0) return {0, 0};
+        if (idx < 0 || idx >= static_cast<int>(tv.size())) return {0.0, 0.0};
+        if (idx == 0 || tv[idx].time_seconds == 0.0) return {0.0, 0.0};
     }
-    int64_t d_min = std::numeric_limits<int64_t>::min();
-    int64_t d_max = std::numeric_limits<int64_t>::max();
+    const double sr_d = static_cast<double>(sr);
+    const double spp  = current_samples_per_pixel(app, audio);
+    const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
+
+    double d_min = -std::numeric_limits<double>::infinity();
+    double d_max =  std::numeric_limits<double>::infinity();
     for (int idx : app.selected_markers) {
-        const int64_t orig = tv[idx].effective_frame();
+        const double orig_t = tv[idx].time_seconds;
         int prev = idx - 1;
         while (prev >= 0 && app.selected_markers.count(prev)) --prev;
         if (prev >= 0) {
-            const int64_t lb = (tv[prev].effective_frame() + 1) - orig;
+            const double lb = (tv[prev].time_seconds + eps) - orig_t;
             if (lb > d_min) d_min = lb;
         }
         int next = idx + 1;
         while (next < static_cast<int>(tv.size()) &&
                app.selected_markers.count(next)) ++next;
         if (next < static_cast<int>(tv.size())) {
-            const int64_t ub = (tv[next].effective_frame() - 1) - orig;
+            const double ub = (tv[next].time_seconds - eps) - orig_t;
             if (ub < d_max) d_max = ub;
         }
     }
@@ -160,25 +165,26 @@ std::pair<int64_t, int64_t> GuiTransientMarkersOps::compute_transient_delta_boun
     return {d_min, d_max};
 }
 
-// Nudge selected transients by +/- 1 source-pixel. Direction: -1 for
-// earlier, +1 for later. Symmetric with nudge_selected_markers.
+// Nudge selected transients by +/- 1 source-pixel of seconds. Direction:
+// -1 for earlier, +1 for later. Symmetric with nudge_selected_markers.
 void GuiTransientMarkersOps::nudge_selected_transients(int direction) {
     if (app.loading || audio.total_frames() <= 0) return;
     stop_playback_if_playing();
     if (app.selected_markers.empty()) return;
+    const int sr = audio.sample_rate();
+    if (sr <= 0) return;
     const double spp = current_samples_per_pixel(app, audio);
-    const int64_t step = std::max<int64_t>(1,
-        static_cast<int64_t>(std::llround(spp))) *
-        static_cast<int64_t>(direction);
-    if (step == 0) return;
+    const double delta_s =
+        static_cast<double>(direction) * spp / static_cast<double>(sr);
+    if (delta_s == 0.0) return;
 
     bool ok = false;
     auto [d_min, d_max] = compute_transient_delta_bounds(ok);
     if (!ok) return;
-    int64_t delta = step;
+    double delta = delta_s;
     if (delta < d_min) delta = d_min;
     if (delta > d_max) delta = d_max;
-    if (delta == 0) return;
+    if (delta == 0.0) return;
 
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
@@ -199,11 +205,15 @@ void GuiTransientMarkersOps::nudge_selected_transients(int direction) {
 void GuiTransientMarkersOps::jump_transient_selection_to_playhead() {
     if (app.selected_markers.empty()) return;
     if (app.last_selected_marker < 0) return;
+    const int sr = audio.sample_rate();
+    if (sr <= 0) return;
     const auto& tv = app.transientmarkers.markers();
     if (app.last_selected_marker >= static_cast<int>(tv.size())) return;
-    const int64_t anchor_f = tv[app.last_selected_marker].effective_frame();
-    const int64_t delta    = app.playhead_sample - anchor_f;
-    if (delta == 0) return;
+    const double anchor_t = tv[app.last_selected_marker].time_seconds;
+    const double ph_t     = static_cast<double>(app.playhead_sample) /
+                            static_cast<double>(sr);
+    const double delta    = ph_t - anchor_t;
+    if (delta == 0.0) return;
 
     bool ok = false;
     auto [d_min, d_max] = compute_transient_delta_bounds(ok);
@@ -251,7 +261,9 @@ void GuiTransientMarkersOps::toggle_transient_begin_time() {
         return;
     }
 
-    const int64_t m_frame = tv[idx].effective_frame();
+    const int sr_b = audio.sample_rate();
+    const int64_t m_frame = static_cast<int64_t>(std::llround(
+        tv[idx].time_seconds * static_cast<double>(sr_b)));
     const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
                                       /*excl_trans=*/false, -1);
     const FlagLoc b_other = find_flag(/*want_begin=*/true,
@@ -313,7 +325,9 @@ void GuiTransientMarkersOps::toggle_transient_end_time() {
         return;
     }
 
-    const int64_t m_frame = tv[idx].effective_frame();
+    const int sr_e = audio.sample_rate();
+    const int64_t m_frame = static_cast<int64_t>(std::llround(
+        tv[idx].time_seconds * static_cast<double>(sr_e)));
     const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
                                       /*excl_trans=*/false, -1);
     const FlagLoc e_other = find_flag(/*want_begin=*/false,

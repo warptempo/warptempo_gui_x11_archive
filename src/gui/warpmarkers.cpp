@@ -1,5 +1,7 @@
 #include "warpmarkers.h"
 
+#include "time_format.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -46,13 +48,6 @@ bool is_valid_tempo_format(const std::string& s) {
 bool is_valid_scale_format(const std::string& s) {
     static const std::regex re("^[0-9]\\.[0-9]{4}$");
     return std::regex_match(s, re);
-}
-
-// Parse "MM:SS.mmm" to seconds. Caller validates format first.
-double parse_timestamp(const std::string& s) {
-    const int min    = std::stoi(s.substr(0, 2));
-    const double sec = std::stod(s.substr(3));
-    return min * 60.0 + sec;
 }
 
 // Legacy-only: evaluate a sum-of-signed-decimals like "1.23+0.05-0.03".
@@ -132,18 +127,6 @@ void strip_bom(std::string& s) {
         static_cast<unsigned char>(s[2]) == 0xBF) {
         s.erase(0, 3);
     }
-}
-
-std::string format_timestamp(double seconds) {
-    if (seconds < 0) seconds = 0;
-    long total_ms = static_cast<long>(std::llround(seconds * 1000.0));
-    const long m  = total_ms / 60000;
-    total_ms     -= m * 60000;
-    const long s  = total_ms / 1000;
-    const long ms = total_ms - s * 1000;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%02ld:%02ld.%03ld", m, s, ms);
-    return buf;
 }
 
 // Normalize a scale string to canonical N.NNNN form. Used by save() to

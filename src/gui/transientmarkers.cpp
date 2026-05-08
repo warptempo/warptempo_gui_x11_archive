@@ -1,5 +1,7 @@
 #include "transientmarkers.h"
 
+#include "time_format.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -9,6 +11,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
+#include <regex>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -37,38 +40,20 @@ void strip_bom(std::string& s) {
     }
 }
 
-bool is_all_digits(const std::string& s) {
-    if (s.empty()) return false;
-    for (char c : s) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) return false;
-    }
-    return true;
-}
-
-// Parse a non-negative integer token. Returns true and writes to `out` on
+// Parse a "MM:SS.mmm" timestamp token. Returns true and writes to `out` on
 // success; on failure fills `err_msg`.
-bool parse_frame_token(const std::string& tok, int64_t& out,
-                       const char* what, std::string& err_msg) {
-    if (tok.empty()) {
-        err_msg = std::string("missing ") + what;
+bool parse_timestamp_token(const std::string& tok, double& out,
+                           std::string& err_msg) {
+    static const std::regex re("^([0-5][0-9]):([0-5][0-9])\\.[0-9]{3}$");
+    if (!std::regex_match(tok, re)) {
+        err_msg = "expected MM:SS.mmm timestamp: " + tok;
         return false;
     }
-    if (!is_all_digits(tok)) {
-        err_msg = std::string(what) + " must be a non-negative integer: " + tok;
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    long long v = std::strtoll(tok.c_str(), &end, 10);
-    if (errno != 0 || end == tok.c_str() || *end != '\0' || v < 0) {
-        err_msg = std::string(what) + " out of range: " + tok;
-        return false;
-    }
-    out = static_cast<int64_t>(v);
+    out = parse_timestamp(tok);
     return true;
 }
 
-// Parse "[b=|e=][#]<frame>" into a GuiTransientMarker. Returns true on
+// Parse "[b=|e=][#]MM:SS.mmm" into a GuiTransientMarker. Returns true on
 // success; on failure, fills `err_msg` with a one-line diagnostic. Files
 // written by pre-X.8.3 builds (carrying an i/d status code or a
 // displaced_frame token) are rejected with "unexpected status code" so the
@@ -96,7 +81,7 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
         while (iss >> tk) toks.push_back(std::move(tk));
     }
     if (toks.empty()) {
-        err_msg = "missing src_frame";
+        err_msg = "missing timestamp";
         return false;
     }
     if (toks.size() > 1) {
@@ -104,7 +89,7 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
         return false;
     }
 
-    if (!parse_frame_token(toks[0], out.src_frame, "src_frame", err_msg)) {
+    if (!parse_timestamp_token(toks[0], out.time_seconds, err_msg)) {
         return false;
     }
     return true;
@@ -131,7 +116,7 @@ bool GuiTransientMarkers::load(const std::string& path) {
     if (!raw_lines.empty()) strip_bom(raw_lines.front());
 
     bool parse_ok = true;
-    int64_t last_frame = -1;
+    double last_time = -1.0;
 
     for (size_t idx = 0; idx < raw_lines.size(); ++idx) {
         const int line_number = static_cast<int>(idx + 1);
@@ -159,17 +144,17 @@ bool GuiTransientMarkers::load(const std::string& path) {
             parse_ok = false;
             continue;
         }
-        // Strictly-ascending order is keyed on effective_frame: the
+        // Strictly-ascending order is keyed on time_seconds: the
         // visible position of the marker.
-        const int64_t eff = m.effective_frame();
-        if (last_frame >= 0 && eff <= last_frame) {
+        const double eff = m.time_seconds;
+        if (last_time >= 0.0 && eff <= last_time) {
             errors_.push_back({line_number,
-                "effective_frame not strictly increasing: " +
-                std::to_string(eff)});
+                "time_seconds not strictly increasing: " +
+                format_timestamp(eff)});
             parse_ok = false;
             continue;
         }
-        last_frame = eff;
+        last_time = eff;
         markers_.push_back(std::move(m));
     }
 
@@ -177,13 +162,13 @@ bool GuiTransientMarkers::load(const std::string& path) {
         markers_.clear();
         return false;
     }
-    // Frame-0 invariant: a non-empty transient list always carries an
-    // entry at effective_frame 0. Phase reset at render start is always
+    // Time-0 invariant: a non-empty transient list always carries an
+    // entry at time_seconds 0.0. Phase reset at render start is always
     // correct, so silently materialize the head if the on-disk file
     // omitted it. An empty file stays empty until the user authors.
-    if (!markers_.empty() && markers_.front().effective_frame() > 0) {
+    if (!markers_.empty() && markers_.front().time_seconds > 0.0) {
         GuiTransientMarker zero;
-        zero.src_frame = 0;
+        zero.time_seconds = 0.0;
         markers_.insert(markers_.begin(), zero);
     }
     return true;
@@ -195,24 +180,23 @@ bool GuiTransientMarkers::save(const std::string& path) const {
 
 bool GuiTransientMarkers::save(const std::string& path,
                          const std::vector<GuiTransientMarker>& markers_) {
-    // Mid-edit nudge gestures may transit through equal-frame collisions.
+    // Mid-edit nudge gestures may transit through equal-time collisions.
     // Drop duplicates silently here (keep the first occurrence) and emit
     // a one-line stderr notice so the user sees that the on-disk content
-    // diverges from the in-memory list. Dedup is keyed on effective_frame
-    // — a D-with-displacement and an I at the same visible position would
-    // both render at one column.
+    // diverges from the in-memory list. Dedup is keyed on time_seconds
+    // (exact double match, matching warp-marker save behavior).
     std::vector<GuiTransientMarker> deduped;
     deduped.reserve(markers_.size());
-    int64_t last_frame = std::numeric_limits<int64_t>::min();
+    double last_time = std::numeric_limits<double>::lowest();
     int dropped = 0;
     for (const auto& m : markers_) {
-        const int64_t eff = m.effective_frame();
-        if (eff == last_frame) {
+        const double eff = m.time_seconds;
+        if (eff == last_time) {
             ++dropped;
             continue;
         }
         deduped.push_back(m);
-        last_frame = eff;
+        last_time = eff;
     }
     if (dropped > 0) {
         std::fprintf(stderr,
@@ -225,7 +209,7 @@ bool GuiTransientMarkers::save(const std::string& path,
         if (m.is_begin_time)    out << "b=";
         else if (m.is_end_time) out << "e=";
         if (m.disabled)         out << '#';
-        out << m.src_frame << '\n';
+        out << format_timestamp(m.time_seconds) << '\n';
     }
     const std::string data = out.str();
 
@@ -277,10 +261,10 @@ bool GuiTransientMarkers::delete_file(const std::string& path) const {
 }
 
 int GuiTransientMarkers::insert_marker(GuiTransientMarker m) {
-    const int64_t eff = m.effective_frame();
+    const double time = m.time_seconds;
     auto it = std::lower_bound(
-        markers_.begin(), markers_.end(), eff,
-        [](const GuiTransientMarker& a, int64_t f) { return a.effective_frame() < f; });
+        markers_.begin(), markers_.end(), time,
+        [](const GuiTransientMarker& a, double t) { return a.time_seconds < t; });
     const int idx = static_cast<int>(it - markers_.begin());
     markers_.insert(it, std::move(m));
     return idx;

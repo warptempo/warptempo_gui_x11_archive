@@ -5,16 +5,14 @@
 #include <vector>
 
 // One transient marker, the GUI's authoring view: a transient authored at
-// `src_frame`, with an optional `disabled` flag and optional cross-file
+// `time_seconds`, with an optional `disabled` flag and optional cross-file
 // `b=`/`e=` trim flags (`is_begin_time` / `is_end_time`, mirroring the S.1
 // system shared with warp markers).
 struct GuiTransientMarker {
-    int64_t src_frame     = 0;
-    bool    disabled      = false;
-    bool    is_begin_time = false;
-    bool    is_end_time   = false;
-
-    int64_t effective_frame() const { return src_frame; }
+    double time_seconds  = 0.0;
+    bool   disabled      = false;
+    bool   is_begin_time = false;
+    bool   is_end_time   = false;
 };
 
 struct GuiTransientMarkerError {
@@ -33,14 +31,15 @@ public:
     // Writes the canonical form to `path`. Atomic: writes to <path>.tmp,
     // fsyncs, then renames. Preserves existing permissions or uses 0644 if
     // the file is new. Returns true on success. Save dedups duplicate
-    // effective_frame()s silently and emits a one-line stderr notice if any
+    // time_seconds silently and emits a one-line stderr notice if any
     // rows were dropped — mid-edit drag gestures may transit through
     // duplicate states, so we don't error in the GUI for them.
     bool save(const std::string& path) const;
 
     // Static variant for callers that hold a raw GuiTransientMarker vector (e.g.
     // the render pipeline writing per-render sidecars). Same on-disk format
-    // and dedup behavior as the instance method.
+    // and dedup behavior as the instance method. Dedup is keyed on
+    // time_seconds (exact double match).
     static bool save(const std::string& path,
                      const std::vector<GuiTransientMarker>& markers);
 
@@ -57,8 +56,8 @@ public:
     bool had_nonstandard_content() const { return had_nonstandard_content_; }
     void clear_nonstandard_flag() { had_nonstandard_content_ = false; }
 
-    // Inserts `m` at the position that preserves ascending effective_frame()
-    // order. Returns the insertion index. Equal-frame collisions are
+    // Inserts `m` at the position that preserves ascending time_seconds
+    // order. Returns the insertion index. Equal-time collisions are
     // accepted at insert time (the user may transit through them via
     // nudge); save dedups them.
     int insert_marker(GuiTransientMarker m);

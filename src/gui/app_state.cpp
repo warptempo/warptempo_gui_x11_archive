@@ -49,8 +49,9 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
     int best_dist = kMarkerHitHalfPx + 1;
     const bool rv = app.render_view_enabled;
     // Brief F Section 3: in render-view, the visible sub-view's
-    // list drives hit-testing. 'T' reads transient frames via
-    // effective_frame() (matching source-view's transient branch).
+    // list drives hit-testing. 'T' reads transient time_seconds and
+    // converts to source frames via the source sample rate
+    // (matching source-view's transient branch).
     const bool rv_trans = rv && app.active_mode == 'T';
     const int n =
         rv_trans
@@ -63,14 +64,14 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
     for (int i = 0; i < n; ++i) {
         double ms;
         if (rv_trans) {
-            ms = static_cast<double>(
-                app.render_view_transients[i].effective_frame());
+            ms = app.render_view_transients[i].time_seconds *
+                 static_cast<double>(sr);
         } else if (rv) {
             ms = app.render_view_markers[i].time_seconds *
                  static_cast<double>(sr);
         } else if (app.active_mode == 'T') {
-            ms = static_cast<double>(
-                app.transientmarkers.markers()[i].effective_frame());
+            ms = app.transientmarkers.markers()[i].time_seconds *
+                 static_cast<double>(sr);
         } else {
             ms = app.warpmarkers.markers()[i].time_seconds *
                  static_cast<double>(sr);

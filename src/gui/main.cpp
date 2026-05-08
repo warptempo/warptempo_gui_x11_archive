@@ -191,7 +191,8 @@ std::pair<long long, long long> compute_trim_samples(
             if (have_begin_warp) {
                 have_begin_trans = true;
             } else {
-                begin = static_cast<long long>(t.effective_frame());
+                begin = static_cast<long long>(std::nearbyint(
+                    t.time_seconds * static_cast<double>(sample_rate)));
                 have_begin_trans = true;
             }
         }
@@ -199,7 +200,8 @@ std::pair<long long, long long> compute_trim_samples(
             if (have_end_warp) {
                 have_end_trans = true;
             } else {
-                end = static_cast<long long>(t.effective_frame());
+                end = static_cast<long long>(std::nearbyint(
+                    t.time_seconds * static_cast<double>(sample_rate)));
                 have_end_trans = true;
             }
         }
@@ -265,10 +267,10 @@ double current_samples_per_pixel(const AppState& a, const GuiAudio& audio) {
         a.zoom_level, area.w, audio.total_frames(), audio.sample_rate());
 }
 
-// Applies a position delta to the transient's src_frame.
-void apply_transient_position_delta(GuiTransientMarker& m, int64_t delta) {
-    if (delta == 0) return;
-    m.src_frame += delta;
+// Applies a position delta (in seconds) to the transient's time_seconds.
+void apply_transient_position_delta(GuiTransientMarker& m, double delta_seconds) {
+    if (delta_seconds == 0.0) return;
+    m.time_seconds += delta_seconds;
 }
 
 void clamp_viewport_start(AppState& a, const GuiAudio& audio) {
@@ -703,7 +705,8 @@ int main(int argc, char** argv) {
             f.valid     = true;
             f.transient = true;
             f.idx       = i;
-            f.frame     = tv[i].effective_frame();
+            f.frame     = static_cast<int64_t>(std::llround(
+                tv[i].time_seconds * static_cast<double>(sr)));
             return f;
         }
         return f;

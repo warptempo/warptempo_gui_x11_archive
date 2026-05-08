@@ -222,7 +222,7 @@ void Viewport::invalidate_marker_column(int marker_idx) {
     if (app.active_mode == 'T') {
         const auto& tv = app.transientmarkers.markers();
         if (marker_idx >= static_cast<int>(tv.size())) return;
-        ms = static_cast<double>(tv[marker_idx].effective_frame());
+        ms = tv[marker_idx].time_seconds * static_cast<double>(sr);
     } else {
         const auto& mv = app.warpmarkers.markers();
         if (marker_idx >= static_cast<int>(mv.size())) return;

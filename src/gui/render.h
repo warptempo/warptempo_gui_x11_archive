@@ -121,8 +121,8 @@ inline void render_flag_text_bg_fill(cairo_t* cr,
 }
 
 // Out-of-trim predicate. Caller computes source-frame position from its
-// own native field (time_seconds*sample_rate for GuiWarpMarker,
-// effective_frame() for GuiTransientMarker) and passes it through here.
+// own native field (time_seconds*sample_rate for both GuiWarpMarker and
+// GuiTransientMarker) and passes it through here.
 // The trim is treated as the closed interval [begin, end] for the dim-
 // vs-active flag-color decision, so a marker landing exactly on the end
 // boundary (the e=-marker itself) renders active, not dimmed. Other
@@ -300,8 +300,8 @@ void render_transient_markers(cairo_t* cr,
 // Brief H two-state model (no flag editor exists for transients):
 //   1. Not selected: text in `kText`, no background fill.
 //   2. Selected: background fill in `kMarker`, text in `kText`.
-// Markers whose effective_frame lies outside `trim` wrap every color in
-// `dim()` uniformly.
+// Markers whose time_seconds (converted to source frames) lies outside
+// `trim` wrap every color in `dim()` uniformly.
 void render_transient_flags(cairo_t* cr,
                             GuiRect top_strip_area,
                             const std::vector<GuiTransientMarker>& transients,

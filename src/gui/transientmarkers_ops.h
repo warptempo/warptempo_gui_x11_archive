@@ -10,12 +10,13 @@
 
 class GuiAudio;
 
-// Free function: apply a position delta to one transient's effective frame.
-// Defined at file scope in main.cpp; called from GuiTransientMarkersOps's
-// methods (this TU) and from the warp drag handler (in main.cpp). Promoted
-// from a captureless lambda in X.7.4 so the cluster could be extracted
-// without dragging the lambda along by reference.
-void apply_transient_position_delta(GuiTransientMarker& m, int64_t delta);
+// Free function: apply a position delta (in seconds) to one transient's
+// time_seconds. Defined at file scope in main.cpp; called from
+// GuiTransientMarkersOps's methods (this TU) and from the warp drag
+// handler (in main.cpp). Promoted from a captureless lambda in X.7.4 so
+// the cluster could be extracted without dragging the lambda along by
+// reference.
+void apply_transient_position_delta(GuiTransientMarker& m, double delta_seconds);
 
 // X.7.4: transient-authoring cluster, extracted from main.cpp's inline
 // lambdas. The struct holds references to the long-lived state and the
@@ -54,7 +55,7 @@ struct GuiTransientMarkersOps {
     void drop_transient_at_playhead();
     void delete_selected_transient();
     void toggle_transient_disabled();
-    std::pair<int64_t, int64_t> compute_transient_delta_bounds(bool& ok);
+    std::pair<double, double> compute_transient_delta_bounds(bool& ok);
     void nudge_selected_transients(int direction);
     void jump_transient_selection_to_playhead();
     void toggle_transient_begin_time();

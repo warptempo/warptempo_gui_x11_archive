@@ -20,7 +20,8 @@ struct RenderRequest {
     // and the active engine is "warptempo", this overrides the engine's
     // internal detection — typical population is the union of inserted +
     // active-detected entries from the GUI's transient list, with disabled
-    // entries filtered out and effective_frame() applied per entry.
+    // entries filtered out and time_seconds converted to source frames at
+    // the GUI-to-engine boundary via banker's rounding.
     std::vector<int64_t>   transient_frames;
 
     // Full transient store snapshot. Only consumed when batch_folder is set

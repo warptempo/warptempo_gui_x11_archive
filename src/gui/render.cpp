@@ -762,7 +762,6 @@ void iterate_visible_transient_flags(
     if (samples_per_pixel <= 0.0) return;
 
     const double sr           = static_cast<double>(sample_rate);
-    (void)sr;
     // Mirror iterate_visible_flags: place the rect bottom at the strip
     // bottom by deriving baseline_y from a representative monospace
     // measurement.
@@ -782,7 +781,7 @@ void iterate_visible_transient_flags(
 
     for (size_t i = 0; i < transients.size(); ++i) {
         const auto& m = transients[i];
-        const double ms = static_cast<double>(m.effective_frame());
+        const double ms = m.time_seconds * sr;
         if (ms < static_cast<double>(viewport_start_sample)) continue;
         if (ms >= static_cast<double>(viewport_end_sample)) continue;
 
@@ -826,6 +825,8 @@ void render_transient_markers(cairo_t* cr,
     const double samples_per_pixel = span / static_cast<double>(waveform_area.w);
     if (samples_per_pixel <= 0.0) return;
 
+    const double sr = static_cast<double>(sample_rate);
+
     const double y_conn_top =
         static_cast<double>(waveform_area.y) - kMarkerConnectorRows;
     const double y1 = static_cast<double>(waveform_area.y + waveform_area.h);
@@ -843,8 +844,8 @@ void render_transient_markers(cairo_t* cr,
         for (size_t i = 0; i < transients.size(); ++i) {
             const auto& m = transients[i];
             if (m.disabled) continue;
-            const int64_t pos = m.effective_frame();
-            const double ms = static_cast<double>(pos);
+            const double ms = m.time_seconds * sr;
+            const int64_t pos = static_cast<int64_t>(std::nearbyint(ms));
             if (ms < static_cast<double>(viewport_start_sample)) continue;
             if (ms >= static_cast<double>(viewport_end_sample)) continue;
             if (marker_out_of_trim(pos, trim) != out_of_trim_pass) continue;
@@ -908,10 +909,12 @@ void render_transient_flags(cairo_t* cr,
             emits.push_back({i, text_left, baseline_y, text, ext});
         });
 
+    const double sr = static_cast<double>(sample_rate);
     auto paint_one = [&](const TransientEmit& e) {
         const bool is_selected = selected_set.count(e.i) > 0;
         const bool out_of_trim =
-            marker_out_of_trim(transients[e.i].effective_frame(), trim);
+            marker_out_of_trim(static_cast<int64_t>(std::nearbyint(
+                transients[e.i].time_seconds * sr)), trim);
 
         const int marker_col_px = static_cast<int>(std::round(e.text_left));
         const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));

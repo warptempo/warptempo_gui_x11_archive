@@ -304,7 +304,9 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         req.settings_passthrough = app.settings_passthrough;
         for (const auto& m : app.transientmarkers.markers()) {
             if (m.disabled) continue;
-            req.transient_frames.push_back(m.effective_frame());
+            req.transient_frames.push_back(static_cast<int64_t>(
+                std::nearbyint(m.time_seconds *
+                               static_cast<double>(audio.sample_rate()))));
         }
         // Empty batch_folder/basename selects the source-dir naming
         // convention inside do_render.
@@ -408,7 +410,9 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             req.settings_passthrough = app.settings_passthrough;
             for (const auto& m : q.transients) {
                 if (m.disabled) continue;
-                req.transient_frames.push_back(m.effective_frame());
+                req.transient_frames.push_back(static_cast<int64_t>(
+                    std::nearbyint(m.time_seconds *
+                                   static_cast<double>(audio.sample_rate()))));
             }
             req.batch_folder   = batch_folder.string();
             req.batch_basename = num_buf;
@@ -554,7 +558,9 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         std::vector<int64_t> base_transient_frames;
         for (const auto& t : base_transients) {
             if (t.disabled) continue;
-            base_transient_frames.push_back(t.effective_frame());
+            base_transient_frames.push_back(static_cast<int64_t>(
+                std::nearbyint(t.time_seconds *
+                               static_cast<double>(audio.sample_rate()))));
         }
 
         // Cartesian product enumeration. `indices[k]` holds the
@@ -731,7 +737,9 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         std::vector<int64_t> base_transient_frames;
         for (const auto& t : base_transients) {
             if (t.disabled) continue;
-            base_transient_frames.push_back(t.effective_frame());
+            base_transient_frames.push_back(static_cast<int64_t>(
+                std::nearbyint(t.time_seconds *
+                               static_cast<double>(audio.sample_rate()))));
         }
 
         std::vector<RenderRequest> reqs;
@@ -1486,7 +1494,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const int sr = audio.sample_rate();
             int64_t sample;
             if (sub_t) {
-                sample = app.render_view_transients[hit].effective_frame();
+                sample = static_cast<int64_t>(std::llround(
+                    app.render_view_transients[hit].time_seconds *
+                    static_cast<double>(sr)));
             } else {
                 sample = static_cast<int64_t>(std::llround(
                     app.render_view_markers[hit].time_seconds *
@@ -1713,7 +1723,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 const int sr = audio.sample_rate();
                 int64_t sample;
                 if (app.active_mode == 'T') {
-                    sample = app.transientmarkers.markers()[hit].effective_frame();
+                    sample = static_cast<int64_t>(std::llround(
+                        app.transientmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
                 } else {
                     sample = static_cast<int64_t>(std::llround(
                         app.warpmarkers.markers()[hit].time_seconds *
@@ -1744,7 +1756,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 }
                 int64_t sample;
                 if (app.active_mode == 'T') {
-                    sample = app.transientmarkers.markers()[hit].effective_frame();
+                    sample = static_cast<int64_t>(std::llround(
+                        app.transientmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
                 } else {
                     sample = static_cast<int64_t>(std::llround(
                         app.warpmarkers.markers()[hit].time_seconds *
@@ -1811,7 +1825,10 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                 if (app.active_mode == 'T') {
                     const auto& mv = app.render_view_transients;
                     for (size_t i = 0; i < mv.size(); ++i) {
-                        if (mv[i].effective_frame() == ph) {
+                        const int64_t s = static_cast<int64_t>(
+                            std::llround(mv[i].time_seconds *
+                                         static_cast<double>(sr)));
+                        if (s == ph) {
                             snapped = static_cast<int>(i);
                             break;
                         }
@@ -1831,7 +1848,10 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
             } else if (app.active_mode == 'T') {
                 const auto& mv = app.transientmarkers.markers();
                 for (size_t i = 0; i < mv.size(); ++i) {
-                    if (mv[i].effective_frame() == ph) {
+                    const int64_t s = static_cast<int64_t>(
+                        std::llround(mv[i].time_seconds *
+                                     static_cast<double>(sr)));
+                    if (s == ph) {
                         snapped = static_cast<int>(i);
                         break;
                     }
@@ -1933,8 +1953,9 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
             int64_t new_playhead;
             if (hit >= 0) {
                 if (app.active_mode == 'T') {
-                    new_playhead =
-                        app.render_view_transients[hit].effective_frame();
+                    new_playhead = static_cast<int64_t>(std::llround(
+                        app.render_view_transients[hit].time_seconds *
+                        static_cast<double>(sr)));
                 } else {
                     new_playhead = static_cast<int64_t>(std::llround(
                         app.render_view_markers[hit].time_seconds *
@@ -1997,7 +2018,9 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
         int64_t new_playhead;
         if (hit >= 0) {
             if (app.active_mode == 'T') {
-                new_playhead = app.transientmarkers.markers()[hit].effective_frame();
+                new_playhead = static_cast<int64_t>(std::llround(
+                    app.transientmarkers.markers()[hit].time_seconds *
+                    static_cast<double>(sr)));
             } else {
                 new_playhead = static_cast<int64_t>(std::llround(
                     app.warpmarkers.markers()[hit].time_seconds *
@@ -2078,7 +2101,8 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     if (hit_idx >= 0 && hit_idx < n) {
         int64_t ph;
         if (transient_drag) {
-            ph = app.transientmarkers.markers()[hit_idx].effective_frame();
+            ph = static_cast<int64_t>(std::llround(
+                app.transientmarkers.markers()[hit_idx].time_seconds * sr_d));
         } else {
             ph = static_cast<int64_t>(std::llround(
                 app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));

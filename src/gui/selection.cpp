@@ -79,7 +79,11 @@ void Selection::cycle_selection(bool forward) {
 
     // Helper to read frame-of-index in source samples regardless of mode.
     auto frame_of = [&](int i) -> int64_t {
-        if (transient) return app.transientmarkers.markers()[i].effective_frame();
+        if (transient) {
+            return static_cast<int64_t>(std::llround(
+                app.transientmarkers.markers()[i].time_seconds *
+                static_cast<double>(sr)));
+        }
         return static_cast<int64_t>(std::llround(
             app.warpmarkers.markers()[i].time_seconds *
             static_cast<double>(sr)));
@@ -208,7 +212,8 @@ void Selection::sync_playhead_to_last_selected() {
     if (app.active_mode == 'T') {
         const auto& tv = app.transientmarkers.markers();
         if (last >= static_cast<int>(tv.size())) return;
-        target_sample = tv[last].effective_frame();
+        target_sample = static_cast<int64_t>(std::llround(
+            tv[last].time_seconds * static_cast<double>(sr)));
     } else {
         const auto& mv = app.warpmarkers.markers();
         if (last >= static_cast<int>(mv.size())) return;

@@ -649,17 +649,18 @@ bool do_render(const RenderRequest& req) {
                     wmd_path.c_str());
             }
 
-            // Transients: locate each transient's effective_frame() in the
+            // Transients: locate each transient's source frame in the
             // engine's frame_map via binary search and emit at synth_frame *
             // R_s — same placement convention the engine uses internally.
-            // Drop out-of-trim and disabled. src_frame on the emitted marker
-            // is the engine-domain render_frame.
+            // Drop out-of-trim and disabled. time_seconds on the emitted
+            // marker is the engine-domain render_frame divided by sr.
             if (!req.transients.empty()) {
                 std::vector<GuiTransientMarker> warped_transients;
                 warped_transients.reserve(req.transients.size());
                 for (const auto& t : req.transients) {
                     if (t.disabled) continue;
-                    const int64_t sf_abs = t.effective_frame();
+                    const int64_t sf_abs = static_cast<int64_t>(
+                        std::llround(t.time_seconds * sr_d));
                     if (sf_abs < trim_begin || sf_abs > trim_end) continue;
                     if (engine_frame_map.empty()) continue;
                     const int64_t sf_rel = sf_abs - trim_begin;
@@ -679,7 +680,7 @@ bool do_render(const RenderRequest& req) {
                         static_cast<int64_t>(m) *
                         static_cast<int64_t>(engine_R_s);
                     GuiTransientMarker w;
-                    w.src_frame     = render_frame;
+                    w.time_seconds  = static_cast<double>(render_frame) / sr_d;
                     w.disabled      = false;
                     w.is_begin_time = false;
                     w.is_end_time   = false;

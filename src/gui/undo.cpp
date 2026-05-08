@@ -164,33 +164,37 @@ void Undo::apply_post_restore_rules_transient(const UndoEntry& entry,
     bool want_playhead_jump = false;
 
     if (after.size() > before.size()) {
-        std::set<int64_t> before_frames;
-        for (const auto& m : before) before_frames.insert(m.effective_frame());
+        std::set<double> before_times;
+        for (const auto& m : before) before_times.insert(m.time_seconds);
         for (size_t i = 0; i < after.size(); ++i) {
-            if (!before_frames.count(after[i].effective_frame())) {
+            if (!before_times.count(after[i].time_seconds)) {
                 target_set.insert(static_cast<int>(i));
             }
         }
         want_playhead_jump = !target_set.empty();
     } else if (after.size() < before.size()) {
-        std::set<int64_t> after_frames;
-        for (const auto& m : after) after_frames.insert(m.effective_frame());
-        int64_t rightmost = 0;
-        bool    any       = false;
+        std::set<double> after_times;
+        for (const auto& m : after) after_times.insert(m.time_seconds);
+        double rightmost = 0.0;
+        bool   any       = false;
         for (const auto& m : before) {
-            const int64_t f = m.effective_frame();
-            if (!after_frames.count(f) && (!any || f > rightmost)) {
-                rightmost = f;
+            const double t = m.time_seconds;
+            if (!after_times.count(t) && (!any || t > rightmost)) {
+                rightmost = t;
                 any       = true;
             }
         }
-        if (any) selection.jump_playhead_to(rightmost);
+        if (any) {
+            const int sr = selection.audio.sample_rate();
+            selection.jump_playhead_to(static_cast<int64_t>(std::llround(
+                rightmost * static_cast<double>(sr))));
+        }
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         return;
     } else if (entry.op_kind == OpKind::Move) {
         for (size_t i = 0; i < after.size(); ++i) {
-            if (after[i].effective_frame() != before[i].effective_frame()) {
+            if (after[i].time_seconds != before[i].time_seconds) {
                 target_set.insert(static_cast<int>(i));
             }
         }
