@@ -27,16 +27,27 @@
 //   clear_hover_popup,
 //   find_flag                   → std::function refs (called as f())
 
-// Drop a transient marker at `time_seconds`. Equal-frame collisions
-// are accepted (mid-edit nudges may transit through them); save()
-// dedups. Selection collapses to the freshly-inserted index. If the
-// transient list does not yet carry a frame-0 entry after insertion,
-// a silent companion at frame 0 is inserted alongside (frame-0
-// invariant: phase reset at render start is always correct).
+// Drop a transient marker at `time_seconds`. Rejects creation within
+// 3 pixels at current zoom of an existing transient marker. Selection
+// collapses to the freshly-inserted index. If the transient list does
+// not yet carry a frame-0 entry after insertion, a silent companion
+// at frame 0 is inserted alongside (frame-0 invariant: phase reset at
+// render start is always correct).
 void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
-    // No duplicate-position guard here is intentional — see drop_marker for the warp side's contrasting behavior.
+    const double sr_d = static_cast<double>(sr);
+    const double spp  = current_samples_per_pixel(app, audio);
+    const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
+    const auto& tv = app.transientmarkers.markers();
+    for (const auto& m : tv) {
+        if (std::abs(m.time_seconds - time_seconds) < eps) {
+            std::fprintf(stderr,
+                "warptempo_gui: transient marker already exists near %.3fs\n",
+                time_seconds);
+            return;
+        }
+    }
     std::vector<GuiTransientMarker> pre_state = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
     GuiTransientMarker nm;

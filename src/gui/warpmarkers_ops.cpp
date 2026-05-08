@@ -42,13 +42,14 @@
 void GuiWarpMarkersOps::drop_marker(double time_seconds, bool inherit) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
-    const double one_sample = 1.0 / static_cast<double>(sr);
+    const double sr_d = static_cast<double>(sr);
+    const double spp  = current_samples_per_pixel(app, audio);
+    const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
     const auto& mv = app.warpmarkers.markers();
-    // Intentionally absent from drop_transient_at_position: transient nudges may transit through equality, and save dedups.
     for (const auto& m : mv) {
-        if (std::abs(m.time_seconds - time_seconds) < one_sample) {
+        if (std::abs(m.time_seconds - time_seconds) < eps) {
             std::fprintf(stderr,
-                "warptempo_gui: marker already exists at %.3fs\n",
+                "warptempo_gui: warp marker already exists near %.3fs\n",
                 time_seconds);
             return;
         }
@@ -527,8 +528,9 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     // leaves selection genuinely unchanged.
     for (int idx : drag_set) {
         if (idx == 0 || t_of(idx) == 0.0) {
-            std::fprintf(stderr,
-                "warptempo_gui: first marker cannot be dragged\n");
+            std::fprintf(stderr, transient
+                ? "warptempo_gui: first transient marker cannot be dragged\n"
+                : "warptempo_gui: first warp marker cannot be dragged\n");
             return false;
         }
     }
