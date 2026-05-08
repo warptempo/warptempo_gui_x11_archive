@@ -24,8 +24,6 @@
 //   sync_playhead_to_last_selected → selection.sync_playhead_to_last_selected
 //   invalidate_waveform_area       → viewport.invalidate_waveform_area
 //   invalidate_timestamp_area      → viewport.invalidate_timestamp_area
-//   invalidate_marker_column       → viewport.invalidate_marker_column
-//   invalidate_markers_columns     → viewport.invalidate_markers_columns
 //   invalidate_top_strip           → viewport.invalidate_top_strip
 //   move_playhead_to               → viewport.move_playhead_to
 //   stop_playback_if_playing,
@@ -451,7 +449,6 @@ void GuiWarpMarkersOps::adjust_tempo(double delta) {
         m->tempo_inherits = false;
         m->tempo_base     = new_tempo;
         m->tempo_scale    = start_scale;
-        viewport.invalidate_marker_column(idx);
         changed = true;
     }
     if (!changed) return;
@@ -660,12 +657,9 @@ void GuiWarpMarkersOps::apply_drag_motion(double raw_delta) {
         // should match what's being dragged.
         if (first_motion && app.drag.pending_collapse_to_hit) {
             const int hit = app.drag.hit_marker;
-            const std::set<int> old = app.selected_markers;
             app.selected_markers.clear();
             app.selected_markers.insert(hit);
             app.last_selected_marker = hit;
-            viewport.invalidate_markers_columns(old);
-            viewport.invalidate_marker_column(hit);
             app.drag.pending_collapse_to_hit = false;
         }
         // Flag strip is at most ~top_strip_height px tall; repainting

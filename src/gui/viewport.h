@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <set>
 #include <utility>
 
 class GuiAudio;
@@ -52,8 +51,6 @@ struct Viewport {
     void invalidate_waveform_area();
     void invalidate_timestamp_area();
     void invalidate_playhead_columns(double old_px, double new_px);
-    void invalidate_marker_column(int marker_idx);
     void invalidate_top_strip();
-    void invalidate_markers_columns(const std::set<int>& idxs);
     void invalidate_all();
 };

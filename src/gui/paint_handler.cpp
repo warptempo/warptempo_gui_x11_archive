@@ -354,9 +354,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                 std::chrono::duration<double, std::milli>(m1 - m0).count();
         }
 
-        // Brief E: precompute the playhead's pixel column so flag
-        // renderers can light the outline of the marker the playhead
-        // sits on. Same value is reused by render_playhead below.
         const double px_x = playhead_pixel_x(app, audio);
 
         // Flag annotations in the top strip.
@@ -377,7 +374,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                              kFlagFontSize,
                              app.selected_markers,
                              trim_struct,
-                             px_x,
                              FlagEditorOverlay{});
 
                 // V.A3b hover popup paint, render-view variant.
@@ -439,8 +435,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                         vp_start, vp_end, sr,
                         kFlagFontSize,
                         app.selected_markers,
-                        trim_struct,
-                        px_x);
+                        trim_struct);
                 }
             } else if (app.active_mode == 'T') {
                 render_transient_flags(
@@ -448,8 +443,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     vp_start, vp_end, sr,
                     kFlagFontSize,
                     app.selected_markers,
-                    trim_struct,
-                    px_x);
+                    trim_struct);
             } else {
                 FlagEditorOverlay overlay;
                 // Only the V.A1 FlagPayload kind paints into the flag
@@ -497,7 +491,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                              kFlagFontSize,
                              app.selected_markers,
                              trim_struct,
-                             px_x,
                              overlay);
 
                 // V.A3b hover popup. Drawn on top of the flag strip,

@@ -56,13 +56,6 @@ void Viewport::invalidate_playhead_columns(double old_px, double new_px) {
         if (r_old.w > 0) gui.invalidate_region(r_old.x, r_old.y, r_old.w, r_old.h);
         if (r_new.w > 0) gui.invalidate_region(r_new.x, r_new.y, r_new.w, r_new.h);
     }
-    // Brief E: playhead motion may flip a flag's outline on or off when
-    // the playhead column matches a marker column. The flag rect can
-    // extend well to the right of the playhead's 17-px invalidate band,
-    // so the top strip must be invalidated separately to repaint the
-    // affected flag(s) cleanly.
-    const GuiRect ts = top_strip_area(app);
-    gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
 }
 
 // move_playhead_to: update playhead, keep viewport so playhead stays
@@ -209,43 +202,9 @@ void Viewport::center_viewport_on_playhead() {
     }
 }
 
-// Invalidate a narrow column around a marker's on-screen x (same width
-// as the playhead invalidation). No-op if the marker is off-screen.
-void Viewport::invalidate_marker_column(int marker_idx) {
-    if (marker_idx < 0) return;
-    if (audio.total_frames() <= 0) return;
-    const double spp = current_samples_per_pixel(app, audio);
-    if (spp <= 0.0) return;
-    const GuiRect area = waveform_area(app);
-    const int sr = audio.sample_rate();
-    double ms;
-    if (app.active_mode == 'T') {
-        const auto& tv = app.transientmarkers.markers();
-        if (marker_idx >= static_cast<int>(tv.size())) return;
-        ms = tv[marker_idx].time_seconds * static_cast<double>(sr);
-    } else {
-        const auto& mv = app.warpmarkers.markers();
-        if (marker_idx >= static_cast<int>(mv.size())) return;
-        ms = mv[marker_idx].time_seconds * static_cast<double>(sr);
-    }
-    const double vp = static_cast<double>(app.viewport_start_sample);
-    const int64_t visible = samples_visible(app, audio);
-    if (ms < vp) return;
-    if (ms >= vp + static_cast<double>(visible)) return;
-    const double px = area.x + (ms - vp) / spp;
-    const GuiRect r = playhead_invalidate_rect(area, px);
-    if (r.w > 0 && r.h > 0) {
-        gui.invalidate_region(r.x, r.y, r.w, r.h);
-    }
-}
-
 void Viewport::invalidate_top_strip() {
     const GuiRect ts = top_strip_area(app);
     gui.invalidate_region(ts.x, ts.y, ts.w, ts.h + 1);
-}
-
-void Viewport::invalidate_markers_columns(const std::set<int>& idxs) {
-    for (int i : idxs) invalidate_marker_column(i);
 }
 
 void Viewport::invalidate_all() {

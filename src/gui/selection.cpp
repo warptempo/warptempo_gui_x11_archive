@@ -22,21 +22,16 @@ void Selection::repair_last_selected() {
 }
 
 void Selection::set_single_selection(int idx) {
-    const std::set<int> old = app.selected_markers;
     app.selected_markers.clear();
     if (idx >= 0) app.selected_markers.insert(idx);
     app.last_selected_marker = (idx >= 0) ? idx : -1;
-    viewport.invalidate_markers_columns(old);
-    viewport.invalidate_markers_columns(app.selected_markers);
     viewport.invalidate_top_strip();
 }
 
 void Selection::clear_selection() {
     if (app.selected_markers.empty() && app.last_selected_marker == -1) return;
-    const std::set<int> old = app.selected_markers;
     app.selected_markers.clear();
     app.last_selected_marker = -1;
-    viewport.invalidate_markers_columns(old);
     viewport.invalidate_top_strip();
 }
 
@@ -53,7 +48,6 @@ bool Selection::toggle_selection_membership(int idx) {
         if (app.last_selected_marker == idx) repair_last_selected();
         added = false;
     }
-    viewport.invalidate_marker_column(idx);
     viewport.invalidate_top_strip();
     return added;
 }
@@ -138,10 +132,7 @@ void Selection::cycle_selection(bool forward) {
     if (sel_size >= 2) {
         // Within-set cycling: only the focus changes.
         if (new_sel == app.last_selected_marker) return;
-        const int old_focus = app.last_selected_marker;
         app.last_selected_marker = new_sel;
-        viewport.invalidate_marker_column(old_focus);
-        viewport.invalidate_marker_column(new_sel);
         viewport.invalidate_top_strip();
     } else {
         if (app.selected_markers.count(new_sel) &&

@@ -506,7 +506,6 @@ void render_flags(cairo_t* cr,
                   double font_size,
                   const std::set<int>& selected_set,
                   const TrimRange& trim,
-                  double playhead_pixel_x,
                   const FlagEditorOverlay& editor) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
@@ -565,11 +564,6 @@ void render_flags(cairo_t* cr,
             std::nearbyint(markers[e.i].time_seconds * sr_d));
         const bool out_of_trim = marker_out_of_trim(source_pos, trim);
 
-        const int marker_col_px = static_cast<int>(std::round(e.text_left));
-        const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
-        const bool is_playhead_on =
-            playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
-
         std::string draw_text = is_editing ? editor.pending : e.text;
         cairo_text_extents_t draw_ext = e.ext;
         if (is_editing) {
@@ -590,7 +584,7 @@ void render_flags(cairo_t* cr,
         render_flag_text_bg_fill(cr,
             e.text_left + hl_pad, draw_ext.x_advance, bg_top, bg_h_full);
 
-        if (is_selected || is_playhead_on) {
+        if (is_selected) {
             GuiColor stroke_col = is_parse_fail ? kAccent : kMarker;
             if (out_of_trim) stroke_col = dim(stroke_col);
             cairo_set_source_rgb(cr,
@@ -864,8 +858,7 @@ void render_transient_flags(cairo_t* cr,
                             int sample_rate,
                             double font_size,
                             const std::set<int>& selected_set,
-                            const TrimRange& trim,
-                            double playhead_pixel_x) {
+                            const TrimRange& trim) {
     if (top_strip_area.w <= 0 || top_strip_area.h <= 0) return;
     if (viewport_end_sample <= viewport_start_sample) return;
     if (sample_rate <= 0) return;
@@ -910,11 +903,6 @@ void render_transient_flags(cairo_t* cr,
             marker_out_of_trim(static_cast<int64_t>(std::nearbyint(
                 transients[e.i].time_seconds * sr)), trim);
 
-        const int marker_col_px = static_cast<int>(std::round(e.text_left));
-        const int playhead_col_px = static_cast<int>(std::round(playhead_pixel_x));
-        const bool is_playhead_on =
-            playhead_pixel_x >= 0.0 && marker_col_px == playhead_col_px;
-
         // Brief Y.4 sub-bug A: opaque canvas-bg fill under the text.
         // Transient flags have no editor (no growing pending text),
         // but the fill is added for symmetry with warp flags — in the
@@ -927,7 +915,7 @@ void render_transient_flags(cairo_t* cr,
         render_flag_text_bg_fill(cr,
             e.text_left + hl_pad, e.ext.x_advance, bg_top, bg_h_full);
 
-        if (is_selected || is_playhead_on) {
+        if (is_selected) {
             const GuiColor stroke_col =
                 out_of_trim ? dim(kMarker) : kMarker;
             cairo_set_source_rgb(cr,

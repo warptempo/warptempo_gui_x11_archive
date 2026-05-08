@@ -1516,6 +1516,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             if (inside_waveform) {
                 app.playhead_drag.active = true;
                 app.playhead_drag.was_playing_at_press = was_playing_rv;
+                app.playhead_drag.press_marker_idx = hit;
             }
             return;
         }
@@ -1545,6 +1546,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             }
             app.playhead_drag.active = true;
             app.playhead_drag.was_playing_at_press = was_playing_rv;
+            app.playhead_drag.press_marker_idx = -1;
         }
         return;
     }
@@ -1718,23 +1720,20 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                         hit, static_cast<double>(x));
                     return;
                 }
-                bool added = true;
-                if (shift) added = selection.toggle_selection_membership(hit);
+                if (shift) selection.toggle_selection_membership(hit);
                 else       selection.set_single_selection(hit);
-                if (added) {
-                    const int sr = audio.sample_rate();
-                    int64_t sample;
-                    if (app.active_mode == 'T') {
-                        sample = static_cast<int64_t>(std::nearbyint(
-                            app.transientmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    } else {
-                        sample = static_cast<int64_t>(std::nearbyint(
-                            app.warpmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    }
-                    viewport.move_playhead_to(sample);
+                const int sr = audio.sample_rate();
+                int64_t sample;
+                if (app.active_mode == 'T') {
+                    sample = static_cast<int64_t>(std::nearbyint(
+                        app.transientmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                } else {
+                    sample = static_cast<int64_t>(std::nearbyint(
+                        app.warpmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
                 }
+                viewport.move_playhead_to(sample);
             }
             return;
         }
@@ -1744,38 +1743,36 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const int sr = audio.sample_rate();
             if (hit >= 0) {
                 // Press on a marker (within 3px).
-                bool added = true;
                 if (!shift) {
                     selection.set_single_selection(hit);
                 } else {
                     // Shift+press on marker: toggles membership in the
                     // selection, last_selected repaired by the helper.
                     // Plain press collapses to single selection.
-                    added = selection.toggle_selection_membership(hit);
+                    selection.toggle_selection_membership(hit);
                 }
-                if (added) {
-                    int64_t sample;
-                    if (app.active_mode == 'T') {
-                        sample = static_cast<int64_t>(std::nearbyint(
-                            app.transientmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    } else {
-                        sample = static_cast<int64_t>(std::nearbyint(
-                            app.warpmarkers.markers()[hit].time_seconds *
-                            static_cast<double>(sr)));
-                    }
-                    viewport.move_playhead_to(sample);
-                    // Brief six: marker-line click in the waveform area
-                    // keeps playback alive by reseeking the audio device
-                    // to the marker's sample. Skip the reseek when the
-                    // click landed on the marker the playhead was already
-                    // on — it'd be a no-op move + a wasted teardown.
-                    if (was_playing && sample != playhead_at_click_entry) {
-                        playback.play(sample, viewport.trim_end_sample());
-                    }
+                int64_t sample;
+                if (app.active_mode == 'T') {
+                    sample = static_cast<int64_t>(std::nearbyint(
+                        app.transientmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                } else {
+                    sample = static_cast<int64_t>(std::nearbyint(
+                        app.warpmarkers.markers()[hit].time_seconds *
+                        static_cast<double>(sr)));
+                }
+                viewport.move_playhead_to(sample);
+                // Brief six: marker-line click in the waveform area
+                // keeps playback alive by reseeking the audio device
+                // to the marker's sample. Skip the reseek when the
+                // click landed on the marker the playhead was already
+                // on — it'd be a no-op move + a wasted teardown.
+                if (was_playing && sample != playhead_at_click_entry) {
+                    playback.play(sample, viewport.trim_end_sample());
                 }
                 app.playhead_drag.active = true;
                 app.playhead_drag.was_playing_at_press = was_playing;
+                app.playhead_drag.press_marker_idx = hit;
             } else {
                 // Press on empty waveform.
                 const double spp = current_samples_per_pixel(app, audio);
@@ -1796,6 +1793,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 }
                 app.playhead_drag.active = true;
                 app.playhead_drag.was_playing_at_press = was_playing;
+                app.playhead_drag.press_marker_idx = -1;
             }
         }
     } else if (button == 4 || button == 5) {
@@ -1871,6 +1869,15 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
             }
         }
         if (snapped >= 0) {
+            if (snapped == app.playhead_drag.press_marker_idx) {
+                // Press already committed selection for this marker; release
+                // is from a click-without-drag, not a drag-completion. Skip
+                // the snap-action so press/release don't overlap destructively
+                // (specifically, shift+click-remove must not be re-added by
+                // the release).
+                app.playhead_drag = PlayheadDragState{};
+                return;
+            }
             if (app.render_view_enabled) {
                 // Brief J.2 Section 3: render-view writes the
                 // global live pair. active_mode tells us which
@@ -1887,7 +1894,6 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
             } else if (shift) {
                 app.selected_markers.insert(snapped);
                 app.last_selected_marker = snapped;
-                viewport.invalidate_marker_column(snapped);
                 viewport.invalidate_top_strip();
             } else {
                 selection.set_single_selection(snapped);

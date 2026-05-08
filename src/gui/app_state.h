@@ -169,6 +169,10 @@ struct PlayheadDragState {
     bool active                    = false;
     bool was_playing_at_press      = false;
     bool drag_motion_stopped_audio = false;
+    // Marker index the press landed on, or -1 if pressed on empty space;
+    // release uses it to suppress the snap-action when no actual drag
+    // occurred.
+    int  press_marker_idx          = -1;
 };
 
 // Cross-file flag scan result. `valid` is false when the requested flag
