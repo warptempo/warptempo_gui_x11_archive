@@ -110,6 +110,18 @@ void GuiFlagEditor::enter_top_flag_edit(int idx, double click_x) {
         return;
     }
 
+    // Target-switching path. Centralize selection + playhead update
+    // here so both call paths (in-edit-active switch and pre-edit
+    // plain-flag-click) keep the marker-column outline and the rest
+    // of the UI in sync with the new editor target.
+    selection.set_single_selection(idx);
+    {
+        const int sr = audio.sample_rate();
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            mv[idx].time_seconds * static_cast<double>(sr)));
+        viewport.move_playhead_to(sample);
+    }
+
     // Discard any prior edit silently before switching targets.
     if (text_editor::is_active(app.top_flag_editor) &&
         app.top_flag_editor.target != idx) {
@@ -300,6 +312,15 @@ void GuiFlagEditor::enter_iter_edit(int idx, double click_x,
         }
         viewport.invalidate_top_strip();
         return;
+    }
+
+    // Target-switching path: see enter_top_flag_edit for rationale.
+    selection.set_single_selection(idx);
+    {
+        const int sr = audio.sample_rate();
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            mv[idx].time_seconds * static_cast<double>(sr)));
+        viewport.move_playhead_to(sample);
     }
 
     if (text_editor::is_active(app.top_flag_editor) &&
@@ -533,6 +554,15 @@ void GuiFlagEditor::enter_bpm_edit(int idx, double click_x,
         }
         viewport.invalidate_top_strip();
         return;
+    }
+
+    // Target-switching path: see enter_top_flag_edit for rationale.
+    selection.set_single_selection(idx);
+    {
+        const int sr = audio.sample_rate();
+        const int64_t sample = static_cast<int64_t>(std::llround(
+            mv[idx].time_seconds * static_cast<double>(sr)));
+        viewport.move_playhead_to(sample);
     }
 
     if (text_editor::is_active(app.top_flag_editor) &&

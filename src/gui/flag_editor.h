@@ -2,6 +2,7 @@
 
 #include "app_state.h"
 #include "audio.h"
+#include "selection.h"
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers.h"
@@ -26,17 +27,20 @@ struct GuiFlagEditor {
     AppState&              app;
     GuiAudio&              audio;
     Viewport&              viewport;
+    Selection&             selection;
     Undo&                  undo;
     std::function<void()>& clear_hover_popup;
 
     GuiFlagEditor(AppState&              app_,
                   GuiAudio&              audio_,
                   Viewport&              viewport_,
+                  Selection&             selection_,
                   Undo&                  undo_,
                   std::function<void()>& clear_hover_popup_)
         : app(app_),
           audio(audio_),
           viewport(viewport_),
+          selection(selection_),
           undo(undo_),
           clear_hover_popup(clear_hover_popup_) {}
 

@@ -611,7 +611,8 @@ int main(int argc, char** argv) {
     GuiWarpMarkersOps warpops(app, audio, gui, viewport, selection, undo,
                               clear_hover_popup, stop_playback_if_playing,
                               find_flag);
-    GuiFlagEditor flag_editor(app, audio, viewport, undo, clear_hover_popup);
+    GuiFlagEditor flag_editor(app, audio, viewport, selection, undo,
+                              clear_hover_popup);
     GuiRenderView render_view(app, audio, playback, gui, selection,
                               clear_hover_popup, refresh_active_tab_from_app);
     GuiTabMode tab_mode(app, audio, viewport, selection,

@@ -1700,16 +1700,10 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             if (hit >= 0) {
                 if (app.active_mode != 'T' && !shift) {
                     // V.A1: plain click on a warp flag enters edit
-                    // mode. Selects the marker as well so the rest of
-                    // the UI tracks (timestamp jumps, marker column
-                    // highlights). Shift+click keeps the legacy
-                    // multi-select toggle.
-                    selection.set_single_selection(hit);
-                    const int sr = audio.sample_rate();
-                    const int64_t sample = static_cast<int64_t>(std::llround(
-                        app.warpmarkers.markers()[hit].time_seconds *
-                        static_cast<double>(sr)));
-                    viewport.move_playhead_to(sample);
+                    // mode. enter_top_flag_edit owns the selection +
+                    // playhead update on its target-switching path,
+                    // so this site just delegates. Shift+click keeps
+                    // the legacy multi-select toggle below.
                     flag_editor.enter_top_flag_edit(
                         hit, static_cast<double>(x));
                     return;
