@@ -175,16 +175,14 @@ struct PlayheadDragState {
     int  press_marker_idx          = -1;
 };
 
-// Cross-file flag scan result. `valid` is false when the requested flag
-// (b= or e=) is not set on any marker. Returned by find_flag, which scans
-// the warp list first then the transient list — `transient` distinguishes
-// which list `idx` indexes into. `frame` is the marker's effective sample
-// frame (computed at lookup time so callers don't need a sample-rate).
+// Warp-list flag scan result. `valid` is false when the requested flag
+// (b= or e=) is not set on any warp marker. `idx` indexes into the warp
+// marker list. `frame` is the marker's effective sample frame (computed
+// at lookup time so callers don't need a sample-rate).
 struct FlagLoc {
-    bool    valid     = false;
-    bool    transient = false;
-    int     idx       = -1;
-    int64_t frame     = 0;
+    bool    valid = false;
+    int     idx   = -1;
+    int64_t frame = 0;
 };
 
 // V.A3b hover popup state. A popup-eligible warp marker (pass marker or
@@ -519,7 +517,6 @@ int     max_valid_numeric_level(int waveform_width_px,
                                 int sample_rate);
 std::pair<long long, long long> compute_trim_samples(
     const std::vector<GuiWarpMarker>& warp_markers,
-    const std::vector<GuiTransientMarker>& transients,
     int sample_rate, long long total_frames);
 GuiRect timestamp_invalidate_rect(int window_height, int window_width,
                                   bool wide_strip);

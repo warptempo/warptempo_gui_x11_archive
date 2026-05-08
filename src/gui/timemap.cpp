@@ -55,14 +55,6 @@ bool build_timemaps(const TimemapBuildInput& in, TimemapBuildResult& out) {
         if (m.is_begin_time) { has_begin = true; begin_sec = m.time_seconds; }
         if (m.is_end_time)   { has_end   = true; end_sec   = m.time_seconds; }
     }
-    for (const auto& t : in.transient_trim_flags) {
-        if (t.is_begin_time && !has_begin) {
-            has_begin = true; begin_sec = t.time_seconds;
-        }
-        if (t.is_end_time && !has_end) {
-            has_end = true; end_sec = t.time_seconds;
-        }
-    }
     if (has_begin && begin_sec <= 0.0) {
         std::cerr << "warptempo_gui: timemap error: begin time cannot be 00:00.000\n";
         return false;

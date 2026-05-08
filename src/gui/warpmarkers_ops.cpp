@@ -280,11 +280,11 @@ void GuiWarpMarkersOps::toggle_disabled() {
 
 // `b` / `e` are single-marker operations. With 2+ selected they silent
 // no-op; with exactly 1, they use last_selected_marker as the target.
-// Re-press toggles off. Otherwise auto-replaces any existing flag
-// (across BOTH warp and transient lists) and auto-swaps with the
-// opposite flag if the resulting frame ordering would invert the trim
-// region. Equal-frame swap is refused (would collapse trim to zero
-// width).
+// Re-press toggles off. Otherwise auto-replaces any existing flag and
+// auto-swaps with the opposite flag if the resulting frame ordering
+// would invert the trim region. Equal-frame swap is refused (would
+// collapse trim to zero width). Trim flags live exclusively on warp
+// markers — transient markers cannot carry them.
 void GuiWarpMarkersOps::toggle_begin_time() {
     if (app.selected_markers.size() != 1) return;
     const int idx = app.last_selected_marker;
@@ -310,11 +310,9 @@ void GuiWarpMarkersOps::toggle_begin_time() {
         return;
     }
 
-    // Find the existing e= and OTHER b= across both lists.
-    const FlagLoc e_loc   = find_flag(/*want_begin=*/false,
-                                      /*excl_idx_is_transient=*/false, -1);
-    const FlagLoc b_other = find_flag(/*want_begin=*/true,
-                                      /*excl_idx_is_transient=*/false, idx);
+    // Find the existing e= and OTHER b= on the warp list.
+    const FlagLoc e_loc   = find_flag(/*want_begin=*/false, -1);
+    const FlagLoc b_other = find_flag(/*want_begin=*/true,  idx);
 
     const bool needs_swap   = e_loc.valid && (m_frame >= e_loc.frame);
     const bool equal_frames = e_loc.valid && (m_frame == e_loc.frame);
@@ -325,22 +323,13 @@ void GuiWarpMarkersOps::toggle_begin_time() {
     }
 
     if (b_other.valid) {
-        if (b_other.transient) {
-            app.transientmarkers.marker_mut(b_other.idx)->is_begin_time = false;
-        } else {
-            app.warpmarkers.marker_mut(b_other.idx)->is_begin_time = false;
-        }
+        app.warpmarkers.marker_mut(b_other.idx)->is_begin_time = false;
     }
     if (needs_swap) {
         // The marker that had e= becomes b=; the just-toggled warp
         // marker takes e=.
-        if (e_loc.transient) {
-            app.transientmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
-            app.transientmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
-        } else {
-            app.warpmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
-            app.warpmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
-        }
+        app.warpmarkers.marker_mut(e_loc.idx)->is_end_time   = false;
+        app.warpmarkers.marker_mut(e_loc.idx)->is_begin_time = true;
         app.warpmarkers.marker_mut(idx)->is_end_time = true;
     } else {
         app.warpmarkers.marker_mut(idx)->is_begin_time = true;
@@ -378,10 +367,8 @@ void GuiWarpMarkersOps::toggle_end_time() {
         return;
     }
 
-    const FlagLoc b_loc   = find_flag(/*want_begin=*/true,
-                                      /*excl_idx_is_transient=*/false, -1);
-    const FlagLoc e_other = find_flag(/*want_begin=*/false,
-                                      /*excl_idx_is_transient=*/false, idx);
+    const FlagLoc b_loc   = find_flag(/*want_begin=*/true,  -1);
+    const FlagLoc e_other = find_flag(/*want_begin=*/false, idx);
 
     const bool needs_swap   = b_loc.valid && (m_frame <= b_loc.frame);
     const bool equal_frames = b_loc.valid && (m_frame == b_loc.frame);
@@ -392,20 +379,11 @@ void GuiWarpMarkersOps::toggle_end_time() {
     }
 
     if (e_other.valid) {
-        if (e_other.transient) {
-            app.transientmarkers.marker_mut(e_other.idx)->is_end_time = false;
-        } else {
-            app.warpmarkers.marker_mut(e_other.idx)->is_end_time = false;
-        }
+        app.warpmarkers.marker_mut(e_other.idx)->is_end_time = false;
     }
     if (needs_swap) {
-        if (b_loc.transient) {
-            app.transientmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
-            app.transientmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
-        } else {
-            app.warpmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
-            app.warpmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
-        }
+        app.warpmarkers.marker_mut(b_loc.idx)->is_begin_time = false;
+        app.warpmarkers.marker_mut(b_loc.idx)->is_end_time   = true;
         app.warpmarkers.marker_mut(idx)->is_begin_time = true;
     } else {
         app.warpmarkers.marker_mut(idx)->is_end_time = true;
@@ -458,24 +436,15 @@ void GuiWarpMarkersOps::adjust_tempo(double delta) {
     viewport.invalidate_timestamp_area();
 }
 
-// Clear any b= / e= flags across both warp and transient lists so the
-// whole file becomes editable again. Trim is a cross-list invariant —
-// only one b= and one e= can exist file-wide — so this clear is
-// naturally cross-list too.
-// No-op if no marker carries either flag.
+// Clear b= / e= flags across the warp marker list so the whole file
+// becomes editable again. Trim flags are warp-only, so a single-list
+// walk suffices. No-op if no marker carries either flag.
 void GuiWarpMarkersOps::clear_trim() {
     std::vector<GuiWarpMarker>      warp_pre  = app.warpmarkers.markers();
     std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
     const int                 hint_last = app.last_selected_marker;
     bool changed = false;
     for (auto& m : app.warpmarkers.markers_mut()) {
-        if (m.is_begin_time || m.is_end_time) {
-            m.is_begin_time = false;
-            m.is_end_time   = false;
-            changed = true;
-        }
-    }
-    for (auto& m : app.transientmarkers.markers_mut()) {
         if (m.is_begin_time || m.is_end_time) {
             m.is_begin_time = false;
             m.is_end_time   = false;

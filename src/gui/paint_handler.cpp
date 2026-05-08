@@ -215,10 +215,10 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
         // nothing.
         const auto trim = app.render_view_enabled
             ? compute_trim_samples(
-                  app.render_view_markers, app.render_view_transients,
+                  app.render_view_markers,
                   sr, audio.total_frames())
             : compute_trim_samples(
-                  app.warpmarkers.markers(), app.transientmarkers.markers(),
+                  app.warpmarkers.markers(),
                   sr, audio.total_frames());
         const int64_t trim_begin = trim.first;
         const int64_t trim_end   = trim.second;

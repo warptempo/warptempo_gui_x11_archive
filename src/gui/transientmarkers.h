@@ -5,14 +5,10 @@
 #include <vector>
 
 // One transient marker, the GUI's authoring view: a transient authored at
-// `time_seconds`, with an optional `disabled` flag and optional cross-file
-// `b=`/`e=` trim flags (`is_begin_time` / `is_end_time`, mirroring the S.1
-// system shared with warp markers).
+// `time_seconds`, with an optional `disabled` flag.
 struct GuiTransientMarker {
     double time_seconds  = 0.0;
     bool   disabled      = false;
-    bool   is_begin_time = false;
-    bool   is_end_time   = false;
 };
 
 struct GuiTransientMarkerError {

@@ -305,14 +305,6 @@ bool do_render(const RenderRequest& req) {
 
     // --- Build timemap from in-memory markers. ---
     TimemapBuildInput tmin;
-    for (const auto& t : req.transients) {
-        if (t.disabled) continue;
-        TrimFlagSource s;
-        s.time_seconds  = t.time_seconds;
-        s.is_begin_time = t.is_begin_time;
-        s.is_end_time   = t.is_end_time;
-        tmin.transient_trim_flags.push_back(s);
-    }
     tmin.markers      = resolve_markers_for_render(req.markers);
     tmin.scale        = scale;
     tmin.sample_rate  = sample_rate;
@@ -688,10 +680,8 @@ bool do_render(const RenderRequest& req) {
                         static_cast<int64_t>(m) *
                         static_cast<int64_t>(engine_R_s);
                     GuiTransientMarker w;
-                    w.time_seconds  = static_cast<double>(render_frame) / sr_d;
-                    w.disabled      = false;
-                    w.is_begin_time = false;
-                    w.is_end_time   = false;
+                    w.time_seconds = static_cast<double>(render_frame) / sr_d;
+                    w.disabled     = false;
                     warped_transients.push_back(std::move(w));
                 }
                 const std::string tmd_path =

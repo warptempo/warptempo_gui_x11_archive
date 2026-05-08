@@ -1352,11 +1352,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
                         viewport.move_playhead_to(viewport.trim_begin_sample()); break;
         case XK_End:    stop_playback_if_playing();
                         viewport.move_playhead_to(viewport.trim_end_sample() - 1); break;
-        case XK_b:      if (app.active_mode == 'T') transients.toggle_transient_begin_time();
-                        else                        warpops.toggle_begin_time();
+        // b / e are warp-only: trim is a warp concern, so these keys are
+        // silent no-ops in transient mode.
+        case XK_b:      if (app.active_mode != 'T') warpops.toggle_begin_time();
                         break;
-        case XK_e:      if (app.active_mode == 'T') transients.toggle_transient_end_time();
-                        else                        warpops.toggle_end_time();
+        case XK_e:      if (app.active_mode != 'T') warpops.toggle_end_time();
                         break;
         // TODO: growing binding set will want an in-GUI help overlay.
         default: break;

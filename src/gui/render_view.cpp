@@ -349,7 +349,7 @@ bool GuiRenderView::load_render_view_at(int index) {
     app.audio_generation++;
 
     const auto trim = compute_trim_samples(
-        loaded_warp, loaded_trans,
+        loaded_warp,
         app.render_view_src_sr, app.render_view_src_total);
     app.render_view_src_F_begin = trim.first;
     app.render_view_src_F_end   = trim.second;

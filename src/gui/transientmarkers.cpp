@@ -53,11 +53,13 @@ bool parse_timestamp_token(const std::string& tok, double& out,
     return true;
 }
 
-// Parse "[b=|e=][#]MM:SS.mmm" into a GuiTransientMarker. Returns true on
+// Parse "[#]MM:SS.mmm" into a GuiTransientMarker. Returns true on
 // success; on failure, fills `err_msg` with a one-line diagnostic. Files
 // written by pre-X.8.3 builds (carrying an i/d status code or a
 // displaced_frame token) are rejected with "unexpected status code" so the
 // upgrade requirement surfaces to the user instead of silently misparsing.
+// Trim flags (b= / e=) are warp-only as of brief seven; encountering one on
+// a transient line is a parse error so the migration requirement surfaces.
 bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& err_msg) {
     std::string t = trim_ws(raw);
     if (t.empty()) {
@@ -65,9 +67,11 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
         return false;
     }
 
-    // Order: b=/e= prefix first, then leading `#` for disabled.
-    if (starts_with(t, "b=")) { out.is_begin_time = true; t.erase(0, 2); }
-    else if (starts_with(t, "e=")) { out.is_end_time = true; t.erase(0, 2); }
+    if (starts_with(t, "b=") || starts_with(t, "e=")) {
+        err_msg = "transient trim flags not supported; "
+                  "move b= / e= to a warp marker";
+        return false;
+    }
 
     if (!t.empty() && t[0] == '#') {
         out.disabled = true;
@@ -206,9 +210,7 @@ bool GuiTransientMarkers::save(const std::string& path,
 
     std::ostringstream out;
     for (const auto& m : deduped) {
-        if (m.is_begin_time)    out << "b=";
-        else if (m.is_end_time) out << "e=";
-        if (m.disabled)         out << '#';
+        if (m.disabled) out << '#';
         out << format_timestamp(m.time_seconds) << '\n';
     }
     const std::string data = out.str();

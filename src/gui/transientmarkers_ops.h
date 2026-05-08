@@ -32,7 +32,7 @@ struct GuiTransientMarkersOps {
     Undo&                                         undo;
     std::function<void()>&                        clear_hover_popup;
     std::function<void()>&                        stop_playback_if_playing;
-    std::function<FlagLoc(bool, bool, int)>&      find_flag;
+    std::function<FlagLoc(bool, int)>&            find_flag;
 
     GuiTransientMarkersOps(AppState&                                     app_,
                            const GuiAudio&                               audio_,
@@ -41,7 +41,7 @@ struct GuiTransientMarkersOps {
                            Undo&                                         undo_,
                            std::function<void()>&                        clear_hover_popup_,
                            std::function<void()>&                        stop_playback_if_playing_,
-                           std::function<FlagLoc(bool, bool, int)>&      find_flag_)
+                           std::function<FlagLoc(bool, int)>&            find_flag_)
         : app(app_),
           audio(audio_),
           viewport(viewport_),
@@ -58,6 +58,4 @@ struct GuiTransientMarkersOps {
     std::pair<double, double> compute_transient_delta_bounds(bool& ok);
     void nudge_selected_transients(int direction);
     void jump_transient_selection_to_playhead();
-    void toggle_transient_begin_time();
-    void toggle_transient_end_time();
 };

@@ -35,7 +35,7 @@ struct GuiWarpMarkersOps {
     Undo&                                         undo;
     std::function<void()>&                        clear_hover_popup;
     std::function<void()>&                        stop_playback_if_playing;
-    std::function<FlagLoc(bool, bool, int)>&      find_flag;
+    std::function<FlagLoc(bool, int)>&            find_flag;
 
     GuiWarpMarkersOps(AppState&                                     app_,
                       const GuiAudio&                               audio_,
@@ -45,7 +45,7 @@ struct GuiWarpMarkersOps {
                       Undo&                                         undo_,
                       std::function<void()>&                        clear_hover_popup_,
                       std::function<void()>&                        stop_playback_if_playing_,
-                      std::function<FlagLoc(bool, bool, int)>&      find_flag_)
+                      std::function<FlagLoc(bool, int)>&            find_flag_)
         : app(app_),
           audio(audio_),
           gui(gui_),

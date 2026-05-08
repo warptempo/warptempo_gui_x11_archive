@@ -162,63 +162,24 @@ GuiRect top_strip_area(const AppState& a) {
     return GuiRect{0, 0, a.width, top_strip_height(a.height)};
 }
 
-// Scan warp markers and transients for begin_time / end_time flags; fall
-// back to full file if either is absent. The S.1 invariant is that at most
-// one b= and one e= exist across both files; if both lists somehow carry
-// the same flag (only reachable via hand-edit), the warp-side value wins
-// for determinism and a one-line stderr warning is emitted.
+// Scan warp markers for begin_time / end_time flags; fall back to full
+// file if either is absent. Trim flags live exclusively on the warp
+// list, so a single-list scan is authoritative.
 std::pair<long long, long long> compute_trim_samples(
     const std::vector<GuiWarpMarker>& warp_markers,
-    const std::vector<GuiTransientMarker>& transients,
     int sample_rate, long long total_frames) {
     long long begin = 0;
     long long end   = total_frames;
-    bool have_begin_warp  = false;
-    bool have_end_warp    = false;
-    bool have_begin_trans = false;
-    bool have_end_trans   = false;
 
     for (const auto& m : warp_markers) {
         if (m.is_begin_time) {
             begin = static_cast<long long>(std::nearbyint(
                 m.time_seconds * static_cast<double>(sample_rate)));
-            have_begin_warp = true;
         }
         if (m.is_end_time) {
             end = static_cast<long long>(std::nearbyint(
                 m.time_seconds * static_cast<double>(sample_rate)));
-            have_end_warp = true;
         }
-    }
-    for (const auto& t : transients) {
-        if (t.is_begin_time) {
-            if (have_begin_warp) {
-                have_begin_trans = true;
-            } else {
-                begin = static_cast<long long>(std::nearbyint(
-                    t.time_seconds * static_cast<double>(sample_rate)));
-                have_begin_trans = true;
-            }
-        }
-        if (t.is_end_time) {
-            if (have_end_warp) {
-                have_end_trans = true;
-            } else {
-                end = static_cast<long long>(std::nearbyint(
-                    t.time_seconds * static_cast<double>(sample_rate)));
-                have_end_trans = true;
-            }
-        }
-    }
-    if (have_begin_warp && have_begin_trans) {
-        std::fprintf(stderr,
-            "warptempo_gui: duplicate b= flag (warp + transient); "
-            "using warp value\n");
-    }
-    if (have_end_warp && have_end_trans) {
-        std::fprintf(stderr,
-            "warptempo_gui: duplicate e= flag (warp + transient); "
-            "using warp value\n");
     }
     if (begin < 0) begin = 0;
     if (end > total_frames) end = total_frames;
@@ -622,7 +583,7 @@ int main(int argc, char** argv) {
     // X.7.4: forward-declared so the Transients struct can capture
     // references. Bodies are assigned later at their original definition
     // sites — same pattern as clear_hover_popup / stop_playback_if_playing.
-    std::function<FlagLoc(bool, bool, int)> find_flag;
+    std::function<FlagLoc(bool, int)> find_flag;
 
     // X.7.6: forward-declared so GuiRenderView can capture a reference.
     // Body is assigned later at its original definition site — same
@@ -711,15 +672,11 @@ int main(int argc, char** argv) {
 
     auto recompute_dirty = [&]() { undo.recompute_dirty(); };
 
-    // Cross-file flag scan. `want_begin` selects the b= scan vs the e=
-    // scan. The (excl_idx_is_transient, excl_idx) pair excludes one marker
-    // from the search; `excl_idx` is the index, and `excl_idx_is_transient`
-    // selects which list it indexes into — true means `excl_idx` is a
-    // transient-list index, false means it's a warp-list index.
-    // Pass excl_idx == -1 for no exclusion. Warp list is scanned first;
-    // on a duplicate (parser-protected, only via hand-edit), the warp-
-    // side hit wins to match compute_trim_samples.
-    find_flag = [&](bool want_begin, bool excl_idx_is_transient, int excl_idx)
+    // Warp-list flag scan. `want_begin` selects the b= scan vs the e=
+    // scan. `excl_idx` excludes one warp marker from the search; pass -1
+    // for no exclusion. Trim flags live exclusively on warp markers, so
+    // a single-list scan is authoritative.
+    find_flag = [&](bool want_begin, int excl_idx)
         -> FlagLoc {
         FlagLoc f;
         const int sr = audio.sample_rate();
@@ -728,25 +685,11 @@ int main(int argc, char** argv) {
             const bool has = want_begin ? mv[i].is_begin_time
                                         : mv[i].is_end_time;
             if (!has) continue;
-            if (!excl_idx_is_transient && i == excl_idx) continue;
-            f.valid     = true;
-            f.transient = false;
-            f.idx       = i;
-            f.frame     = static_cast<int64_t>(std::nearbyint(
+            if (i == excl_idx) continue;
+            f.valid = true;
+            f.idx   = i;
+            f.frame = static_cast<int64_t>(std::nearbyint(
                 mv[i].time_seconds * static_cast<double>(sr)));
-            return f;
-        }
-        const auto& tv = app.transientmarkers.markers();
-        for (int i = 0; i < static_cast<int>(tv.size()); ++i) {
-            const bool has = want_begin ? tv[i].is_begin_time
-                                        : tv[i].is_end_time;
-            if (!has) continue;
-            if (excl_idx_is_transient && i == excl_idx) continue;
-            f.valid     = true;
-            f.transient = true;
-            f.idx       = i;
-            f.frame     = static_cast<int64_t>(std::nearbyint(
-                tv[i].time_seconds * static_cast<double>(sr)));
             return f;
         }
         return f;
