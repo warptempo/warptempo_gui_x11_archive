@@ -1,4 +1,5 @@
 #include "render.h"
+#include "app_state.h"
 #include "audio.h"
 
 #include <algorithm>
@@ -1024,4 +1025,52 @@ double measure_timestamp_width(cairo_t* cr, double seconds) {
     cairo_text_extents(cr, buf, &ext);
     cairo_restore(cr);
     return ext.x_advance;
+}
+
+namespace {
+    double g_advance = 0.0;
+    bool   g_metrics_initialized = false;
+} // namespace
+
+double monospace_advance() { return g_advance; }
+
+void init_monospace_grid_metrics(cairo_t* cr) {
+    if (g_metrics_initialized) return;
+    cairo_save(cr);
+    cairo_select_font_face(cr, "monospace",
+        CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, kFlagFontSize);
+    cairo_text_extents_t ext;
+    cairo_text_extents(cr, "M", &ext);
+    g_advance = ext.x_advance;
+    cairo_restore(cr);
+    g_metrics_initialized = true;
+}
+
+double flag_pending_text_left_x(
+    const AppState& app, const GuiAudio& audio,
+    int marker_idx)
+{
+    const auto& mv = app.warpmarkers.markers();
+    if (marker_idx < 0 ||
+        marker_idx >= static_cast<int>(mv.size())) return -1.0;
+    const GuiRect top = top_strip_area(app);
+    if (top.w <= 0) return -1.0;
+    const double spp = current_samples_per_pixel(app, audio);
+    if (spp <= 0.0) return -1.0;
+    const int64_t vp_start = app.viewport_start_sample;
+    const int64_t vp_end = vp_start +
+        static_cast<int64_t>(std::llround(spp * top.w));
+    const double sr = static_cast<double>(audio.sample_rate());
+    const double ms = mv[marker_idx].time_seconds * sr;
+    if (ms <  static_cast<double>(vp_start)) return -1.0;
+    if (ms >= static_cast<double>(vp_end))   return -1.0;
+    const double samples_per_pixel =
+        static_cast<double>(vp_end - vp_start) /
+        static_cast<double>(top.w);
+    const double x_raw =
+        (ms - static_cast<double>(vp_start)) / samples_per_pixel;
+    const double text_left =
+        static_cast<double>(top.x) + std::nearbyint(x_raw);
+    return text_left + kFlagInnerPadPx;
 }

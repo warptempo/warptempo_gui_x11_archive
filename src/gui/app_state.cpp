@@ -131,7 +131,8 @@ int hit_test_flag(const AppState& app, const GuiAudio& audio,
 }
 
 int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
-                        int mouse_x, int mouse_y) {
+                        int mouse_x, int mouse_y,
+                        double* out_text_left_x) {
     if (!app.iteration_mode_enabled) return -1;
     if (app.active_mode != 'W') return -1;
     const GuiRect area = waveform_area(app);
@@ -153,6 +154,10 @@ int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
             mouse_x < h.hit_rect.x + h.hit_rect.w &&
             mouse_y >= h.hit_rect.y &&
             mouse_y < h.hit_rect.y + h.hit_rect.h) {
+            if (out_text_left_x) {
+                *out_text_left_x =
+                    static_cast<double>(h.flag_rect.x);
+            }
             return h.marker_index;
         }
     }
@@ -183,7 +188,8 @@ bool popup_eligible_marker(const AppState& app, int idx) {
 }
 
 int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
-                       int mouse_x, int mouse_y) {
+                       int mouse_x, int mouse_y,
+                       double* out_text_left_x) {
     if (!app.bpm_mode_enabled) return -1;
     if (app.active_mode != 'W') return -1;
     const GuiRect area = waveform_area(app);
@@ -205,6 +211,10 @@ int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
             mouse_x < h.hit_rect.x + h.hit_rect.w &&
             mouse_y >= h.hit_rect.y &&
             mouse_y < h.hit_rect.y + h.hit_rect.h) {
+            if (out_text_left_x) {
+                *out_text_left_x =
+                    static_cast<double>(h.flag_rect.x);
+            }
             return h.marker_index;
         }
     }

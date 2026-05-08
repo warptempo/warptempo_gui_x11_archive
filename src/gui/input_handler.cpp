@@ -1557,7 +1557,8 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         if (inside_top && was_playing) stop_playback_if_playing();
 
         // V.A1 / V.B editor: mouse handling.
-        //   click inside top strip on the editing target: no-op
+        //   click inside top strip on the editing target: re-position
+        //     cursor at the clicked byte (handled inside enter_*_edit)
         //   click inside top strip on a different popup/flag: switch
         //     target (iter popup wins over the flag below it when
         //     iteration mode is on)
@@ -1565,34 +1566,28 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         //     through so the click routes through normal handling.
         if (text_editor::is_active(app.top_flag_editor)) {
             if (inside_top) {
-                const int iter_hit = hit_test_iter_popup(app, audio, x, y);
+                double iter_text_left = -1.0;
+                const int iter_hit = hit_test_iter_popup(
+                    app, audio, x, y, &iter_text_left);
                 if (iter_hit >= 0) {
-                    if (app.top_flag_editor.kind ==
-                            text_editor::Kind::IterationBracket &&
-                        iter_hit == app.top_flag_editor.target) {
-                        return; // no-op on same popup
-                    }
-                    flag_editor.enter_iter_edit(iter_hit);
+                    flag_editor.enter_iter_edit(
+                        iter_hit, static_cast<double>(x),
+                        iter_text_left);
                     return;
                 }
-                const int bpm_hit = hit_test_bpm_popup(app, audio, x, y);
+                double bpm_text_left = -1.0;
+                const int bpm_hit = hit_test_bpm_popup(
+                    app, audio, x, y, &bpm_text_left);
                 if (bpm_hit >= 0) {
-                    if (app.top_flag_editor.kind ==
-                            text_editor::Kind::BpmBracket &&
-                        bpm_hit == app.top_flag_editor.target) {
-                        return; // no-op on same popup
-                    }
-                    flag_editor.enter_bpm_edit(bpm_hit);
+                    flag_editor.enter_bpm_edit(
+                        bpm_hit, static_cast<double>(x),
+                        bpm_text_left);
                     return;
                 }
                 const int hit_now = hit_test_flag(app, audio, x, y);
-                if (app.top_flag_editor.kind ==
-                        text_editor::Kind::FlagPayload &&
-                    hit_now == app.top_flag_editor.target) {
-                    return; // no-op on same flag
-                }
                 if (hit_now >= 0 && app.active_mode != 'T') {
-                    flag_editor.enter_top_flag_edit(hit_now);
+                    flag_editor.enter_top_flag_edit(
+                        hit_now, static_cast<double>(x));
                     return;
                 }
                 // Top strip click that isn't on a popup or flag: exit
@@ -1652,14 +1647,20 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         // makes the intent unambiguous when the flag-strip extents
         // change shape.
         if (inside_top && !ctrl) {
-            const int iter_hit = hit_test_iter_popup(app, audio, x, y);
+            double iter_text_left = -1.0;
+            const int iter_hit = hit_test_iter_popup(
+                app, audio, x, y, &iter_text_left);
             if (iter_hit >= 0) {
-                flag_editor.enter_iter_edit(iter_hit);
+                flag_editor.enter_iter_edit(
+                    iter_hit, static_cast<double>(x), iter_text_left);
                 return;
             }
-            const int bpm_hit = hit_test_bpm_popup(app, audio, x, y);
+            double bpm_text_left = -1.0;
+            const int bpm_hit = hit_test_bpm_popup(
+                app, audio, x, y, &bpm_text_left);
             if (bpm_hit >= 0) {
-                flag_editor.enter_bpm_edit(bpm_hit);
+                flag_editor.enter_bpm_edit(
+                    bpm_hit, static_cast<double>(x), bpm_text_left);
                 return;
             }
         }
@@ -1709,7 +1710,8 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                         app.warpmarkers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                     viewport.move_playhead_to(sample);
-                    flag_editor.enter_top_flag_edit(hit);
+                    flag_editor.enter_top_flag_edit(
+                        hit, static_cast<double>(x));
                     return;
                 }
                 if (shift) selection.toggle_selection_membership(hit);

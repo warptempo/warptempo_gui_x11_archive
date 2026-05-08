@@ -10,6 +10,7 @@
 #include <vector>
 
 class GuiAudio;
+struct AppState;
 
 struct GuiRect {
     int x;
@@ -358,6 +359,27 @@ std::string compute_hover_popup_text(
 // Returns the pixel width of the baseline-style monospace timestamp at the
 // size used by render_timestamp. Needed so callers can position adjacent UI.
 double measure_timestamp_width(cairo_t* cr, double seconds);
+
+// Per-character pixel advance for the monospace font at kFlagFontSize.
+// Measured once at startup via init_monospace_grid_metrics(); returns
+// 0 if not yet measured. Used by click-to-position-cursor in the
+// editor (input_handler.cpp -> flag_editor.cpp).
+double monospace_advance();
+
+// Measure and cache the advance width. Idempotent. Called once at
+// GUI startup after the cairo context exists. The supplied cairo_t*
+// is used only for measurement; the font state is restored on return.
+void init_monospace_grid_metrics(cairo_t* cr);
+
+// Returns the on-screen x where the given marker's flag pending text
+// starts, in pixels. Includes the kFlagInnerPadPx left inner pad so
+// the returned value matches where pending text actually paints
+// (cairo_move_to(cr, e.text_left + hl_pad, ...) at render.cpp:620).
+// Returns -1.0 if the marker is not currently visible in the
+// viewport. Direct computation -- does not require a cairo context.
+double flag_pending_text_left_x(
+    const AppState& app, const GuiAudio& audio,
+    int marker_idx);
 
 // One-line toggle for the render-path perf instrumentation (chunk M). When
 // false, all perf_counters increments and [dbg perf] stderr emissions in

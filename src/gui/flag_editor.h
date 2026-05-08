@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_state.h"
+#include "audio.h"
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers.h"
@@ -23,27 +24,32 @@
 // into the warp marker container directly via app.warpmarkers.marker_mut.
 struct GuiFlagEditor {
     AppState&              app;
+    GuiAudio&              audio;
     Viewport&              viewport;
     Undo&                  undo;
     std::function<void()>& clear_hover_popup;
 
     GuiFlagEditor(AppState&              app_,
+                  GuiAudio&              audio_,
                   Viewport&              viewport_,
                   Undo&                  undo_,
                   std::function<void()>& clear_hover_popup_)
         : app(app_),
+          audio(audio_),
           viewport(viewport_),
           undo(undo_),
           clear_hover_popup(clear_hover_popup_) {}
 
     std::string build_locked_prefix(const GuiWarpMarker& m);
     void exit_top_flag_edit_no_commit();
-    void enter_top_flag_edit(int idx);
+    void enter_top_flag_edit(int idx, double click_x = -1.0);
     void commit_top_flag_edit();
-    void enter_iter_edit(int idx);
+    void enter_iter_edit(int idx, double click_x = -1.0,
+                                  double text_left_x = -1.0);
     void commit_iter_edit();
     void bulk_clear_iter_values();
-    void enter_bpm_edit(int idx);
+    void enter_bpm_edit(int idx, double click_x = -1.0,
+                                 double text_left_x = -1.0);
     void commit_bpm_edit();
     void bulk_clear_bpm_values();
     void enter_bpm_mode();

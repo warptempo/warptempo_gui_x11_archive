@@ -171,6 +171,8 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
     using clock = std::chrono::steady_clock;
     const auto t_start = clock::now();
 
+    init_monospace_grid_metrics(cr);
+
     if constexpr (kDebugPerf) perf_counters::reset();
 
     double t_waveform_ms = 0.0;

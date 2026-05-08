@@ -3,6 +3,7 @@
 #include "render.h"
 #include "text_editor.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -10,6 +11,22 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace {
+
+// Translate a click x-coordinate to a byte index into `pending` based
+// on the monospace per-character advance and a known text-left x.
+// Both `advance > 0` and `text_left_x >= 0` must hold; callers gate
+// on those before invoking. The returned index is clamped to
+// [0, pending_size].
+int byte_index_from_click_x(double click_x, double text_left_x,
+                            double advance, int pending_size) {
+    const double offset = click_x - text_left_x;
+    int idx = static_cast<int>(std::nearbyint(offset / advance));
+    return std::clamp(idx, 0, pending_size);
+}
+
+} // namespace
 
 // X.7.5b: flag-editor cluster. Method bodies are byte-identical to the
 // lambdas they replaced in main.cpp, with these mechanical rewrites:
@@ -62,10 +79,37 @@ void GuiFlagEditor::exit_top_flag_edit_no_commit() {
     viewport.invalidate_top_strip();
 }
 
-void GuiFlagEditor::enter_top_flag_edit(int idx) {
+void GuiFlagEditor::enter_top_flag_edit(int idx, double click_x) {
     if (idx < 0) return;
     const auto& mv = app.warpmarkers.markers();
     if (idx >= static_cast<int>(mv.size())) return;
+
+    const bool same_target =
+        text_editor::is_active(app.top_flag_editor) &&
+        app.top_flag_editor.kind ==
+            text_editor::Kind::FlagPayload &&
+        app.top_flag_editor.target == idx;
+
+    if (same_target) {
+        // Re-click on the active editor: update cursor only,
+        // preserve pending text and any in-progress state.
+        if (click_x >= 0.0) {
+            const double advance = monospace_advance();
+            const double text_left =
+                flag_pending_text_left_x(app, audio, idx);
+            if (advance > 0.0 && text_left >= 0.0) {
+                app.top_flag_editor.cursor_pos =
+                    byte_index_from_click_x(
+                        click_x, text_left, advance,
+                        static_cast<int>(
+                            app.top_flag_editor.pending.size()));
+                app.top_flag_editor.selection_anchor = -1;
+            }
+        }
+        viewport.invalidate_top_strip();
+        return;
+    }
+
     // Discard any prior edit silently before switching targets.
     if (text_editor::is_active(app.top_flag_editor) &&
         app.top_flag_editor.target != idx) {
@@ -75,6 +119,20 @@ void GuiFlagEditor::enter_top_flag_edit(int idx) {
         app.top_flag_editor, idx,
         this->build_locked_prefix(mv[idx]),
         flag_text_for_marker(mv, idx));
+
+    if (click_x >= 0.0) {
+        const double advance = monospace_advance();
+        const double text_left =
+            flag_pending_text_left_x(app, audio, idx);
+        if (advance > 0.0 && text_left >= 0.0) {
+            app.top_flag_editor.cursor_pos =
+                byte_index_from_click_x(
+                    click_x, text_left, advance,
+                    static_cast<int>(
+                        app.top_flag_editor.pending.size()));
+        }
+    }
+
     clear_hover_popup();
     viewport.invalidate_top_strip();
 }
@@ -214,12 +272,36 @@ void GuiFlagEditor::commit_top_flag_edit() {
 // backspace into a valid edit position. Reuses `top_flag_editor`
 // state but with Kind::IterationBracket so the editor's keyboard
 // vocabulary swaps to `[]+-,.` and digits.
-void GuiFlagEditor::enter_iter_edit(int idx) {
+void GuiFlagEditor::enter_iter_edit(int idx, double click_x,
+                                    double text_left_x) {
     if (idx < 0) return;
     if (!app.iteration_mode_enabled) return;
     const auto& mv = app.warpmarkers.markers();
     if (idx >= static_cast<int>(mv.size())) return;
     if (!iter_popup_eligible_marker(mv[idx])) return;
+
+    const bool same_target =
+        text_editor::is_active(app.top_flag_editor) &&
+        app.top_flag_editor.kind ==
+            text_editor::Kind::IterationBracket &&
+        app.top_flag_editor.target == idx;
+
+    if (same_target) {
+        if (click_x >= 0.0 && text_left_x >= 0.0) {
+            const double advance = monospace_advance();
+            if (advance > 0.0) {
+                app.top_flag_editor.cursor_pos =
+                    byte_index_from_click_x(
+                        click_x, text_left_x, advance,
+                        static_cast<int>(
+                            app.top_flag_editor.pending.size()));
+                app.top_flag_editor.selection_anchor = -1;
+            }
+        }
+        viewport.invalidate_top_strip();
+        return;
+    }
+
     if (text_editor::is_active(app.top_flag_editor) &&
         app.top_flag_editor.target != idx) {
         text_editor::deactivate(app.top_flag_editor);
@@ -229,6 +311,18 @@ void GuiFlagEditor::enter_iter_edit(int idx) {
         /*locked_prefix=*/"",
         /*initial_pending=*/format_iter_bracket_text(mv[idx]),
         text_editor::Kind::IterationBracket);
+
+    if (click_x >= 0.0 && text_left_x >= 0.0) {
+        const double advance = monospace_advance();
+        if (advance > 0.0) {
+            app.top_flag_editor.cursor_pos =
+                byte_index_from_click_x(
+                    click_x, text_left_x, advance,
+                    static_cast<int>(
+                        app.top_flag_editor.pending.size()));
+        }
+    }
+
     clear_hover_popup();
     viewport.invalidate_top_strip();
 }
@@ -411,12 +505,36 @@ void GuiFlagEditor::bulk_clear_iter_values() {
 // text (`"[]"` when blank, else `"<beats>@[<lo>,<hi>]"`). Reuses
 // top_flag_editor with Kind::BpmBracket so the keyboard vocabulary
 // swaps to digits + `@`/`,`/`[`/`]`.
-void GuiFlagEditor::enter_bpm_edit(int idx) {
+void GuiFlagEditor::enter_bpm_edit(int idx, double click_x,
+                                   double text_left_x) {
     if (idx < 0) return;
     if (!app.bpm_mode_enabled) return;
     const auto& mv = app.warpmarkers.markers();
     if (idx >= static_cast<int>(mv.size())) return;
     if (!bpm_popup_eligible_marker(mv[idx])) return;
+
+    const bool same_target =
+        text_editor::is_active(app.top_flag_editor) &&
+        app.top_flag_editor.kind ==
+            text_editor::Kind::BpmBracket &&
+        app.top_flag_editor.target == idx;
+
+    if (same_target) {
+        if (click_x >= 0.0 && text_left_x >= 0.0) {
+            const double advance = monospace_advance();
+            if (advance > 0.0) {
+                app.top_flag_editor.cursor_pos =
+                    byte_index_from_click_x(
+                        click_x, text_left_x, advance,
+                        static_cast<int>(
+                            app.top_flag_editor.pending.size()));
+                app.top_flag_editor.selection_anchor = -1;
+            }
+        }
+        viewport.invalidate_top_strip();
+        return;
+    }
+
     if (text_editor::is_active(app.top_flag_editor) &&
         app.top_flag_editor.target != idx) {
         text_editor::deactivate(app.top_flag_editor);
@@ -426,6 +544,18 @@ void GuiFlagEditor::enter_bpm_edit(int idx) {
         /*locked_prefix=*/"",
         /*initial_pending=*/format_bpm_bracket_text(mv[idx]),
         text_editor::Kind::BpmBracket);
+
+    if (click_x >= 0.0 && text_left_x >= 0.0) {
+        const double advance = monospace_advance();
+        if (advance > 0.0) {
+            app.top_flag_editor.cursor_pos =
+                byte_index_from_click_x(
+                    click_x, text_left_x, advance,
+                    static_cast<int>(
+                        app.top_flag_editor.pending.size()));
+        }
+    }
+
     clear_hover_popup();
     viewport.invalidate_top_strip();
 }
