@@ -199,6 +199,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     //   - Ctrl+Q / Ctrl+W        → close-prompt routing (Brief F)
     //   - Up/Down (no mods)      → zoom in/out (Brief S.2)
     //   - =/- (no mods)          → zoom in/out symbol-key alias (Brief S.2)
+    //   - f (no mods)          → follow mode toggle
     if (app.render_view_enabled) {
         const bool is_r =
             (keysym == XK_r && !ctrl && !shift && !alt);
@@ -228,10 +229,12 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         const bool is_zoom_symbol =
             ((keysym == XK_equal || keysym == XK_minus) &&
              !ctrl && !shift && !alt);
+        const bool is_follow =
+            (keysym == XK_f && !ctrl && !shift && !alt);
         if (!(is_r || is_nav || is_commit || is_playback ||
               is_scrub || is_jump || is_esc ||
               is_sub_view_toggle || is_ctrl_q || is_ctrl_w ||
-              is_zoom || is_zoom_symbol)) {
+              is_zoom || is_zoom_symbol || is_follow)) {
             return;
         }
     }
