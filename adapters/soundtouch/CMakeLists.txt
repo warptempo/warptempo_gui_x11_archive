@@ -12,4 +12,3 @@ add_executable(soundtouch_adapter main.cpp)
 
 target_include_directories(soundtouch_adapter PRIVATE ${SNDFILE_INCLUDE_DIRS} ${SOUNDTOUCH_INCLUDE_DIRS})
 target_link_libraries(soundtouch_adapter PRIVATE ${SNDFILE_LIBRARIES} ${SOUNDTOUCH_LIBRARIES})
-

@@ -43,4 +43,3 @@ target_include_directories(bungee_adapter PRIVATE
 
 # Optional: Add a 'Pro' flag comment for future reference
 # To use Pro, one would replace the clone URL with the private Pro repo URL
-
