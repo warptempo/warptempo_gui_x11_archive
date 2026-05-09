@@ -1038,6 +1038,39 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
+    // Ctrl+T: copy transient placements from a two-warp-marker
+    // selection into the session clipboard. W-mode only; T-mode is a
+    // silent no-op. Off-count selection in W-mode emits a one-line
+    // stderr nudge.
+    if (keysym == XK_t && ctrl && !shift && !alt) {
+        if (app.active_mode != 'W') return;
+        if (app.selected_markers.size() != 2) {
+            std::fprintf(stderr,
+                "warptempo_gui: transient copy: select exactly two warp "
+                "markers\n");
+            return;
+        }
+        transient_propagate.copy_from_selection();
+        return;
+    }
+
+    // Ctrl+Alt+T: paste clipboard transients onto the destination
+    // anchored at the single selected warp marker. W-mode only;
+    // T-mode is a silent no-op. Empty clipboard is a silent no-op.
+    // Opens a confirmation prompt before any mutation.
+    if (keysym == XK_t && ctrl && !shift && alt) {
+        if (app.active_mode != 'W') return;
+        if (app.transient_clipboard.empty()) return;
+        if (app.selected_markers.size() != 1) {
+            std::fprintf(stderr,
+                "warptempo_gui: transient paste: select exactly one warp "
+                "marker\n");
+            return;
+        }
+        transient_propagate.open_paste_confirmation();
+        return;
+    }
+
     // `t` (no modifiers) toggles transient mode globally. Brief
     // J.2: render-view shares the global active_mode flag, so a
     // single handler serves both views. Render-view inherits the

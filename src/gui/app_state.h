@@ -2,6 +2,7 @@
 
 #include "render.h"
 #include "text_editor.h"
+#include "transient_clipboard.h"
 #include "transientmarkers.h"
 #include "warpmarkers.h"
 
@@ -211,6 +212,7 @@ struct HoverPopupState {
 enum class DialogTrigger {
     CLOSE_WINDOW,
     REVERT_TO_BLANK,
+    PASTE_CONFIRM,
 };
 
 // In-window modal prompt state. When `active` is true, the bottom strip
@@ -437,6 +439,13 @@ struct AppState {
         std::vector<GuiTransientMarker>  transients;
     };
     std::vector<QueuedRender> queued_renders;
+
+    // Transient-propagate (W-mode Ctrl+T / Ctrl+Alt+T). Single-slot
+    // session-only clipboard cleared on app exit. `pending_paste_anchor`
+    // is the destination warp-marker index captured when the paste
+    // confirmation prompt opens; consumed by the prompt response.
+    TransientClipboard transient_clipboard;
+    int                pending_paste_anchor = -1;
 
     // V.B iteration mode. Toggled by plain `i` in warp mode (no-op in
     // transient mode). Session-only; survives mode-switches but is lost

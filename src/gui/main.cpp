@@ -619,10 +619,12 @@ int main(int argc, char** argv) {
     GuiTabMode tab_mode(app, audio, viewport, selection,
                         clear_hover_popup, stop_playback_if_playing);
     GuiPaintHandler paint_handler(app, audio, playback, wf_cache, gui);
+    TransientPropagate transient_propagate(app, viewport, undo);
     GuiInputHandler input_handler(app, audio, gui, playback,
                                   viewport, selection, undo,
                                   warpops, transients, flag_editor,
                                   render_view, tab_mode,
+                                  transient_propagate,
                                   clear_hover_popup, stop_playback_if_playing,
                                   save_markers, request_close_or_revert,
                                   prompt_activate_response, toggle_playback,
@@ -859,6 +861,10 @@ int main(int argc, char** argv) {
         case DialogTrigger::REVERT_TO_BLANK:
             revert_to_blank();
             break;
+        case DialogTrigger::PASTE_CONFIRM:
+            // Paste prompt is dispatched directly by prompt_activate_response;
+            // proceed_with_trigger is not the path it lands on.
+            break;
         }
     };
 
@@ -886,6 +892,22 @@ int main(int argc, char** argv) {
         const DialogTrigger trigger = app.prompt.trigger;
         // Sentinels: '\x7f' = Delete (discard), '\x1b' = Escape (cancel).
         // See open_prompt_unsaved above.
+
+        if (trigger == DialogTrigger::PASTE_CONFIRM) {
+            if (k == 'y') {
+                app.prompt.active = false;
+                invalidate_all();
+                transient_propagate.paste_apply();
+                return;
+            }
+            if (k == '\x1b') {
+                app.prompt.active = false;
+                app.pending_paste_anchor = -1;
+                invalidate_all();
+                return;
+            }
+            return;
+        }
 
         if (trigger == DialogTrigger::CLOSE_WINDOW ||
             trigger == DialogTrigger::REVERT_TO_BLANK) {

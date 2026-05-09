@@ -8,6 +8,7 @@
 #include "render_view.h"
 #include "selection.h"
 #include "tab_mode.h"
+#include "transient_propagate.h"
 #include "transientmarkers_ops.h"
 #include "undo.h"
 #include "viewport.h"
@@ -119,6 +120,7 @@ struct GuiInputHandler {
     GuiFlagEditor&             flag_editor;
     GuiRenderView&             render_view;
     GuiTabMode&                tab_mode;
+    TransientPropagate&        transient_propagate;
     std::function<void()>&     clear_hover_popup;
     std::function<void()>&     stop_playback_if_playing;
     std::function<bool()>&     save_markers;
@@ -139,6 +141,7 @@ struct GuiInputHandler {
                     GuiFlagEditor&             flag_editor_,
                     GuiRenderView&             render_view_,
                     GuiTabMode&                tab_mode_,
+                    TransientPropagate&        transient_propagate_,
                     std::function<void()>&     clear_hover_popup_,
                     std::function<void()>&     stop_playback_if_playing_,
                     std::function<bool()>&     save_markers_,
@@ -158,6 +161,7 @@ struct GuiInputHandler {
           flag_editor(flag_editor_),
           render_view(render_view_),
           tab_mode(tab_mode_),
+          transient_propagate(transient_propagate_),
           clear_hover_popup(clear_hover_popup_),
           stop_playback_if_playing(stop_playback_if_playing_),
           save_markers(save_markers_),
