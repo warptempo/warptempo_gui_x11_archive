@@ -969,7 +969,7 @@ int main(int argc, char** argv) {
         app.last_space_sample = app.playhead_sample;
         app.playback_cursor = start;
         app.is_playing = true;
-        playback.set_speed(app.playback_speed);
+        playback.set_speed(app.render_view_enabled ? 1.0f : app.playback_speed);
         playback.play(start, end);
     };
 
