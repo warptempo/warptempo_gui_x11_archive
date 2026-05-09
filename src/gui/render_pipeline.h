@@ -1,7 +1,7 @@
 #pragma once
 
 #include "warpmarkers.h"
-#include "transientmarkers.h"
+#include "phase_reset_markers.h"
 
 #include <cstdint>
 #include <string>
@@ -16,30 +16,30 @@ struct RenderRequest {
     std::vector<GuiWarpMarker> markers;
     std::vector<std::pair<std::string, std::string>> settings_passthrough;
 
-    // User-curated transient frame list (source-frame domain). When non-empty
+    // User-curated phase reset frame list (source-frame domain). When non-empty
     // and the active engine is "warptempo", this overrides the engine's
     // internal detection — typical population is the union of inserted +
-    // active-detected entries from the GUI's transient list, with disabled
+    // active-detected entries from the GUI's phase reset list, with disabled
     // entries filtered out and time_seconds converted to source frames at
     // the GUI-to-engine boundary via banker's rounding.
-    std::vector<int64_t>   transient_frames;
+    std::vector<int64_t>   phase_reset_frames;
 
-    // Full transient store snapshot. Batch sidecar payload only: when
+    // Full phase reset store snapshot. Batch sidecar payload only: when
     // batch_folder is set and this list is non-empty, written verbatim as
-    // `<batch_folder>/<batch_basename>.transientmarkers` so render-view
-    // can later display the transient set this render was produced from.
-    // A second sidecar `<batch_basename>.rendertransientmarkers` carries
+    // `<batch_folder>/<batch_basename>.phaseresetmarkers` so render-view
+    // can later display the phase reset set this render was produced from.
+    // A second sidecar `<batch_basename>.renderphaseresetmarkers` carries
     // the same set warped into render-domain frame coordinates. The
-    // single-transient sidecar path used by the immediate Ctrl+Alt+R
+    // single-phase reset sidecar path used by the immediate Ctrl+Alt+R
     // render branch does not read this field for sidecar emission.
     // Empty list disables sidecar emission cleanly.
-    std::vector<GuiTransientMarker> transients;
+    std::vector<GuiPhaseResetMarker> phase_resets;
 
     // Batch render output. When `batch_folder` is non-empty, do_render
     // writes its final output to `<batch_folder>/<batch_basename>.wav` (or
     // `.mid` for midi) and, on success, deposits the per-render
-    // `<batch_basename>.warpmarkers`, `<batch_basename>.transientmarkers`
-    // (when transients is non-empty), and `<batch_basename>.peaks` sidecars
+    // `<batch_basename>.warpmarkers`, `<batch_basename>.phaseresetmarkers`
+    // (when phase resets is non-empty), and `<batch_basename>.peaks` sidecars
     // in the same folder. The folder must already exist; do_render does
     // not create it. When `batch_folder` is empty, the source-directory
     // title/engine/limiter-prefix naming is used (unchanged from the

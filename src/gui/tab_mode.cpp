@@ -30,9 +30,9 @@ void GuiTabMode::refresh_active_tab_from_app() {
     t.viewport_start_sample = app.viewport_start_sample;
     t.zoom_level            = app.zoom_level;
     t.playhead_sample       = app.playhead_sample;
-    if (app.active_mode == 'T') {
-        t.transient_selected      = app.selected_markers;
-        t.transient_last_selected = app.last_selected_marker;
+    if (app.active_mode == 'P') {
+        t.phase_reset_selected      = app.selected_markers;
+        t.phase_reset_last_selected = app.last_selected_marker;
     } else {
         t.warp_selected           = app.selected_markers;
         t.warp_last_selected      = app.last_selected_marker;
@@ -60,7 +60,7 @@ ViewState* GuiTabMode::active_view_state() {
     return (app.active_tab == 'B') ? &app.tab_b : &app.tab_a;
 }
 
-// Toggle active editing mode between 'W' (warp) and 'T' (transient).
+// Toggle active editing mode between 'W' (warp) and 'P' (phase reset).
 // Saves the active selection into the leaving mode's per-tab slot,
 // then restores the destination mode's slot. Visible state (viewport /
 // zoom / playhead) is unaffected. Caller decides what invalidations to
@@ -69,16 +69,16 @@ void GuiTabMode::switch_active_mode_to(char target_mode) {
     if (target_mode == app.active_mode) return;
     ViewState* vs = this->active_view_state();
     if (!vs) return;
-    if (app.active_mode == 'T') {
-        vs->transient_selected      = app.selected_markers;
-        vs->transient_last_selected = app.last_selected_marker;
+    if (app.active_mode == 'P') {
+        vs->phase_reset_selected      = app.selected_markers;
+        vs->phase_reset_last_selected = app.last_selected_marker;
         app.selected_markers        = vs->warp_selected;
         app.last_selected_marker    = vs->warp_last_selected;
     } else {
         vs->warp_selected           = app.selected_markers;
         vs->warp_last_selected      = app.last_selected_marker;
-        app.selected_markers        = vs->transient_selected;
-        app.last_selected_marker    = vs->transient_last_selected;
+        app.selected_markers        = vs->phase_reset_selected;
+        app.last_selected_marker    = vs->phase_reset_last_selected;
     }
     app.active_mode = target_mode;
     selection.prune_live_selection();
@@ -104,9 +104,9 @@ void GuiTabMode::switch_active_tab_to(char target_tab) {
     // current-mode slot. Mode itself is per-AppState (not per-tab),
     // so the destination tab's other-mode slot stays warm for any
     // future `t` flip back inside that tab.
-    if (app.active_mode == 'T') {
-        app.selected_markers     = target.transient_selected;
-        app.last_selected_marker = target.transient_last_selected;
+    if (app.active_mode == 'P') {
+        app.selected_markers     = target.phase_reset_selected;
+        app.last_selected_marker = target.phase_reset_last_selected;
     } else {
         app.selected_markers     = target.warp_selected;
         app.last_selected_marker = target.warp_last_selected;
@@ -119,22 +119,22 @@ void GuiTabMode::switch_active_tab_to(char target_tab) {
     viewport.invalidate_timestamp_area();
 }
 
-// `t` key: toggle into/out of transient mode. Entry preconditions
+// `t` key: toggle into/out of phase reset mode. Entry preconditions
 // (only when going W → T): engine setting must be `warptempo`. Exit
 // (T → W) is unconditional.
 void GuiTabMode::toggle_active_mode() {
-    if (app.active_mode == 'T') {
+    if (app.active_mode == 'P') {
         this->switch_active_mode_to('W');
     } else {
         const std::string engine =
             settings_get(app, "engine", "warptempo");
         if (engine != "warptempo") {
             std::fprintf(stderr,
-                "warptempo_gui: transient mode unavailable: "
+                "warptempo_gui: phase_reset mode unavailable: "
                 "engine=%s\n", engine.c_str());
             return;
         }
-        this->switch_active_mode_to('T');
+        this->switch_active_mode_to('P');
     }
     viewport.invalidate_waveform_area();
     viewport.invalidate_timestamp_area();

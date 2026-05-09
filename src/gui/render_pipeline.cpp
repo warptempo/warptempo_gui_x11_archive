@@ -3,7 +3,7 @@
 #include "engine/engine.h"
 #include "audio.h"
 #include "render.h"
-#include "transientmarkers.h"
+#include "phase_reset_markers.h"
 #include "timemap.h"
 
 #include <algorithm>
@@ -322,7 +322,7 @@ bool do_render(const RenderRequest& req) {
     std::string final_output_path;
     if (batch_render) {
         // Batch render: <batch_folder>/<batch_basename>.{wav,mid}. Sidecars
-        // (.warpmarkers / .transientmarkers / .peaks) are written after the
+        // (.warpmarkers / .phaseresetmarkers / .peaks) are written after the
         // wav rename succeeds — see the post-render block below. The
         // engine/limiter-prefix naming does not apply.
         const std::string ext = midi_engine ? ".mid" : ".wav";
@@ -390,7 +390,7 @@ bool do_render(const RenderRequest& req) {
     const std::string adapter_base = gui_dir + "/../adapters";
 
     // --- Engine dispatch. ---
-    // Populated by the warptempo path for use in render-domain transient
+    // Populated by the warptempo path for use in render-domain phase reset
     // sidecar generation downstream. Other engines leave these defaults.
     std::vector<int64_t> engine_frame_map;
     int engine_R_s = 0;
@@ -413,23 +413,23 @@ bool do_render(const RenderRequest& req) {
         // its internal limiter ran. Trimmed path writes intermediate float.
         ep.output_24bit_pcm       = !tmres.trimmed && user_limiter_en;
         // Trim-relative source-frame domain. The engine receives a trimmed
-        // wav and a trim-shifted timemap, so transient_frames must live in
+        // wav and a trim-shifted timemap, so phase_reset_frames must live in
         // the same trimmed-source domain as the rest of the engine input.
-        // Drop predicates and domain match the .rendertransientmarkers
+        // Drop predicates and domain match the .renderphaseresetmarkers
         // writer below so the on-disk visualization and the engine-applied
-        // placement agree on which transients are in scope.
+        // placement agree on which phase resets are in scope.
         if (tmres.trimmed) {
             const int64_t trim_begin =
                 static_cast<int64_t>(tmres.trim_begin_frame);
             const int64_t trim_end =
                 static_cast<int64_t>(tmres.trim_end_frame);
-            ep.transient_frames.reserve(req.transient_frames.size());
-            for (int64_t F : req.transient_frames) {
+            ep.phase_reset_frames.reserve(req.phase_reset_frames.size());
+            for (int64_t F : req.phase_reset_frames) {
                 if (F < trim_begin || F > trim_end) continue;
-                ep.transient_frames.push_back(F - trim_begin);
+                ep.phase_reset_frames.push_back(F - trim_begin);
             }
         } else {
-            ep.transient_frames = req.transient_frames;
+            ep.phase_reset_frames = req.phase_reset_frames;
         }
 
         if (!run_warptempo_engine(ep, &engine_frame_map, &engine_R_s)) {
@@ -572,9 +572,9 @@ bool do_render(const RenderRequest& req) {
         write_peaks_cache_for_wav(final_output_path);
     }
 
-    // Batch render: capture the per-render marker + transient sidecars now
+    // Batch render: capture the per-render marker + phase reset sidecars now
     // that the wav rename has succeeded. These are the markers and
-    // transients THIS render was produced from, not snapshots of the
+    // phase resets THIS render was produced from, not snapshots of the
     // current source authoring state — render-view loads them later to
     // display alongside the rendered audio. Sidecar write failures are
     // logged but never abort: the wav itself is the primary artifact.
@@ -587,17 +587,17 @@ bool do_render(const RenderRequest& req) {
                 "warptempo_gui: render warning: failed to write '%s'\n",
                 wm_path.c_str());
         }
-        if (!req.transients.empty()) {
+        if (!req.phase_resets.empty()) {
             const std::string tm_path =
-                (bf / (req.batch_basename + ".transientmarkers")).string();
-            if (!GuiTransientMarkers::save(tm_path, req.transients)) {
+                (bf / (req.batch_basename + ".phaseresetmarkers")).string();
+            if (!GuiPhaseResetMarkers::save(tm_path, req.phase_resets)) {
                 std::fprintf(stderr,
                     "warptempo_gui: render warning: failed to write '%s'\n",
                     tm_path.c_str());
             }
         }
 
-        // Render-domain sidecars (.renderwarpmarkers / .rendertransientmarkers).
+        // Render-domain sidecars (.renderwarpmarkers / .renderphaseresetmarkers).
         // Render-view loads these instead of the source-domain pair so
         // visible marker positions match the rendered audio's time axis.
         // The source-domain pair above stays authoritative for
@@ -667,15 +667,15 @@ bool do_render(const RenderRequest& req) {
                     wmd_path.c_str());
             }
 
-            // Transients: locate each transient's source frame in the
+            // Phase resets: locate each phase reset's source frame in the
             // engine's frame_map via binary search and emit at synth_frame *
             // R_s — same placement convention the engine uses internally.
             // Drop out-of-trim and disabled. time_seconds on the emitted
             // marker is the engine-domain render_frame divided by sr.
-            if (!req.transients.empty()) {
-                std::vector<GuiTransientMarker> warped_transients;
-                warped_transients.reserve(req.transients.size());
-                for (const auto& t : req.transients) {
+            if (!req.phase_resets.empty()) {
+                std::vector<GuiPhaseResetMarker> warped_phase_resets;
+                warped_phase_resets.reserve(req.phase_resets.size());
+                for (const auto& t : req.phase_resets) {
                     if (t.disabled) continue;
                     const int64_t sf_abs = static_cast<int64_t>(
                         std::nearbyint(t.time_seconds * sr_d));
@@ -697,15 +697,15 @@ bool do_render(const RenderRequest& req) {
                     const int64_t render_frame =
                         static_cast<int64_t>(m) *
                         static_cast<int64_t>(engine_R_s);
-                    GuiTransientMarker w;
+                    GuiPhaseResetMarker w;
                     w.time_seconds = static_cast<double>(render_frame) / sr_d;
                     w.disabled     = false;
-                    warped_transients.push_back(std::move(w));
+                    warped_phase_resets.push_back(std::move(w));
                 }
                 const std::string tmd_path =
-                    (bf / (req.batch_basename + ".rendertransientmarkers"))
+                    (bf / (req.batch_basename + ".renderphaseresetmarkers"))
                     .string();
-                if (!GuiTransientMarkers::save(tmd_path, warped_transients)) {
+                if (!GuiPhaseResetMarkers::save(tmd_path, warped_phase_resets)) {
                     std::fprintf(stderr,
                         "warptempo_gui: render warning: failed to write '%s'\n",
                         tmd_path.c_str());

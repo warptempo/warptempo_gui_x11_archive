@@ -1,6 +1,6 @@
 #include "render_view.h"
 
-#include "transientmarkers.h"
+#include "phase_reset_markers.h"
 #include "warpmarkers.h"
 
 #include <algorithm>
@@ -261,9 +261,9 @@ void GuiRenderView::stash_render_view_selection_to_active_entry() {
         return;
     }
     auto& e = app.render_view_list[app.render_view_index];
-    if (app.active_mode == 'T') {
-        e.state.transient_selected      = app.selected_markers;
-        e.state.transient_last_selected = app.last_selected_marker;
+    if (app.active_mode == 'P') {
+        e.state.phase_reset_selected      = app.selected_markers;
+        e.state.phase_reset_last_selected = app.last_selected_marker;
     } else {
         e.state.warp_selected           = app.selected_markers;
         e.state.warp_last_selected      = app.last_selected_marker;
@@ -275,8 +275,8 @@ void GuiRenderView::stash_render_view_selection_to_active_entry() {
 
 // Loads the render at app.render_view_list[index] into the active
 // `audio`, parking the source audio on first entry. Parses sibling
-// <basename>.warpmarkers and <basename>.transientmarkers into
-// app.render_view_markers/transients and computes F_begin/F_end
+// <basename>.warpmarkers and <basename>.phaseresetmarkers into
+// app.render_view_markers/phase resets and computes F_begin/F_end
 // against the cached source sr/total. Stops playback before the
 // swap and re-binds the playback device. Returns true on success;
 // on failure logs to stderr and the prior state is preserved.
@@ -300,12 +300,12 @@ bool GuiRenderView::load_render_view_at(int index) {
     }
 
     // Render-view consumes render-domain sidecars
-    // (.renderwarpmarkers / .rendertransientmarkers) so visible marker
+    // (.renderwarpmarkers / .renderphaseresetmarkers) so visible marker
     // positions match the rendered audio's time axis. The source-domain
-    // pair (.warpmarkers / .transientmarkers) is what Ctrl+Alt+C commit
+    // pair (.warpmarkers / .phaseresetmarkers) is what Ctrl+Alt+C commit
     // reloads when promoting a render's markers into authoring memory.
     std::vector<GuiWarpMarker>     loaded_warp;
-    std::vector<GuiTransientMarker>  loaded_trans;
+    std::vector<GuiPhaseResetMarker>  loaded_trans;
     {
         const std::filesystem::path wmd =
             e.batch_folder / (e.basename + ".renderwarpmarkers");
@@ -323,10 +323,10 @@ bool GuiRenderView::load_render_view_at(int index) {
     }
     {
         const std::filesystem::path tmd =
-            e.batch_folder / (e.basename + ".rendertransientmarkers");
+            e.batch_folder / (e.basename + ".renderphaseresetmarkers");
         std::error_code ec;
         if (std::filesystem::exists(tmd, ec)) {
-            GuiTransientMarkers t;
+            GuiPhaseResetMarkers t;
             t.load(tmd.string());
             loaded_trans = t.markers();
         }
@@ -355,7 +355,7 @@ bool GuiRenderView::load_render_view_at(int index) {
     app.render_view_src_F_end   = trim.second;
 
     app.render_view_markers           = std::move(loaded_warp);
-    app.render_view_transients        = std::move(loaded_trans);
+    app.render_view_phase_resets        = std::move(loaded_trans);
     app.render_view_index             = index;
     app.last_render_view_path         = e.wav_path.string();
 
@@ -376,9 +376,9 @@ bool GuiRenderView::load_render_view_at(int index) {
         // into the live pair. The OTHER-mode slot stays on state
         // and gets swapped in if mode flips during this render-
         // view session via switch_active_mode_to.
-        if (app.active_mode == 'T') {
-            app.selected_markers     = e.state.transient_selected;
-            app.last_selected_marker = e.state.transient_last_selected;
+        if (app.active_mode == 'P') {
+            app.selected_markers     = e.state.phase_reset_selected;
+            app.last_selected_marker = e.state.phase_reset_last_selected;
         } else {
             app.selected_markers     = e.state.warp_selected;
             app.last_selected_marker = e.state.warp_last_selected;
@@ -396,8 +396,8 @@ bool GuiRenderView::load_render_view_at(int index) {
         app.last_selected_marker = -1;
         e.state.warp_selected.clear();
         e.state.warp_last_selected      = -1;
-        e.state.transient_selected.clear();
-        e.state.transient_last_selected = -1;
+        e.state.phase_reset_selected.clear();
+        e.state.phase_reset_last_selected = -1;
     }
 
     // Apply this render's persisted zoom/viewport/playhead (or
@@ -442,9 +442,9 @@ void GuiRenderView::restore_source_audio() {
     // live pair. Live pair held render-view selection while
     // render-view was active; restoring source-view requires
     // pulling the source tab's matching-mode slot back in.
-    if (app.active_mode == 'T') {
-        app.selected_markers     = t.transient_selected;
-        app.last_selected_marker = t.transient_last_selected;
+    if (app.active_mode == 'P') {
+        app.selected_markers     = t.phase_reset_selected;
+        app.last_selected_marker = t.phase_reset_last_selected;
     } else {
         app.selected_markers     = t.warp_selected;
         app.last_selected_marker = t.warp_last_selected;

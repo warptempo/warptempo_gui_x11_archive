@@ -1,4 +1,4 @@
-#include "transientmarkers.h"
+#include "phase_reset_markers.h"
 
 #include "time_format.h"
 
@@ -53,14 +53,14 @@ bool parse_timestamp_token(const std::string& tok, double& out,
     return true;
 }
 
-// Parse "[#]MM:SS.mmm" into a GuiTransientMarker. Returns true on
+// Parse "[#]MM:SS.mmm" into a GuiPhaseResetMarker. Returns true on
 // success; on failure, fills `err_msg` with a one-line diagnostic. Files
 // written by pre-X.8.3 builds (carrying an i/d status code or a
 // displaced_frame token) are rejected with "unexpected status code" so the
 // upgrade requirement surfaces to the user instead of silently misparsing.
 // Trim flags (b= / e=) are warp-only as of brief seven; encountering one on
-// a transient line is a parse error so the migration requirement surfaces.
-bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& err_msg) {
+// a phase reset line is a parse error so the migration requirement surfaces.
+bool parse_line(const std::string& raw, GuiPhaseResetMarker& out, std::string& err_msg) {
     std::string t = trim_ws(raw);
     if (t.empty()) {
         err_msg = "empty line";
@@ -68,7 +68,7 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
     }
 
     if (starts_with(t, "b=") || starts_with(t, "e=")) {
-        err_msg = "transient trim flags not supported; "
+        err_msg = "phase_reset trim flags not supported; "
                   "move b= / e= to a warp marker";
         return false;
     }
@@ -101,7 +101,7 @@ bool parse_line(const std::string& raw, GuiTransientMarker& out, std::string& er
 
 } // namespace
 
-bool GuiTransientMarkers::load(const std::string& path) {
+bool GuiPhaseResetMarkers::load(const std::string& path) {
     markers_.clear();
     errors_.clear();
     had_nonstandard_content_ = false;
@@ -141,7 +141,7 @@ bool GuiTransientMarkers::load(const std::string& path) {
             continue;
         }
 
-        GuiTransientMarker m;
+        GuiPhaseResetMarker m;
         std::string err;
         if (!parse_line(t, m, err)) {
             errors_.push_back({line_number, err});
@@ -169,18 +169,18 @@ bool GuiTransientMarkers::load(const std::string& path) {
     return true;
 }
 
-bool GuiTransientMarkers::save(const std::string& path) const {
+bool GuiPhaseResetMarkers::save(const std::string& path) const {
     return save(path, markers_);
 }
 
-bool GuiTransientMarkers::save(const std::string& path,
-                         const std::vector<GuiTransientMarker>& markers_) {
+bool GuiPhaseResetMarkers::save(const std::string& path,
+                         const std::vector<GuiPhaseResetMarker>& markers_) {
     // Mid-edit nudge gestures may transit through equal-time collisions.
     // Drop duplicates silently here (keep the first occurrence) and emit
     // a one-line stderr notice so the user sees that the on-disk content
     // diverges from the in-memory list. Dedup is keyed on time_seconds
     // (exact double match, matching warp-marker save behavior).
-    std::vector<GuiTransientMarker> deduped;
+    std::vector<GuiPhaseResetMarker> deduped;
     deduped.reserve(markers_.size());
     double last_time = std::numeric_limits<double>::lowest();
     int dropped = 0;
@@ -195,7 +195,7 @@ bool GuiTransientMarkers::save(const std::string& path,
     }
     if (dropped > 0) {
         std::fprintf(stderr,
-            "warptempo_gui: dropped %d duplicate transient(s) on save\n",
+            "warptempo_gui: dropped %d duplicate phase_reset(s) on save\n",
             dropped);
     }
 
@@ -246,24 +246,24 @@ bool GuiTransientMarkers::save(const std::string& path,
     return true;
 }
 
-bool GuiTransientMarkers::delete_file(const std::string& path) const {
+bool GuiPhaseResetMarkers::delete_file(const std::string& path) const {
     if (path.empty()) return false;
     if (::unlink(path.c_str()) == 0) return true;
     if (errno == ENOENT) return true;
     return false;
 }
 
-int GuiTransientMarkers::insert_marker(GuiTransientMarker m) {
+int GuiPhaseResetMarkers::insert_marker(GuiPhaseResetMarker m) {
     const double time = m.time_seconds;
     auto it = std::lower_bound(
         markers_.begin(), markers_.end(), time,
-        [](const GuiTransientMarker& a, double t) { return a.time_seconds < t; });
+        [](const GuiPhaseResetMarker& a, double t) { return a.time_seconds < t; });
     const int idx = static_cast<int>(it - markers_.begin());
     markers_.insert(it, std::move(m));
     return idx;
 }
 
-void GuiTransientMarkers::remove_marker(int index) {
+void GuiPhaseResetMarkers::remove_marker(int index) {
     if (index < 0 || index >= static_cast<int>(markers_.size())) return;
     markers_.erase(markers_.begin() + index);
 }

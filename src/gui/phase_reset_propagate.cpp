@@ -1,7 +1,7 @@
-#include "transient_propagate.h"
+#include "phase_reset_propagate.h"
 
-#include "transient_clipboard.h"
-#include "transientmarkers.h"
+#include "phase_reset_clipboard.h"
+#include "phase_reset_markers.h"
 #include "warpmarkers.h"
 
 #include <algorithm>
@@ -46,9 +46,9 @@ std::vector<DestBlock> walk_named_blocks(
 
 }  // namespace
 
-void TransientPropagate::copy_from_selection() {
+void PhaseResetPropagate::copy_from_selection() {
     const auto& mv = app.warpmarkers.markers();
-    const auto& tv = app.transientmarkers.markers();
+    const auto& tv = app.phase_reset_markers.markers();
     if (app.selected_markers.size() != 2) return;
 
     auto it = app.selected_markers.begin();
@@ -90,11 +90,11 @@ void TransientPropagate::copy_from_selection() {
         clipboard_blocks.push_back(std::move(cb));
     }
 
-    app.transient_clipboard.set(std::move(clipboard_blocks));
+    app.phase_reset_clipboard.set(std::move(clipboard_blocks));
 }
 
-void TransientPropagate::open_paste_confirmation() {
-    if (app.transient_clipboard.empty()) return;
+void PhaseResetPropagate::open_paste_confirmation() {
+    if (app.phase_reset_clipboard.empty()) return;
     if (app.selected_markers.size() != 1) return;
     const int anchor = *app.selected_markers.begin();
     const int n = static_cast<int>(app.warpmarkers.markers().size());
@@ -103,18 +103,18 @@ void TransientPropagate::open_paste_confirmation() {
     app.pending_paste_anchor   = anchor;
     app.prompt.active          = true;
     app.prompt.text            =
-        "Paste transients into matching blocks? "
-        "Existing transients in matched ranges will be cleared.";
+        "Paste phase_resets into matching blocks? "
+        "Existing phase_resets in matched ranges will be cleared.";
     app.prompt.response_keys   = {'y', '\x1b'};
     app.prompt.response_labels = {"[Y]es", "[Esc]"};
     app.prompt.trigger         = DialogTrigger::PASTE_CONFIRM;
     viewport.invalidate_all();
 }
 
-void TransientPropagate::paste_apply() {
+void PhaseResetPropagate::paste_apply() {
     const int anchor = app.pending_paste_anchor;
     app.pending_paste_anchor = -1;
-    if (app.transient_clipboard.empty()) return;
+    if (app.phase_reset_clipboard.empty()) return;
     const auto& mv = app.warpmarkers.markers();
     const int n = static_cast<int>(mv.size());
     if (anchor < 0 || anchor >= n) return;
@@ -122,7 +122,7 @@ void TransientPropagate::paste_apply() {
     std::vector<DestBlock> dest_blocks =
         walk_named_blocks(mv, anchor, n);
 
-    const auto& clip_blocks = app.transient_clipboard.blocks();
+    const auto& clip_blocks = app.phase_reset_clipboard.blocks();
 
     // Lockstep walk; stop on the first name divergence.
     const size_t pair_count = std::min(clip_blocks.size(), dest_blocks.size());
@@ -132,18 +132,18 @@ void TransientPropagate::paste_apply() {
     }
     if (matched == 0) return;
 
-    std::vector<GuiTransientMarker> pre_state =
-        app.transientmarkers.markers();
+    std::vector<GuiPhaseResetMarker> pre_state =
+        app.phase_reset_markers.markers();
     const int hint_last = app.last_selected_marker;
 
-    auto& out = app.transientmarkers.markers_mut();
+    auto& out = app.phase_reset_markers.markers_mut();
 
-    // Per-block clear of destination transients inside [start, end).
+    // Per-block clear of destination phase resets inside [start, end).
     for (size_t i = 0; i < matched; ++i) {
         const double start = dest_blocks[i].start;
         const double end   = dest_blocks[i].end;
         out.erase(std::remove_if(out.begin(), out.end(),
-            [start, end](const GuiTransientMarker& m) {
+            [start, end](const GuiPhaseResetMarker& m) {
                 return m.time_seconds >= start && m.time_seconds < end;
             }), out.end());
     }
@@ -156,14 +156,14 @@ void TransientPropagate::paste_apply() {
         const double dst_dur   = dest_blocks[i].end - dst_start;
         if (dst_dur <= 0.0) continue;
         for (const auto& p : clip_blocks[i].placements) {
-            GuiTransientMarker nm;
+            GuiPhaseResetMarker nm;
             nm.time_seconds = dst_start + p.fractional_position * dst_dur;
             nm.disabled     = p.disabled;
-            app.transientmarkers.insert_marker(std::move(nm));
+            app.phase_reset_markers.insert_marker(std::move(nm));
         }
     }
 
-    undo.push_undo_transient(std::move(pre_state), OpKind::Other, hint_last);
+    undo.push_undo_phase_reset(std::move(pre_state), OpKind::Other, hint_last);
     undo.recompute_dirty();
     viewport.invalidate_waveform_area();
     viewport.invalidate_timestamp_area();

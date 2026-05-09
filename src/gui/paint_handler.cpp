@@ -205,7 +205,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
 
         // In render-view the audio buffer is already render-domain
         // (trim already baked in at render time, b=/e= flags stripped
-        // from the .renderwarpmarkers/.rendertransientmarkers
+        // from the .renderwarpmarkers/.renderphaseresetmarkers
         // sidecars). The
         // source's authoring markers carry b=/e= in source-frame
         // coordinates that don't map onto the rendered audio's
@@ -326,12 +326,12 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                 // time_seconds (engine-written), so render_markers'
                 // usual ordering assumption holds. Selection is
                 // visual-only — it does not flow into commit.
-                // Brief F Section 3: when sub-mode is 'T', paint the
-                // render's transient list using the transient renderer
-                // (matches source-view's transient appearance).
-                if (app.active_mode == 'T') {
-                    render_transient_markers(
-                        cr, area, app.render_view_transients,
+                // Brief F Section 3: when sub-mode is 'P', paint the
+                // render's phase reset list using the phase reset renderer
+                // (matches source-view's phase reset appearance).
+                if (app.active_mode == 'P') {
+                    render_phase_reset_markers(
+                        cr, area, app.render_view_phase_resets,
                         vp_start, vp_end, sr,
                         trim_struct);
                 } else {
@@ -339,9 +339,9 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                                    vp_start, vp_end, sr,
                                    trim_struct);
                 }
-            } else if (app.active_mode == 'T') {
-                render_transient_markers(
-                    cr, area, app.transientmarkers.markers(),
+            } else if (app.active_mode == 'P') {
+                render_phase_reset_markers(
+                    cr, area, app.phase_reset_markers.markers(),
                     vp_start, vp_end, sr,
                     trim_struct);
             } else {
@@ -365,10 +365,10 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                 // dark-blue otherwise). Iteration popups are
                 // suppressed by the iteration_mode_enabled toggle
                 // being forced false on entry to render-view.
-                // Sub-mode 'T' (transients): paint via
-                // render_transient_flags from app.render_view_transients
-                // (no popups; transient markers are not popup-eligible).
-                if (app.active_mode != 'T') {
+                // Sub-mode 'P' (phase resets): paint via
+                // render_phase_reset_flags from app.render_view_phase_resets
+                // (no popups; phase reset markers are not popup-eligible).
+                if (app.active_mode != 'P') {
                 render_flags(cr, top_strip, app.render_view_markers,
                              vp_start, vp_end, sr,
                              kFlagFontSize,
@@ -430,16 +430,16 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                     }
                 }
                 } else {
-                    render_transient_flags(
-                        cr, top_strip, app.render_view_transients,
+                    render_phase_reset_flags(
+                        cr, top_strip, app.render_view_phase_resets,
                         vp_start, vp_end, sr,
                         kFlagFontSize,
                         app.selected_markers,
                         trim_struct);
                 }
-            } else if (app.active_mode == 'T') {
-                render_transient_flags(
-                    cr, top_strip, app.transientmarkers.markers(),
+            } else if (app.active_mode == 'P') {
+                render_phase_reset_flags(
+                    cr, top_strip, app.phase_reset_markers.markers(),
                     vp_start, vp_end, sr,
                     kFlagFontSize,
                     app.selected_markers,

@@ -12,8 +12,8 @@
 #include "tab_mode.h"
 #include "text_display.h"
 #include "text_editor.h"
-#include "transientmarkers.h"
-#include "transientmarkers_ops.h"
+#include "phase_reset_markers.h"
+#include "phase_reset_markers_ops.h"
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers_ops.h"
@@ -232,8 +232,8 @@ double current_samples_per_pixel(const AppState& a, const GuiAudio& audio) {
         a.zoom_level, area.w, audio.total_frames(), audio.sample_rate());
 }
 
-// Applies a position delta (in seconds) to the transient's time_seconds.
-void apply_transient_position_delta(GuiTransientMarker& m, double delta_seconds) {
+// Applies a position delta (in seconds) to the phase reset's time_seconds.
+void apply_phase_reset_position_delta(GuiPhaseResetMarker& m, double delta_seconds) {
     if (delta_seconds == 0.0) return;
     m.time_seconds += delta_seconds;
 }
@@ -406,10 +406,10 @@ bool parse_settings_file(const std::string& path, ParsedSettings& out) {
             else if (lower == "false") { out.has_follow = true; out.follow = false; }
             // Any other value: silent-skip; default (true) applies at the call site.
         } else if (key == "active_mode") {
-            // Case-sensitive "W" / "T" — these literals cross the engine
+            // Case-sensitive "W" / "P" — these literals cross the engine
             // boundary. Anything else silent-skips like the `follow` parser.
             if (value == "W") { out.has_active_mode = true; out.active_mode = 'W'; }
-            else if (value == "T") { out.has_active_mode = true; out.active_mode = 'T'; }
+            else if (value == "P") { out.has_active_mode = true; out.active_mode = 'P'; }
         } else if (key == "playback_speed") {
             float v;
             if (parse_float_full(value, v) && v > 0.0f) {
@@ -580,7 +580,7 @@ int main(int argc, char** argv) {
     std::function<void()> clear_hover_popup;
     std::function<void()> stop_playback_if_playing;
 
-    // X.7.4: forward-declared so the Transients struct can capture
+    // X.7.4: forward-declared so the Phase resets struct can capture
     // references. Bodies are assigned later at their original definition
     // sites — same pattern as clear_hover_popup / stop_playback_if_playing.
     std::function<FlagLoc(bool, int)> find_flag;
@@ -606,7 +606,7 @@ int main(int argc, char** argv) {
     Selection selection(app, audio, viewport, playback);
     Undo undo(app, viewport, selection,
               clear_hover_popup, stop_playback_if_playing);
-    GuiTransientMarkersOps transients(app, audio, viewport, selection, undo,
+    GuiPhaseResetMarkersOps phase_resets(app, audio, viewport, selection, undo,
                                       clear_hover_popup, stop_playback_if_playing,
                                       find_flag);
     GuiWarpMarkersOps warpops(app, audio, gui, viewport, selection, undo,
@@ -619,12 +619,12 @@ int main(int argc, char** argv) {
     GuiTabMode tab_mode(app, audio, viewport, selection,
                         clear_hover_popup, stop_playback_if_playing);
     GuiPaintHandler paint_handler(app, audio, playback, wf_cache, gui);
-    TransientPropagate transient_propagate(app, viewport, undo);
+    PhaseResetPropagate phase_reset_propagate(app, viewport, undo);
     GuiInputHandler input_handler(app, audio, gui, playback,
                                   viewport, selection, undo,
-                                  warpops, transients, flag_editor,
+                                  warpops, phase_resets, flag_editor,
                                   render_view, tab_mode,
-                                  transient_propagate,
+                                  phase_reset_propagate,
                                   clear_hover_popup, stop_playback_if_playing,
                                   save_markers, request_close_or_revert,
                                   prompt_activate_response, toggle_playback,
@@ -668,7 +668,7 @@ int main(int argc, char** argv) {
     // X.7.3: the undo-cluster lambdas have been hoisted onto the Undo struct
     // in undo.{cpp,h}. The lambdas below are one-line forwarders so callsites
     // elsewhere in main() don't need to change. apply_post_restore_rules_warp
-    // and apply_post_restore_rules_transient have no callers outside the
+    // and apply_post_restore_rules_phase_reset have no callers outside the
     // undo cluster, so their forwarders are dropped — they remain public on
     // the Undo struct for consistency.
 
@@ -733,20 +733,20 @@ int main(int argc, char** argv) {
             return false;
         }
 
-        // Transients sibling write. Empty list deletes the on-disk file so
-        // a project never carries a stale empty .transientmarkers.
-        if (!app.transientmarkers_path.empty()) {
-            if (app.transientmarkers.markers().empty()) {
-                if (!app.transientmarkers.delete_file(app.transientmarkers_path)) {
+        // Phase resets sibling write. Empty list deletes the on-disk file so
+        // a project never carries a stale empty .phaseresetmarkers.
+        if (!app.phase_reset_markers_path.empty()) {
+            if (app.phase_reset_markers.markers().empty()) {
+                if (!app.phase_reset_markers.delete_file(app.phase_reset_markers_path)) {
                     std::fprintf(stderr,
                         "warptempo_gui: failed to delete: %s\n",
-                        app.transientmarkers_path.c_str());
+                        app.phase_reset_markers_path.c_str());
                 }
             } else {
-                if (!app.transientmarkers.save(app.transientmarkers_path)) {
+                if (!app.phase_reset_markers.save(app.phase_reset_markers_path)) {
                     std::fprintf(stderr,
-                        "warptempo_gui: transient save failed: %s\n",
-                        app.transientmarkers_path.c_str());
+                        "warptempo_gui: phase_reset save failed: %s\n",
+                        app.phase_reset_markers_path.c_str());
                     return false;
                 }
             }
@@ -826,7 +826,7 @@ int main(int argc, char** argv) {
         app.playback_speed        = 1.0f;
 
         app.warpmarkers.clear();
-        app.transientmarkers.clear();
+        app.phase_reset_markers.clear();
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
@@ -836,11 +836,11 @@ int main(int argc, char** argv) {
         app.history.reset();
         app.dirty              = false;
         app.warp_dirty         = false;
-        app.transient_dirty    = false;
+        app.phase_reset_dirty    = false;
         app.first_save_pending = true;
 
         app.warpmarkers_path.clear();
-        app.transientmarkers_path.clear();
+        app.phase_reset_markers_path.clear();
         app.settings_path.clear();
         app.source_audio_path.clear();
         app.pending_drop_path.clear();
@@ -897,7 +897,7 @@ int main(int argc, char** argv) {
             if (k == 'y') {
                 app.prompt.active = false;
                 invalidate_all();
-                transient_propagate.paste_apply();
+                phase_reset_propagate.paste_apply();
                 return;
             }
             if (k == '\x1b') {
@@ -1153,10 +1153,10 @@ int main(int argc, char** argv) {
         const std::string ext = apath.extension().string();
         const std::string ext_no_dot = ext.empty() ? "" : ext.substr(1);
         const std::filesystem::path wm_path  = parent / (stem + ".warpmarkers");
-        const std::filesystem::path tm_path  = parent / (stem + ".transientmarkers");
+        const std::filesystem::path tm_path  = parent / (stem + ".phaseresetmarkers");
         const std::filesystem::path set_path = parent / (stem + ".settings");
         app.warpmarkers_path      = wm_path.string();
-        app.transientmarkers_path = tm_path.string();
+        app.phase_reset_markers_path = tm_path.string();
         app.settings_path         = set_path.string();
         app.source_audio_path     = path;
 
@@ -1168,7 +1168,7 @@ int main(int argc, char** argv) {
         // error to stderr and leave app.warpmarkers empty. The GUI still works
         // as a waveform viewer.
         app.warpmarkers.clear();
-        app.transientmarkers.clear();
+        app.phase_reset_markers.clear();
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         app.active_mode    = 'W';
@@ -1179,7 +1179,7 @@ int main(int argc, char** argv) {
         app.history.reset();
         app.dirty              = false;
         app.warp_dirty         = false;
-        app.transient_dirty    = false;
+        app.phase_reset_dirty    = false;
         app.first_save_pending = true;
         const bool markers_ok = app.warpmarkers.load(wm_path.string());
         if (!markers_ok) {
@@ -1203,13 +1203,13 @@ int main(int argc, char** argv) {
                          wm_path.string().c_str());
         }
 
-        // Load .transientmarkers if present. Missing file is fine — the
-        // transient list is just empty. Parse errors are logged to stderr;
+        // Load .phaseresetmarkers if present. Missing file is fine — the
+        // phase reset list is just empty. Parse errors are logged to stderr;
         // the warp side stays usable regardless.
         if (std::filesystem::exists(tm_path)) {
-            const bool tr_ok = app.transientmarkers.load(tm_path.string());
+            const bool tr_ok = app.phase_reset_markers.load(tm_path.string());
             if (!tr_ok) {
-                for (const auto& err : app.transientmarkers.errors()) {
+                for (const auto& err : app.phase_reset_markers.errors()) {
                     if (err.line_number > 0) {
                         std::fprintf(stderr,
                                      "warptempo_gui: %s:%d: %s\n",
@@ -1224,8 +1224,8 @@ int main(int argc, char** argv) {
                 }
             } else {
                 std::fprintf(stderr,
-                             "[warptempo_gui] parsed %zu transients from %s\n",
-                             app.transientmarkers.markers().size(),
+                             "[warptempo_gui] parsed %zu phase_resets from %s\n",
+                             app.phase_reset_markers.markers().size(),
                              tm_path.string().c_str());
             }
         }

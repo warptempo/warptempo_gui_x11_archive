@@ -49,28 +49,28 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
     int best_dist = kMarkerHitHalfPx + 1;
     const bool rv = app.render_view_enabled;
     // Brief F Section 3: in render-view, the visible sub-view's
-    // list drives hit-testing. 'T' reads transient time_seconds and
+    // list drives hit-testing. 'P' reads phase reset time_seconds and
     // converts to source frames via the source sample rate
-    // (matching source-view's transient branch).
-    const bool rv_trans = rv && app.active_mode == 'T';
+    // (matching source-view's phase reset branch).
+    const bool rv_trans = rv && app.active_mode == 'P';
     const int n =
         rv_trans
-            ? static_cast<int>(app.render_view_transients.size())
+            ? static_cast<int>(app.render_view_phase_resets.size())
             : rv
                 ? static_cast<int>(app.render_view_markers.size())
-                : (app.active_mode == 'T')
-                    ? static_cast<int>(app.transientmarkers.markers().size())
+                : (app.active_mode == 'P')
+                    ? static_cast<int>(app.phase_reset_markers.markers().size())
                     : static_cast<int>(app.warpmarkers.markers().size());
     for (int i = 0; i < n; ++i) {
         double ms;
         if (rv_trans) {
-            ms = app.render_view_transients[i].time_seconds *
+            ms = app.render_view_phase_resets[i].time_seconds *
                  static_cast<double>(sr);
         } else if (rv) {
             ms = app.render_view_markers[i].time_seconds *
                  static_cast<double>(sr);
-        } else if (app.active_mode == 'T') {
-            ms = app.transientmarkers.markers()[i].time_seconds *
+        } else if (app.active_mode == 'P') {
+            ms = app.phase_reset_markers.markers()[i].time_seconds *
                  static_cast<double>(sr);
         } else {
             ms = app.warpmarkers.markers()[i].time_seconds *
@@ -90,11 +90,11 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
 
 int hit_test_flag(const AppState& app, const GuiAudio& audio,
                   int mouse_x, int mouse_y) {
-    // Brief F Section 3: render-view's transient sub-view paints no
+    // Brief F Section 3: render-view's phase reset sub-view paints no
     // flags; short-circuit to no-hit so click and hover paths see a
     // bare top strip.
     if (app.render_view_enabled &&
-        app.active_mode == 'T') {
+        app.active_mode == 'P') {
         return -1;
     }
     const GuiRect area = waveform_area(app);
@@ -111,9 +111,9 @@ int hit_test_flag(const AppState& app, const GuiAudio& audio,
         rects = compute_flag_hit_rects(
             scratch_cr, top, app.render_view_markers,
             vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
-    } else if (app.active_mode == 'T') {
-        rects = compute_transient_flag_hit_rects(
-            scratch_cr, top, app.transientmarkers.markers(),
+    } else if (app.active_mode == 'P') {
+        rects = compute_phase_reset_flag_hit_rects(
+            scratch_cr, top, app.phase_reset_markers.markers(),
             vp_start, vp_end, audio.sample_rate(), kFlagFontSize);
     } else {
         rects = compute_flag_hit_rects(

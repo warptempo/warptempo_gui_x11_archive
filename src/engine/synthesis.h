@@ -15,7 +15,7 @@ public:
     // non-null, it is filled with M[k]*exp(j*theta[k]) per (frame, channel, bin)
     // as a flat array of size num_frames * channels * (N/2+1).
     //
-    // When a transient marker's synth_frame is encountered, theta_prev is reset
+    // When a phase reset marker's synth_frame is encountered, theta_prev is reset
     // from the current phi_prev so that synthesis phase realigns with the
     // source at that frame.
     //

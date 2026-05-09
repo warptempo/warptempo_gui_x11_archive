@@ -35,15 +35,15 @@ struct Undo {
     void recompute_dirty();
     void push_undo(std::vector<GuiWarpMarker> pre_state, OpKind op_kind,
                    int hint_last);
-    void push_undo_transient(std::vector<GuiTransientMarker> pre_state,
+    void push_undo_phase_reset(std::vector<GuiPhaseResetMarker> pre_state,
                              OpKind op_kind, int hint_last);
     void push_undo_both(std::vector<GuiWarpMarker> warp_pre,
-                        std::vector<GuiTransientMarker> trans_pre,
+                        std::vector<GuiPhaseResetMarker> trans_pre,
                         char op_mode, OpKind op_kind, int hint_last);
     void apply_post_restore_rules_warp(const UndoEntry& entry,
                                        const std::vector<GuiWarpMarker>& before);
-    void apply_post_restore_rules_transient(const UndoEntry& entry,
-                                            const std::vector<GuiTransientMarker>& before);
+    void apply_post_restore_rules_phase_reset(const UndoEntry& entry,
+                                            const std::vector<GuiPhaseResetMarker>& before);
     void do_undo();
     void do_redo();
 };

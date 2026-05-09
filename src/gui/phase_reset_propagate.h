@@ -4,18 +4,18 @@
 #include "undo.h"
 #include "viewport.h"
 
-// Copy/paste operations for the W-mode transient-propagate feature.
+// Copy/paste operations for the W-mode phase reset propagate feature.
 // Both methods operate on warp-marker selection in W-mode and mutate
-// the transient list as a side effect (paste only). Mode/selection-
+// the phase reset list as a side effect (paste only). Mode/selection-
 // count gating is the caller's responsibility, except for the
 // empty-clipboard silent no-op which lives inside paste_apply.
 
-struct TransientPropagate {
+struct PhaseResetPropagate {
     AppState& app;
     Viewport& viewport;
     Undo&     undo;
 
-    TransientPropagate(AppState& app_, Viewport& viewport_, Undo& undo_)
+    PhaseResetPropagate(AppState& app_, Viewport& viewport_, Undo& undo_)
         : app(app_), viewport(viewport_), undo(undo_) {}
 
     // Ctrl+T copy. Caller has already verified W-mode + exactly two

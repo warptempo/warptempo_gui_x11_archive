@@ -725,20 +725,20 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     return out;
 }
 
-// ---------- Transient-marker rendering (chunk S.2.2) ----------
+// ---------- Phase reset marker rendering (chunk S.2.2) ----------
 
 namespace {
 
-std::string transient_flag_text(const GuiTransientMarker& m) {
+std::string phase_reset_flag_text(const GuiPhaseResetMarker& m) {
     (void)m;
-    return "t";
+    return "p";
 }
 
 template <typename Emit>
-void iterate_visible_transient_flags(
+void iterate_visible_phase_reset_flags(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransientMarker>& transients,
+    const std::vector<GuiPhaseResetMarker>& phase_resets,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -767,8 +767,8 @@ void iterate_visible_transient_flags(
 
     double rightmost_right_edge = -1e18;
 
-    for (size_t i = 0; i < transients.size(); ++i) {
-        const auto& m = transients[i];
+    for (size_t i = 0; i < phase_resets.size(); ++i) {
+        const auto& m = phase_resets[i];
         const double ms = m.time_seconds * sr;
         if (ms < static_cast<double>(viewport_start_sample)) continue;
         if (ms >= static_cast<double>(viewport_end_sample)) continue;
@@ -783,7 +783,7 @@ void iterate_visible_transient_flags(
             continue;
         }
 
-        const std::string text = transient_flag_text(m);
+        const std::string text = phase_reset_flag_text(m);
         if (text.empty()) continue;
 
         cairo_text_extents_t ext;
@@ -797,9 +797,9 @@ void iterate_visible_transient_flags(
 
 } // namespace
 
-void render_transient_markers(cairo_t* cr,
+void render_phase_reset_markers(cairo_t* cr,
                               GuiRect waveform_area,
-                              const std::vector<GuiTransientMarker>& transients,
+                              const std::vector<GuiPhaseResetMarker>& phase_resets,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
@@ -823,14 +823,14 @@ void render_transient_markers(cairo_t* cr,
     cairo_set_line_width(cr, 1.0);
 
     // Two passes — one path per color — split by in-trim vs out-of-trim.
-    // Disabled transients are skipped entirely (no stem); selection has no
+    // Disabled phase resets are skipped entirely (no stem); selection has no
     // effect on stems under the brief H palette rules.
     for (int pass = 0; pass < 2; pass++) {
         const bool out_of_trim_pass = (pass == 1);
         const GuiColor c = out_of_trim_pass ? dim(kMarker) : kMarker;
         cairo_set_source_rgb(cr, c.r, c.g, c.b);
-        for (size_t i = 0; i < transients.size(); ++i) {
-            const auto& m = transients[i];
+        for (size_t i = 0; i < phase_resets.size(); ++i) {
+            const auto& m = phase_resets[i];
             if (m.disabled) continue;
             const double ms = m.time_seconds * sr;
             const int64_t pos = static_cast<int64_t>(std::nearbyint(ms));
@@ -850,9 +850,9 @@ void render_transient_markers(cairo_t* cr,
     cairo_restore(cr);
 }
 
-void render_transient_flags(cairo_t* cr,
+void render_phase_reset_flags(cairo_t* cr,
                             GuiRect top_strip_area,
-                            const std::vector<GuiTransientMarker>& transients,
+                            const std::vector<GuiPhaseResetMarker>& phase_resets,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
@@ -875,20 +875,20 @@ void render_transient_flags(cairo_t* cr,
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
 
     // Brief Y.5: collect-then-reverse-paint, mirroring render_flags.
-    // Transient flags have no editor and thus no widening-text case, so
+    // Phase reset flags have no editor and thus no widening-text case, so
     // visually this is a no-op today (all bg-fills are kBackground; all
     // text rects are non-overlapping). Structurally it keeps every flag /
     // popup paint loop on the same leftmost-wins discipline so future
     // edits don't have to reason about which loop is which.
-    struct TransientEmit {
+    struct PhaseResetEmit {
         int                  i;
         double               text_left;
         double               baseline_y;
         std::string          text;
         cairo_text_extents_t ext;
     };
-    std::vector<TransientEmit> emits;
-    iterate_visible_transient_flags(cr, top_strip_area, transients,
+    std::vector<PhaseResetEmit> emits;
+    iterate_visible_phase_reset_flags(cr, top_strip_area, phase_resets,
                                     viewport_start_sample, viewport_end_sample,
                                     sample_rate,
         [&](int i, double text_left, double baseline_y,
@@ -897,14 +897,14 @@ void render_transient_flags(cairo_t* cr,
         });
 
     const double sr = static_cast<double>(sample_rate);
-    auto paint_one = [&](const TransientEmit& e) {
+    auto paint_one = [&](const PhaseResetEmit& e) {
         const bool is_selected = selected_set.count(e.i) > 0;
         const bool out_of_trim =
             marker_out_of_trim(static_cast<int64_t>(std::nearbyint(
-                transients[e.i].time_seconds * sr)), trim);
+                phase_resets[e.i].time_seconds * sr)), trim);
 
         // Brief Y.4 sub-bug A: opaque canvas-bg fill under the text.
-        // Transient flags have no editor (no growing pending text),
+        // Phase reset flags have no editor (no growing pending text),
         // but the fill is added for symmetry with warp flags — in the
         // static states it sits under identical-color canvas pixels
         // and is visually invisible.
@@ -949,10 +949,10 @@ void render_transient_flags(cairo_t* cr,
     cairo_restore(cr);
 }
 
-std::vector<FlagHitRect> compute_transient_flag_hit_rects(
+std::vector<FlagHitRect> compute_phase_reset_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransientMarker>& transients,
+    const std::vector<GuiPhaseResetMarker>& phase_resets,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,
@@ -972,7 +972,7 @@ std::vector<FlagHitRect> compute_transient_flag_hit_rects(
     cairo_text_extents(cr, "1.23*1.2345:a.aa", &uniform_ext);
     const double hl_pad = kFlagInnerPadPx;
 
-    iterate_visible_transient_flags(cr, top_strip_area, transients,
+    iterate_visible_phase_reset_flags(cr, top_strip_area, phase_resets,
                                     viewport_start_sample, viewport_end_sample,
                                     sample_rate,
         [&](int i, double text_left, double baseline_y,

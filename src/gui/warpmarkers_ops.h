@@ -14,7 +14,7 @@ class GuiX11;
 // X.7.5a: warp-authoring cluster, extracted from main.cpp's inline
 // lambdas. Covers the basic authoring lambdas (drop / delete / toggle /
 // adjust / clear), the drag cluster (begin / apply / commit, mode-aware
-// across warp and transient lists), and the selection-shift cluster
+// across warp and phase reset lists), and the selection-shift cluster
 // (nudge / jump-to-playhead and their shared bounds helper). The struct
 // holds references to the long-lived state and the std::function lambdas
 // the methods read and write; bodies are byte-identical to the originals
@@ -22,9 +22,9 @@ class GuiX11;
 // rewriting documented in warpmarkers_ops.cpp.
 //
 // The drag methods stay mode-aware: warp drag is the dominant case and
-// transient drag was bolted on later. apply_drag_motion's transient
-// branch reaches the free-function apply_transient_position_delta
-// (declared in transientmarkers_ops.h). The GuiX11 reference is for
+// phase reset drag was bolted on later. apply_drag_motion's phase reset
+// branch reaches the free-function apply_phase_reset_position_delta
+// (declared in phase_reset_markers_ops.h). The GuiX11 reference is for
 // apply_drag_motion's gui.invalidate_region calls during drag.
 struct GuiWarpMarkersOps {
     AppState&                                     app;

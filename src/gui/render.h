@@ -1,6 +1,6 @@
 #pragma once
 #include "warpmarkers.h"
-#include "transientmarkers.h"
+#include "phase_reset_markers.h"
 
 #include <cairo/cairo.h>
 #include <cmath>
@@ -122,7 +122,7 @@ inline void render_flag_text_bg_fill(cairo_t* cr,
 
 // Out-of-trim predicate. Caller computes source-frame position from its
 // own native field (time_seconds*sample_rate for both GuiWarpMarker and
-// GuiTransientMarker) and passes it through here.
+// GuiPhaseResetMarker) and passes it through here.
 // The trim is treated as the closed interval [begin, end] for the dim-
 // vs-active flag-color decision, so a marker landing exactly on the end
 // boundary (the e=-marker itself) renders active, not dimmed. Other
@@ -281,29 +281,29 @@ std::vector<FlagHitRect> compute_flag_hit_rects(
     int sample_rate,
     double font_size);
 
-// Transient-marker analogues (chunk S.2.2). Same pixel layout as the warp
-// versions; the visual differences are which list is drawn (transients
+// Phase reset marker analogues (chunk S.2.2). Same pixel layout as the warp
+// versions; the visual differences are which list is drawn (phase resets
 // instead of warp markers) and the supplied color set. `disabled` is taken
-// directly from each transient (no label-cascade like warp markers).
-void render_transient_markers(cairo_t* cr,
+// directly from each phase reset (no label-cascade like warp markers).
+void render_phase_reset_markers(cairo_t* cr,
                               GuiRect waveform_area,
-                              const std::vector<GuiTransientMarker>& transients,
+                              const std::vector<GuiPhaseResetMarker>& phase_resets,
                               long long viewport_start_sample,
                               long long viewport_end_sample,
                               int sample_rate,
                               const TrimRange& trim);
 
-// Flag text for transients is `[b=|e=]<status>` where status is `I`
+// Flag text for phase resets is `[b=|e=]<status>` where status is `I`
 // (inserted), `D` (detected), or `D*` (detected with user displacement).
 //
-// Brief H two-state model (no flag editor exists for transients):
+// Brief H two-state model (no flag editor exists for phase resets):
 //   1. Not selected: text in `kText`, no background fill.
 //   2. Selected: background fill in `kMarker`, text in `kText`.
 // Markers whose time_seconds (converted to source frames) lies outside
 // `trim` wrap every color in `dim()` uniformly.
-void render_transient_flags(cairo_t* cr,
+void render_phase_reset_flags(cairo_t* cr,
                             GuiRect top_strip_area,
-                            const std::vector<GuiTransientMarker>& transients,
+                            const std::vector<GuiPhaseResetMarker>& phase_resets,
                             long long viewport_start_sample,
                             long long viewport_end_sample,
                             int sample_rate,
@@ -311,10 +311,10 @@ void render_transient_flags(cairo_t* cr,
                             const std::set<int>& selected_set,
                             const TrimRange& trim);
 
-std::vector<FlagHitRect> compute_transient_flag_hit_rects(
+std::vector<FlagHitRect> compute_phase_reset_flag_hit_rects(
     cairo_t* cr,
     GuiRect top_strip_area,
-    const std::vector<GuiTransientMarker>& transients,
+    const std::vector<GuiPhaseResetMarker>& phase_resets,
     long long viewport_start_sample,
     long long viewport_end_sample,
     int sample_rate,

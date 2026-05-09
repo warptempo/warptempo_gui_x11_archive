@@ -26,15 +26,15 @@ add_executable(warptempo_gui
     src/gui/warpmarkers.cpp
     src/gui/text_editor.cpp
     src/gui/text_display.cpp
-    src/gui/transientmarkers.cpp
+    src/gui/phase_reset_markers.cpp
     src/gui/playback.cpp
     src/gui/render_pipeline.cpp
     src/gui/timemap.cpp
     src/gui/viewport.cpp
     src/gui/selection.cpp
     src/gui/undo.cpp
-    src/gui/transientmarkers_ops.cpp
-    src/gui/transient_propagate.cpp
+    src/gui/phase_reset_markers_ops.cpp
+    src/gui/phase_reset_propagate.cpp
     src/gui/warpmarkers_ops.cpp
     src/gui/flag_editor.cpp
     src/gui/render_view.cpp

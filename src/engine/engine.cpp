@@ -117,21 +117,21 @@ bool run_warptempo_engine(const EngineParams& p,
     };
 
     auto t_p2_0 = std::chrono::steady_clock::now();
-    audio_stft.transient_markers.clear();
-    audio_stft.transient_markers.reserve(p.transient_frames.size());
+    audio_stft.phase_reset_markers.clear();
+    audio_stft.phase_reset_markers.reserve(p.phase_reset_frames.size());
     const auto& fm = audio_stft.frame_map;
-    for (int64_t F : p.transient_frames) {
+    for (int64_t F : p.phase_reset_frames) {
         auto it = std::upper_bound(fm.begin(), fm.end(), F);
         if (it == fm.begin()) continue;
         --it;
         size_t s = static_cast<size_t>(it - fm.begin());
         if (s >= fm.size()) continue;
-        audio_stft.transient_markers.push_back(
+        audio_stft.phase_reset_markers.push_back(
             {static_cast<int>(s), F});
     }
-    std::cout << "[Pass 1/3] Transient placement............... "
-              << audio_stft.transient_markers.size()
-              << " transients\n";
+    std::cout << "[Pass 1/3] Phase reset placement............. "
+              << audio_stft.phase_reset_markers.size()
+              << " phase resets\n";
     auto t_p2_1 = std::chrono::steady_clock::now();
     std::cout << "  (" << pass_ms(t_p2_0, t_p2_1) << " ms)\n";
 

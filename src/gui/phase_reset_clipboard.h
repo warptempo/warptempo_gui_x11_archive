@@ -5,11 +5,11 @@
 #include <string>
 #include <vector>
 
-// Session-only clipboard for the W-mode transient-propagate feature
+// Session-only clipboard for the W-mode phase reset propagate feature
 // (Ctrl+T copy / Ctrl+Alt+T paste). A copy captures a sequence of named
-// warp blocks and the fractional positions of any transients that fall
+// warp blocks and the fractional positions of any phase resets that fall
 // inside them. Paste walks a destination anchor's named-block sequence
-// in lockstep with the clipboard, materializing transients at the
+// in lockstep with the clipboard, materializing phase resets at the
 // destination's actual durations. Single-slot, in-memory only — never
 // persisted to any sidecar, cleared on app exit.
 
@@ -23,7 +23,7 @@ struct ClipboardBlock {
     std::vector<ClipboardPlacement> placements;
 };
 
-class TransientClipboard {
+class PhaseResetClipboard {
 public:
     void set(std::vector<ClipboardBlock> blocks) {
         blocks_ = std::move(blocks);

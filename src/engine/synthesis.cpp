@@ -25,7 +25,7 @@ void Synthesis::synthesize_full(
     std::vector<int> peaks;
     peaks.reserve(N / 8);
 
-    int transient_cursor = 0;
+    int phase_reset_cursor = 0;
 
     std::vector<std::vector<double>> ola_out(channels, std::vector<double>(N, 0.0));
 
@@ -71,12 +71,12 @@ void Synthesis::synthesize_full(
                 ola_out[ch][n] += (stft.ifft_out[n] * inv_N) * stft.synth_window[n];
         }
 
-        while (transient_cursor < static_cast<int>(stft.transient_markers.size()) &&
-               stft.transient_markers[transient_cursor].synth_frame == frame_idx) {
+        while (phase_reset_cursor < static_cast<int>(stft.phase_reset_markers.size()) &&
+               stft.phase_reset_markers[phase_reset_cursor].synth_frame == frame_idx) {
             for (int c = 0; c < channels; ++c)
                 for (int k = 0; k < K; ++k)
                     stft.theta_prev[c][k] = stft.phi_prev[c][k];
-            ++transient_cursor;
+            ++phase_reset_cursor;
         }
 
         int write_offset = 0, write_len = R_s;

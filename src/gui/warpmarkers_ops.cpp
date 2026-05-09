@@ -2,7 +2,7 @@
 
 #include "audio.h"
 #include "render.h"
-#include "transientmarkers_ops.h"
+#include "phase_reset_markers_ops.h"
 #include "x11.h"
 
 #include <algorithm>
@@ -18,7 +18,7 @@
 // X.7.5a: warp-authoring cluster. Method bodies are byte-identical to
 // the lambdas they replaced in main.cpp, with these mechanical rewrites:
 //
-//   push_undo, push_undo_transient,
+//   push_undo, push_undo_phase_reset,
 //   push_undo_both                 → undo.push_undo*
 //   recompute_dirty                → undo.recompute_dirty
 //   sync_playhead_to_last_selected → selection.sync_playhead_to_last_selected
@@ -29,8 +29,8 @@
 //   stop_playback_if_playing,
 //   clear_hover_popup,
 //   find_flag                      → std::function refs (called as f())
-//   apply_transient_position_delta → free function (declared in
-//                                    transientmarkers_ops.h)
+//   apply_phase_reset_position_delta → free function (declared in
+//                                    phase_reset_markers_ops.h)
 //   resolve_inherited_tempo,
 //   resolve_inherited_tempo_scale,
 //   current_samples_per_pixel,
@@ -284,7 +284,7 @@ void GuiWarpMarkersOps::toggle_disabled() {
 // auto-swaps with the opposite flag if the resulting frame ordering
 // would invert the trim region. Equal-frame swap is refused (would
 // collapse trim to zero width). Trim flags live exclusively on warp
-// markers — transient markers cannot carry them.
+// markers — phase reset markers cannot carry them.
 void GuiWarpMarkersOps::toggle_begin_time() {
     if (app.selected_markers.size() != 1) return;
     const int idx = app.last_selected_marker;
@@ -297,7 +297,7 @@ void GuiWarpMarkersOps::toggle_begin_time() {
         mv[idx].time_seconds * static_cast<double>(sr)));
 
     std::vector<GuiWarpMarker>    warp_pre  = mv;
-    std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
+    std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
     const int                 hint_last = app.last_selected_marker;
 
     if (mv[idx].is_begin_time) {
@@ -354,7 +354,7 @@ void GuiWarpMarkersOps::toggle_end_time() {
         mv[idx].time_seconds * static_cast<double>(sr)));
 
     std::vector<GuiWarpMarker>    warp_pre  = mv;
-    std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
+    std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
     const int                 hint_last = app.last_selected_marker;
 
     if (mv[idx].is_end_time) {
@@ -441,7 +441,7 @@ void GuiWarpMarkersOps::adjust_tempo(double delta) {
 // walk suffices. No-op if no marker carries either flag.
 void GuiWarpMarkersOps::clear_trim() {
     std::vector<GuiWarpMarker>      warp_pre  = app.warpmarkers.markers();
-    std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
+    std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
     const int                 hint_last = app.last_selected_marker;
     bool changed = false;
     for (auto& m : app.warpmarkers.markers_mut()) {
@@ -463,16 +463,16 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     if (hit < 0) return false;
     const int sr = audio.sample_rate();
     if (sr <= 0) return false;
-    const bool transient = (app.active_mode == 'T');
-    const int n = transient
-        ? static_cast<int>(app.transientmarkers.markers().size())
+    const bool phase_reset = (app.active_mode == 'P');
+    const int n = phase_reset
+        ? static_cast<int>(app.phase_reset_markers.markers().size())
         : static_cast<int>(app.warpmarkers.markers().size());
     if (hit >= n) return false;
 
     const double sr_d = static_cast<double>(sr);
     auto t_of = [&](int idx) -> double {
-        if (transient) {
-            return app.transientmarkers.markers()[idx].time_seconds;
+        if (phase_reset) {
+            return app.phase_reset_markers.markers()[idx].time_seconds;
         }
         return app.warpmarkers.markers()[idx].time_seconds;
     };
@@ -494,8 +494,8 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     // leaves selection genuinely unchanged.
     for (int idx : drag_set) {
         if (idx == 0 || t_of(idx) == 0.0) {
-            std::fprintf(stderr, transient
-                ? "warptempo_gui: first transient marker cannot be dragged\n"
+            std::fprintf(stderr, phase_reset
+                ? "warptempo_gui: first phase_reset marker cannot be dragged\n"
                 : "warptempo_gui: first warp marker cannot be dragged\n");
             return false;
         }
@@ -503,7 +503,7 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
 
     DragState d;
     d.active = true;
-    d.drag_mode = transient ? 'T' : 'W';
+    d.drag_mode = phase_reset ? 'P' : 'W';
     d.dragging_markers.assign(drag_set.begin(), drag_set.end());
     d.original_times.reserve(d.dragging_markers.size());
     for (int idx : d.dragging_markers) {
@@ -560,8 +560,8 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     d.moved = false;
     // Capture the pre-drag list state for undo. Commit pushes the
     // active-mode snapshot if motion landed; otherwise it's discarded.
-    if (transient) {
-        d.pre_drag_transient_snapshot = app.transientmarkers.markers();
+    if (phase_reset) {
+        d.pre_drag_phase_reset_snapshot = app.phase_reset_markers.markers();
     } else {
         d.pre_drag_snapshot = app.warpmarkers.markers();
     }
@@ -598,18 +598,18 @@ void GuiWarpMarkersOps::apply_drag_motion(double raw_delta) {
         return playhead_invalidate_rect(area, px);
     };
 
-    const bool transient = (app.drag.drag_mode == 'T');
+    const bool phase_reset = (app.drag.drag_mode == 'P');
     bool any_changed = false;
     for (size_t k = 0; k < app.drag.dragging_markers.size(); ++k) {
         const int idx = app.drag.dragging_markers[k];
         const double new_t = app.drag.original_times[k] + delta;
         double old_t;
-        if (transient) {
-            GuiTransientMarker* m = app.transientmarkers.marker_mut(idx);
+        if (phase_reset) {
+            GuiPhaseResetMarker* m = app.phase_reset_markers.marker_mut(idx);
             if (!m) continue;
             old_t = m->time_seconds;
             if (old_t == new_t) continue;
-            apply_transient_position_delta(*m, new_t - old_t);
+            apply_phase_reset_position_delta(*m, new_t - old_t);
         } else {
             GuiWarpMarker* m = app.warpmarkers.marker_mut(idx);
             if (!m) continue;
@@ -653,16 +653,16 @@ void GuiWarpMarkersOps::apply_drag_motion(double raw_delta) {
 void GuiWarpMarkersOps::commit_drag() {
     if (!app.drag.active) return;
     const bool moved = app.drag.moved;
-    const bool transient = (app.drag.drag_mode == 'T');
+    const bool phase_reset = (app.drag.drag_mode == 'P');
     std::vector<GuiWarpMarker>    snap_w =
         std::move(app.drag.pre_drag_snapshot);
-    std::vector<GuiTransientMarker> snap_t =
-        std::move(app.drag.pre_drag_transient_snapshot);
+    std::vector<GuiPhaseResetMarker> snap_t =
+        std::move(app.drag.pre_drag_phase_reset_snapshot);
     const int                 hint_last = app.drag.pre_drag_last_selected;
     app.drag = DragState{};
     if (moved) {
-        if (transient) {
-            undo.push_undo_transient(std::move(snap_t), OpKind::Move, hint_last);
+        if (phase_reset) {
+            undo.push_undo_phase_reset(std::move(snap_t), OpKind::Move, hint_last);
         } else {
             undo.push_undo(std::move(snap_w), OpKind::Move, hint_last);
         }

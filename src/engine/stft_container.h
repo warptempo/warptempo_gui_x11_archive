@@ -13,7 +13,7 @@ struct TimeMapSegment {
     size_t tgt_frame;
 };
 
-struct TransientMarker {
+struct PhaseResetMarker {
     int synth_frame;
     int64_t src_frame;
 };
@@ -74,7 +74,7 @@ inline double map_source_to_target(size_t src_frame, const std::vector<TimeMapSe
 // same OLA ramp-up trim: the first N/2 samples are dropped via `frames_to_skip = N/2`.
 // Consequences any downstream module must respect:
 //   - Output sample 0 in the final WAV corresponds to pre-trim OLA position N/2.
-//   - A transient with synth_frame m lands at output sample m * R_s; the +N/2
+//   - A phase reset marker with synth_frame m lands at output sample m * R_s; the +N/2
 //     window-center offset is absorbed by the trim, so diag spikes must NOT add it.
 //   - Total output length = num_frames * R_s + N/2 - R_s.
 //     Any auxiliary buffer sized to match the output (limiter meas_ola, diag WAVs)
@@ -120,8 +120,8 @@ struct AudioSTFT {
     // Virtual target buffer (Pass 1 output)
     std::vector<float> virtual_tgt_buf;
 
-    // Transient phase reset
-    std::vector<TransientMarker> transient_markers;
+    // Phase reset markers
+    std::vector<PhaseResetMarker> phase_reset_markers;
 
     // Spectral limiter
     LimiterParams limiter_params;

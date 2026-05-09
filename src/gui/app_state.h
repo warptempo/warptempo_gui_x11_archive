@@ -2,8 +2,8 @@
 
 #include "render.h"
 #include "text_editor.h"
-#include "transient_clipboard.h"
-#include "transientmarkers.h"
+#include "phase_reset_clipboard.h"
+#include "phase_reset_markers.h"
 #include "warpmarkers.h"
 
 #include <chrono>
@@ -44,14 +44,14 @@ enum class OpKind { Create, Destroy, Move, Other };
 // a pre-op selection hint (so Undo-of-Destroy / Undo-of-Move can restore
 // a sensible selection anchor) and the op kind.
 //
-// Chunk S.2.2: every entry now also carries the pre-mutation transient
+// Chunk S.2.2: every entry now also carries the pre-mutation phase reset
 // snapshot and the mode the operation was performed in. Both lists are
 // always restored on undo/redo so the inverse is symmetric regardless of
 // which list the op actually touched. `op_mode` lets undo flip the active
 // mode as a side effect — visual feedback for what's being undone.
 struct UndoEntry {
     std::vector<GuiWarpMarker>      snapshot;
-    std::vector<GuiTransientMarker> transient_snapshot;
+    std::vector<GuiPhaseResetMarker> phase_reset_snapshot;
     char                      op_mode              = 'W';
     OpKind                    op_kind              = OpKind::Other;
     int                       hint_last_selected   = -1;
@@ -81,7 +81,7 @@ struct DragState {
     // can push it onto the undo stack when motion landed; discarded on
     // commit when no motion occurred (DragState is reset wholesale there).
     std::vector<GuiWarpMarker>      pre_drag_snapshot;
-    std::vector<GuiTransientMarker> pre_drag_transient_snapshot;
+    std::vector<GuiPhaseResetMarker> pre_drag_phase_reset_snapshot;
     // Pre-drag last_selected for the undo hint; carried onto the entry at commit.
     int                    pre_drag_last_selected = -1;
     // Index of the marker that was clicked to start the drag. Used to track
@@ -94,8 +94,8 @@ struct DragState {
     // selection untouched. Cleared on the first moved transition.
     bool                   pending_collapse_to_hit = false;
     // Which list this drag operates on (chunk S.2.2). The motion / commit
-    // handlers dispatch on this so a drag started in transient mode
-    // mutates the transient list.
+    // handlers dispatch on this so a drag started in phase reset mode
+    // mutates the phase reset list.
     char                   drag_mode = 'W';
 };
 
@@ -250,8 +250,8 @@ struct ViewState {
 
     std::set<int> warp_selected;
     int           warp_last_selected      = -1;
-    std::set<int> transient_selected;
-    int           transient_last_selected = -1;
+    std::set<int> phase_reset_selected;
+    int           phase_reset_last_selected = -1;
 };
 
 struct AppState {
@@ -284,9 +284,9 @@ struct AppState {
     // records these; later chunks will parse their contents.
     std::string warpmarkers_path;
     std::string settings_path;
-    // Sibling `.transientmarkers` path. Computed at file load. Empty when
+    // Sibling `.phaseresetmarkers` path. Computed at file load. Empty when
     // no audio is loaded.
-    std::string transientmarkers_path;
+    std::string phase_reset_markers_path;
 
     // Absolute or relative path of the currently loaded audio file. Used by
     // the chunk-Q render hotkey stub to compute the output path. Empty when
@@ -297,9 +297,9 @@ struct AppState {
     // failure or before the first audio load.
     GuiWarpMarkers  warpmarkers;
 
-    // Parsed transient markers (chunk S.2.2). Authored by the GUI but not
+    // Parsed phase reset markers (chunk S.2.2). Authored by the GUI but not
     // yet consumed by the render pipeline (S.3 will wire that up).
-    GuiTransientMarkers transientmarkers;
+    GuiPhaseResetMarkers phase_reset_markers;
 
     // Multi-selection set + focus. `last_selected_marker` is either -1 or
     // a member of `selected_markers`; keyed operations (Tab cycling, `j`)
@@ -311,7 +311,7 @@ struct AppState {
     std::set<int> selected_markers;
     int           last_selected_marker = -1;
 
-    // Active editing mode: 'W' = warp markers, 'T' = transient markers
+    // Active editing mode: 'W' = warp markers, 'P' = phase reset markers
     // (chunk S.2.2). Toggled by `t`. Determines which list is visible /
     // edited / hit-tested and which color set is used for the playhead
     // and selected indicators.
@@ -350,7 +350,7 @@ struct AppState {
     // after every push/undo/redo by walking the saved-distance against
     // each entry's op_mode.
     bool        warp_dirty           = false;
-    bool        transient_dirty      = false;
+    bool        phase_reset_dirty      = false;
     bool        dirty                = false;
 
     // True until the first save in this session; used to log a one-time
@@ -436,19 +436,19 @@ struct AppState {
     struct QueuedRender {
         std::string                source_audio_path;
         std::vector<GuiWarpMarker>     markers;
-        std::vector<GuiTransientMarker>  transients;
+        std::vector<GuiPhaseResetMarker>  phase_resets;
     };
     std::vector<QueuedRender> queued_renders;
 
-    // Transient-propagate (W-mode Ctrl+T / Ctrl+Alt+T). Single-slot
+    // Phase reset propagate (W-mode Ctrl+T / Ctrl+Alt+T). Single-slot
     // session-only clipboard cleared on app exit. `pending_paste_anchor`
     // is the destination warp-marker index captured when the paste
     // confirmation prompt opens; consumed by the prompt response.
-    TransientClipboard transient_clipboard;
+    PhaseResetClipboard phase_reset_clipboard;
     int                pending_paste_anchor = -1;
 
     // V.B iteration mode. Toggled by plain `i` in warp mode (no-op in
-    // transient mode). Session-only; survives mode-switches but is lost
+    // phase reset mode). Session-only; survives mode-switches but is lost
     // on app close. When true, hover popups are suppressed and a
     // persistent iteration popup is rendered above every owning
     // marker's flag rect.
@@ -494,11 +494,11 @@ struct AppState {
     };
     std::vector<RenderViewEntry> render_view_list;
     int                          render_view_index = -1;     // -1 = unset
-    // The current render's loaded markers + transients, parsed from
+    // The current render's loaded markers + phase resets, parsed from
     // sibling `<basename>.renderwarpmarkers` /
-    // `<basename>.rendertransientmarkers`.
+    // `<basename>.renderphaseresetmarkers`.
     std::vector<GuiWarpMarker>       render_view_markers;
-    std::vector<GuiTransientMarker>    render_view_transients;
+    std::vector<GuiPhaseResetMarker>    render_view_phase_resets;
     // Source-frame mapping of the current render: F_begin..F_end (source
     // sample-rate frames) is what the render's full audio covers. When the
     // render's warpmarkers carry no `b=` flag, F_begin is 0; when it carries
@@ -552,7 +552,7 @@ bool bottom_strip_wide(const AppState& app);
 // signatures stay free of cairo so the header keeps a clean include list.
 //
 // hit_test_marker_line: scan the active list (render-view markers in
-// render-view; transients in 'T' mode; warp markers otherwise) and return
+// render-view; phase resets in 'P' mode; warp markers otherwise) and return
 // the index whose pixel column is within kMarkerHitHalfPx of `mouse_x`,
 // or -1 if no marker line is within reach.
 int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
@@ -560,13 +560,13 @@ int hit_test_marker_line(const AppState& app, const GuiAudio& audio,
 
 // hit_test_flag: scan the active flag-pack rects in the top strip and
 // return the marker index under (mouse_x, mouse_y), or -1. Returns -1
-// in render-view's transient sub-view (no flag rects there).
+// in render-view's phase reset sub-view (no flag rects there).
 int hit_test_flag(const AppState& app, const GuiAudio& audio,
                   int mouse_x, int mouse_y);
 
 // hit_test_iter_popup: V.B iteration-popup hit-test. Returns the marker
 // index whose iteration popup contains (mouse_x, mouse_y), or -1. Always
-// -1 when iteration mode is off, in transient mode, or in render-view.
+// -1 when iteration mode is off, in phase reset mode, or in render-view.
 int hit_test_iter_popup(const AppState& app, const GuiAudio& audio,
                         int mouse_x, int mouse_y,
                         double* out_text_left_x = nullptr);
@@ -583,6 +583,6 @@ int hit_test_bpm_popup(const AppState& app, const GuiAudio& audio,
 // display a numeric tempo (pass markers and label_ref markers qualify;
 // owning markers don't). Render-view honors the loaded render's
 // markers regardless of the pre-toggle mode; source-view requires warp
-// mode with iteration mode off. Always false in transient mode (no
+// mode with iteration mode off. Always false in phase reset mode (no
 // pass concept).
 bool popup_eligible_marker(const AppState& app, int idx);

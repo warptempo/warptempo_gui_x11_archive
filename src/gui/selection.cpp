@@ -65,17 +65,17 @@ void Selection::sanitize_selection_after_restore(int n) {
 
 void Selection::cycle_selection(bool forward) {
     const int sr = audio.sample_rate();
-    const bool transient = (app.active_mode == 'T');
-    const int n = transient
-        ? static_cast<int>(app.transientmarkers.markers().size())
+    const bool phase_reset = (app.active_mode == 'P');
+    const int n = phase_reset
+        ? static_cast<int>(app.phase_reset_markers.markers().size())
         : static_cast<int>(app.warpmarkers.markers().size());
     if (n == 0) return;
 
     // Helper to read frame-of-index in source samples regardless of mode.
     auto frame_of = [&](int i) -> int64_t {
-        if (transient) {
+        if (phase_reset) {
             return static_cast<int64_t>(std::nearbyint(
-                app.transientmarkers.markers()[i].time_seconds *
+                app.phase_reset_markers.markers()[i].time_seconds *
                 static_cast<double>(sr)));
         }
         return static_cast<int64_t>(std::nearbyint(
@@ -167,12 +167,12 @@ void Selection::select_prev_marker() { cycle_selection(false); }
 void Selection::prune_live_selection() {
     int n = 0;
     if (app.render_view_enabled) {
-        n = (app.active_mode == 'T')
-            ? static_cast<int>(app.render_view_transients.size())
+        n = (app.active_mode == 'P')
+            ? static_cast<int>(app.render_view_phase_resets.size())
             : static_cast<int>(app.render_view_markers.size());
     } else {
-        n = (app.active_mode == 'T')
-            ? static_cast<int>(app.transientmarkers.markers().size())
+        n = (app.active_mode == 'P')
+            ? static_cast<int>(app.phase_reset_markers.markers().size())
             : static_cast<int>(app.warpmarkers.markers().size());
     }
     for (auto it = app.selected_markers.begin();
@@ -200,8 +200,8 @@ void Selection::sync_playhead_to_last_selected() {
     if (last < 0) return;
 
     int64_t target_sample = 0;
-    if (app.active_mode == 'T') {
-        const auto& tv = app.transientmarkers.markers();
+    if (app.active_mode == 'P') {
+        const auto& tv = app.phase_reset_markers.markers();
         if (last >= static_cast<int>(tv.size())) return;
         target_sample = static_cast<int64_t>(std::nearbyint(
             tv[last].time_seconds * static_cast<double>(sr)));

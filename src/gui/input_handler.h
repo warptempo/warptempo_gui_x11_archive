@@ -8,8 +8,8 @@
 #include "render_view.h"
 #include "selection.h"
 #include "tab_mode.h"
-#include "transient_propagate.h"
-#include "transientmarkers_ops.h"
+#include "phase_reset_propagate.h"
+#include "phase_reset_markers_ops.h"
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers_ops.h"
@@ -27,7 +27,7 @@
 // X.7.8b-1: keyboard input handler. Owns the on_key callback body extracted
 // verbatim from main.cpp's lambda at the original main.cpp:1588. Construction
 // site: main.cpp, after every operation struct (Viewport, Selection, Undo,
-// GuiTransientMarkersOps, GuiWarpMarkersOps, GuiFlagEditor, GuiRenderView,
+// GuiPhaseResetMarkersOps, GuiWarpMarkersOps, GuiFlagEditor, GuiRenderView,
 // GuiTabMode, GuiPaintHandler) and after every std::function the body
 // references is forward-declared. Lifetime is the same scope as the other
 // operation structs.
@@ -116,11 +116,11 @@ struct GuiInputHandler {
     Selection&                 selection;
     Undo&                      undo;
     GuiWarpMarkersOps&         warpops;
-    GuiTransientMarkersOps&    transients;
+    GuiPhaseResetMarkersOps&    phase_resets;
     GuiFlagEditor&             flag_editor;
     GuiRenderView&             render_view;
     GuiTabMode&                tab_mode;
-    TransientPropagate&        transient_propagate;
+    PhaseResetPropagate&        phase_reset_propagate;
     std::function<void()>&     clear_hover_popup;
     std::function<void()>&     stop_playback_if_playing;
     std::function<bool()>&     save_markers;
@@ -137,11 +137,11 @@ struct GuiInputHandler {
                     Selection&                 selection_,
                     Undo&                      undo_,
                     GuiWarpMarkersOps&         warpops_,
-                    GuiTransientMarkersOps&    transients_,
+                    GuiPhaseResetMarkersOps&    phase_resets_,
                     GuiFlagEditor&             flag_editor_,
                     GuiRenderView&             render_view_,
                     GuiTabMode&                tab_mode_,
-                    TransientPropagate&        transient_propagate_,
+                    PhaseResetPropagate&        phase_reset_propagate_,
                     std::function<void()>&     clear_hover_popup_,
                     std::function<void()>&     stop_playback_if_playing_,
                     std::function<bool()>&     save_markers_,
@@ -157,11 +157,11 @@ struct GuiInputHandler {
           selection(selection_),
           undo(undo_),
           warpops(warpops_),
-          transients(transients_),
+          phase_resets(phase_resets_),
           flag_editor(flag_editor_),
           render_view(render_view_),
           tab_mode(tab_mode_),
-          transient_propagate(transient_propagate_),
+          phase_reset_propagate(phase_reset_propagate_),
           clear_hover_popup(clear_hover_popup_),
           stop_playback_if_playing(stop_playback_if_playing_),
           save_markers(save_markers_),

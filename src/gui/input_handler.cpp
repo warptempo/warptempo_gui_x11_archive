@@ -29,7 +29,7 @@
 // run_render_batch at the original main.cpp:1539). The only changes are:
 //
 //   - Capture-by-reference of `app`, `audio`, `gui`, `playback`, `viewport`,
-//     `selection`, `undo`, `warpops`, `transients`, `flag_editor`,
+//     `selection`, `undo`, `warpops`, `phase resets`, `flag_editor`,
 //     `render_view`, `tab_mode`, `clear_hover_popup`,
 //     `stop_playback_if_playing`, `save_markers`, `request_close_or_revert`,
 //     `prompt_activate_response`, `toggle_playback`, `set_playback_speed` is
@@ -40,8 +40,8 @@
 //     toggle_selection_membership, move_playhead_*, zoom_*, scroll_viewport,
 //     center_viewport_on_playhead, invalidate_*, trim_*_sample, drop_*,
 //     delete_*, force_delete_*, toggle_inherits/disabled/begin_time/end_time,
-//     adjust_tempo, clear_trim, nudge_*, jump_*, drop_transient_at_playhead,
-//     toggle_transient_*, detect_transients, clear_all_transients,
+//     adjust_tempo, clear_trim, nudge_*, jump_*, drop_phase_reset_at_playhead,
+//     toggle_phase_reset_*, detect_phase_resets, clear_all_phase_resets,
 //     enter_*_edit, commit_*_edit, exit_top_flag_edit_no_commit,
 //     bulk_clear_*_values, enter_bpm_mode, exit_bpm_mode,
 //     toggle_active_mode, load_render_view_at, restore_source_audio,
@@ -195,7 +195,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     //   - Left/Right (no mods)   → playhead-by-pixel scrub
     //   - Home/End (no mods)     → playhead to trim begin/end
     //   - Esc                    → top-level no-op (chunk Q)
-    //   - t (no mods)            → toggle warp/transient sub-view (Brief F)
+    //   - t (no mods)            → toggle warp/phase reset sub-view (Brief F)
     //   - Ctrl+Q / Ctrl+W        → close-prompt routing (Brief F)
     //   - Up/Down (no mods)      → zoom in/out (Brief S.2)
     //   - =/- (no mods)          → zoom in/out symbol-key alias (Brief S.2)
@@ -281,7 +281,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         AppState::QueuedRender q;
         q.source_audio_path = app.source_audio_path;
         q.markers           = app.warpmarkers.markers();
-        q.transients        = app.transientmarkers.markers();
+        q.phase_resets        = app.phase_reset_markers.markers();
         app.queued_renders.push_back(std::move(q));
         std::fprintf(stderr,
             "warptempo_gui: queued render (%zu in queue)\n",
@@ -303,11 +303,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         RenderRequest req;
         req.source_audio_path    = app.source_audio_path;
         req.markers              = app.warpmarkers.markers();
-        req.transients           = app.transientmarkers.markers();
+        req.phase_resets           = app.phase_reset_markers.markers();
         req.settings_passthrough = app.settings_passthrough;
-        for (const auto& m : app.transientmarkers.markers()) {
+        for (const auto& m : app.phase_reset_markers.markers()) {
             if (m.disabled) continue;
-            req.transient_frames.push_back(static_cast<int64_t>(
+            req.phase_reset_frames.push_back(static_cast<int64_t>(
                 std::nearbyint(m.time_seconds *
                                static_cast<double>(audio.sample_rate()))));
         }
@@ -319,7 +319,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
 
     // Ctrl+Alt+E: render the in-memory queue as one batch. Each
     // queued entry produces a sibling .wav (+ .warpmarkers /
-    // .transientmarkers when non-empty / .peaks sidecars) inside a fresh
+    // .phaseresetmarkers when non-empty / .peaks sidecars) inside a fresh
     // batch folder `<source_parent>/renders/<index>_render_all_in_queue/`.
     // The index is one greater than the highest pre-existing batch index
     // in that renders folder (regardless of command tag). Filenames
@@ -409,11 +409,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             RenderRequest req;
             req.source_audio_path    = q.source_audio_path;
             req.markers              = q.markers;
-            req.transients           = q.transients;
+            req.phase_resets           = q.phase_resets;
             req.settings_passthrough = app.settings_passthrough;
-            for (const auto& m : q.transients) {
+            for (const auto& m : q.phase_resets) {
                 if (m.disabled) continue;
-                req.transient_frames.push_back(static_cast<int64_t>(
+                req.phase_reset_frames.push_back(static_cast<int64_t>(
                     std::nearbyint(m.time_seconds *
                                    static_cast<double>(audio.sample_rate()))));
             }
@@ -553,15 +553,15 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         for (int n = total; n >= 10; n /= 10) ++pad_width;
         if (pad_width > 9) pad_width = 9;
 
-        // Snapshot transients once — every cell shares the same
-        // transient configuration, only marker tempo_base values
+        // Snapshot phase resets once — every cell shares the same
+        // phase reset configuration, only marker tempo_base values
         // differ across cells.
-        const std::vector<GuiTransientMarker> base_transients =
-            app.transientmarkers.markers();
-        std::vector<int64_t> base_transient_frames;
-        for (const auto& t : base_transients) {
+        const std::vector<GuiPhaseResetMarker> base_phase_resets =
+            app.phase_reset_markers.markers();
+        std::vector<int64_t> base_phase_reset_frames;
+        for (const auto& t : base_phase_resets) {
             if (t.disabled) continue;
-            base_transient_frames.push_back(static_cast<int64_t>(
+            base_phase_reset_frames.push_back(static_cast<int64_t>(
                 std::nearbyint(t.time_seconds *
                                static_cast<double>(audio.sample_rate()))));
         }
@@ -610,8 +610,8 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             RenderRequest req;
             req.source_audio_path    = app.source_audio_path;
             req.markers              = std::move(cell_markers);
-            req.transients           = base_transients;
-            req.transient_frames     = base_transient_frames;
+            req.phase_resets           = base_phase_resets;
+            req.phase_reset_frames     = base_phase_reset_frames;
             req.settings_passthrough = app.settings_passthrough;
             req.batch_folder         = batch_folder.string();
             req.batch_basename       = std::move(basename);
@@ -735,12 +735,12 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
              n >= 10; n /= 10) ++pad_width;
         if (pad_width > 9) pad_width = 9;
 
-        const std::vector<GuiTransientMarker> base_transients =
-            app.transientmarkers.markers();
-        std::vector<int64_t> base_transient_frames;
-        for (const auto& t : base_transients) {
+        const std::vector<GuiPhaseResetMarker> base_phase_resets =
+            app.phase_reset_markers.markers();
+        std::vector<int64_t> base_phase_reset_frames;
+        for (const auto& t : base_phase_resets) {
             if (t.disabled) continue;
-            base_transient_frames.push_back(static_cast<int64_t>(
+            base_phase_reset_frames.push_back(static_cast<int64_t>(
                 std::nearbyint(t.time_seconds *
                                static_cast<double>(audio.sample_rate()))));
         }
@@ -793,8 +793,8 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             RenderRequest req;
             req.source_audio_path    = app.source_audio_path;
             req.markers              = std::move(cell_markers);
-            req.transients           = base_transients;
-            req.transient_frames     = base_transient_frames;
+            req.phase_resets           = base_phase_resets;
+            req.phase_reset_frames     = base_phase_reset_frames;
             req.settings_passthrough = std::move(cell_settings);
             req.batch_folder         = batch_folder.string();
             req.batch_basename       = std::move(basename);
@@ -834,8 +834,8 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     }
 
     // Chunk W: Ctrl+Alt+C commits the displayed render's markers
-    // and transients into authoring memory. Single cross-file undo
-    // entry; both warp_dirty and transient_dirty are recomputed.
+    // and phase resets into authoring memory. Single cross-file undo
+    // entry; both warp_dirty and phase_reset_dirty are recomputed.
     // After the commit succeeds: render-view exits, the parked
     // source audio is restored, and <source_parent>/renders/ is
     // recursively wiped — by definition the user has chosen one
@@ -847,19 +847,19 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         if (!app.render_view_enabled) return;
         if (app.render_view_index < 0) return;
 
-        // Addendum 3: app.render_view_markers / _transients are now
+        // Addendum 3: app.render_view_markers / _phase_resets are now
         // render-domain (loaded from .renderwarpmarkers /
-        // .rendertransientmarkers for display). The commit promotes
+        // .renderphaseresetmarkers for display). The commit promotes
         // the render's *source-domain*
         // markers into authoring memory, so reload them from the
-        // adjacent .warpmarkers / .transientmarkers sidecars at commit
+        // adjacent .warpmarkers / .phaseresetmarkers sidecars at commit
         // time. Failure to read the source-domain warpmarkers aborts —
         // committing render-domain values into authoring would corrupt
         // the source coordinate system.
         const auto& cur_e =
             app.render_view_list[app.render_view_index];
         std::vector<GuiWarpMarker>    src_warp;
-        std::vector<GuiTransientMarker> src_trans;
+        std::vector<GuiPhaseResetMarker> src_trans;
         {
             const std::filesystem::path wm =
                 cur_e.batch_folder / (cur_e.basename + ".warpmarkers");
@@ -874,28 +874,28 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         }
         {
             const std::filesystem::path tm = cur_e.batch_folder /
-                (cur_e.basename + ".transientmarkers");
+                (cur_e.basename + ".phaseresetmarkers");
             std::error_code ec;
             if (std::filesystem::exists(tm, ec)) {
-                GuiTransientMarkers t;
+                GuiPhaseResetMarkers t;
                 if (t.load(tm.string())) {
                     src_trans = t.markers();
                 }
-                // Load failure: treat as empty transients (the
+                // Load failure: treat as empty phase resets (the
                 // load() call already logged its own diagnostics).
             }
         }
 
         std::vector<GuiWarpMarker>    warp_pre  = app.warpmarkers.markers();
-        std::vector<GuiTransientMarker> trans_pre = app.transientmarkers.markers();
+        std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
         const int                 hint_last = app.last_selected_marker;
 
         app.warpmarkers.markers_mut()    = std::move(src_warp);
-        app.transientmarkers.markers_mut() = std::move(src_trans);
+        app.phase_reset_markers.markers_mut() = std::move(src_trans);
         app.selected_markers.clear();
         app.last_selected_marker = -1;
         // Brief J.2 Section 4: the active tab's per-mode slots
-        // referenced the OLD app.warpmarkers/transients we just
+        // referenced the OLD app.warpmarkers/phase resets we just
         // replaced. Clear them so restore_source_audio loads
         // empty into the live pair (and so a later mode flip
         // doesn't surface stale indices).
@@ -904,8 +904,8 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
                                                    : app.tab_a;
             t.warp_selected.clear();
             t.warp_last_selected      = -1;
-            t.transient_selected.clear();
-            t.transient_last_selected = -1;
+            t.phase_reset_selected.clear();
+            t.phase_reset_last_selected = -1;
         }
 
         undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
@@ -920,7 +920,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         // convention; this mutation is permanent until the next
         // Ctrl+S overwrites or the user manually edits the file.
         // Conservative parse: any failure logs and skips, leaving
-        // markers+transients commit unaffected.
+        // markers+phase resets commit unaffected.
         {
             const std::string& bn = cur_e.basename;
             const auto sp = bn.find("scale=");
@@ -984,7 +984,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         app.render_view_enabled = false;
         app.render_view_list.clear();
         app.render_view_markers.clear();
-        app.render_view_transients.clear();
+        app.render_view_phase_resets.clear();
         app.render_view_index             = -1;
         app.render_view_src_F_begin       = 0;
         app.render_view_src_F_end         = 0;
@@ -1041,7 +1041,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // Ctrl+T: copy transient placements from a two-warp-marker
+    // Ctrl+T: copy phase reset placements from a two-warp-marker
     // selection into the session clipboard. W-mode only; T-mode is a
     // silent no-op. Off-count selection in W-mode emits a one-line
     // stderr nudge.
@@ -1049,32 +1049,32 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         if (app.active_mode != 'W') return;
         if (app.selected_markers.size() != 2) {
             std::fprintf(stderr,
-                "warptempo_gui: transient copy: select exactly two warp "
+                "warptempo_gui: phase_reset copy: select exactly two warp "
                 "markers\n");
             return;
         }
-        transient_propagate.copy_from_selection();
+        phase_reset_propagate.copy_from_selection();
         return;
     }
 
-    // Ctrl+Alt+T: paste clipboard transients onto the destination
+    // Ctrl+Alt+T: paste clipboard phase resets onto the destination
     // anchored at the single selected warp marker. W-mode only;
     // T-mode is a silent no-op. Empty clipboard is a silent no-op.
     // Opens a confirmation prompt before any mutation.
     if (keysym == XK_t && ctrl && !shift && alt) {
         if (app.active_mode != 'W') return;
-        if (app.transient_clipboard.empty()) return;
+        if (app.phase_reset_clipboard.empty()) return;
         if (app.selected_markers.size() != 1) {
             std::fprintf(stderr,
-                "warptempo_gui: transient paste: select exactly one warp "
+                "warptempo_gui: phase_reset paste: select exactly one warp "
                 "marker\n");
             return;
         }
-        transient_propagate.open_paste_confirmation();
+        phase_reset_propagate.open_paste_confirmation();
         return;
     }
 
-    // `t` (no modifiers) toggles transient mode globally. Brief
+    // `t` (no modifiers) toggles phase reset mode globally. Brief
     // J.2: render-view shares the global active_mode flag, so a
     // single handler serves both views. Render-view inherits the
     // engine precondition check from toggle_active_mode.
@@ -1084,7 +1084,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     }
 
     // V.B `i` (no modifiers) toggles iteration mode in warp. Silent
-    // no-op in transient mode (transient flags carry no tempo to
+    // no-op in phase reset mode (phase reset flags carry no tempo to
     // iterate). The editor-active branch above already swallows any
     // keystroke while a popup edit is in flight, so this code only
     // runs with no active editor. Toggling repaints the top strip
@@ -1116,7 +1116,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     }
 
     // Brief X.2 `m` (no modifiers): toggle BPM mode in warp. Silent
-    // no-op in transient mode. Mutual exclusion with iter mode is
+    // no-op in phase reset mode. Mutual exclusion with iter mode is
     // handled inside enter_bpm_mode.
     if (keysym == XK_m && !ctrl && !shift && !alt) {
         if (app.active_mode == 'W') {
@@ -1232,7 +1232,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             render_view.restore_source_audio();
             app.render_view_enabled = false;
             app.render_view_markers.clear();
-            app.render_view_transients.clear();
+            app.render_view_phase_resets.clear();
             app.render_view_index             = -1;
             app.render_view_src_F_begin       = 0;
             app.render_view_src_F_end         = 0;
@@ -1245,26 +1245,26 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // mods — disambiguate via the `shift` bool, not uppercase keysyms.
     if (keysym == XK_s) {
         if (ctrl)                          save_markers();
-        else if (app.active_mode == 'T')   transients.drop_transient_at_playhead();
+        else if (app.active_mode == 'P')   phase_resets.drop_phase_reset_at_playhead();
         else if (shift)                    warpops.drop_inherit_marker_at_playhead();
         else                               warpops.drop_marker_at_playhead();
         return;
     }
     // Shift+P: toggle inherit (warp only). Plain `p` is unbound.
     if (keysym == XK_p && !ctrl && !alt && shift) {
-        if (app.active_mode == 'T') return;
+        if (app.active_mode == 'P') return;
         warpops.toggle_inherits();
         return;
     }
-    // Ctrl+D: toggle disabled (warp + transient). Plain `d` and Shift+D are unbound.
+    // Ctrl+D: toggle disabled (warp + phase reset). Plain `d` and Shift+D are unbound.
     if (keysym == XK_d && ctrl && !alt && !shift) {
-        if (app.active_mode == 'T') transients.toggle_transient_disabled();
+        if (app.active_mode == 'P') phase_resets.toggle_phase_reset_disabled();
         else                        warpops.toggle_disabled();
         return;
     }
     if (keysym == XK_Delete && !ctrl) {
-        if (app.active_mode == 'T') {
-            transients.delete_selected_transient();
+        if (app.active_mode == 'P') {
+            phase_resets.delete_selected_phase_reset();
             return;
         }
         if (shift) warpops.force_delete_selected_marker();
@@ -1311,7 +1311,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // `j` jumps the selected set to the playhead, anchored on
     // last_selected_marker. All-or-nothing clamp check.
     if (keysym == XK_j && !shift && !ctrl) {
-        if (app.active_mode == 'T') transients.jump_transient_selection_to_playhead();
+        if (app.active_mode == 'P') phase_resets.jump_phase_reset_selection_to_playhead();
         else                        warpops.jump_selection_to_playhead();
         return;
     }
@@ -1349,12 +1349,12 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
 
     // Ctrl+Left / Ctrl+Right: nudge selected markers by one pixel.
     if (ctrl && !shift && keysym == XK_Left) {
-        if (app.active_mode == 'T') transients.nudge_selected_transients(-1);
+        if (app.active_mode == 'P') phase_resets.nudge_selected_phase_resets(-1);
         else                        warpops.nudge_selected_markers(-1);
         return;
     }
     if (ctrl && !shift && keysym == XK_Right) {
-        if (app.active_mode == 'T') transients.nudge_selected_transients(+1);
+        if (app.active_mode == 'P') phase_resets.nudge_selected_phase_resets(+1);
         else                        warpops.nudge_selected_markers(+1);
         return;
     }
@@ -1389,10 +1389,10 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         case XK_End:    stop_playback_if_playing();
                         viewport.move_playhead_to(viewport.trim_end_sample() - 1); break;
         // b / e are warp-only: trim is a warp concern, so these keys are
-        // silent no-ops in transient mode.
-        case XK_b:      if (app.active_mode != 'T') warpops.toggle_begin_time();
+        // silent no-ops in phase reset mode.
+        case XK_b:      if (app.active_mode != 'P') warpops.toggle_begin_time();
                         break;
-        case XK_e:      if (app.active_mode != 'T') warpops.toggle_end_time();
+        case XK_e:      if (app.active_mode != 'P') warpops.toggle_end_time();
                         break;
         // TODO: growing binding set will want an in-GUI help overlay.
         default: break;
@@ -1430,7 +1430,7 @@ void GuiInputHandler::handle_wheel(unsigned int button,
 
 // X.7.8b-2: button-press handler. Verbatim from the lambda at the original
 // main.cpp:1483; the captured operation-struct lambdas (begin_drag,
-// drop_marker, drop_transient_at_position, set_single_selection, etc.)
+// drop_marker, drop_phase_reset_at_position, set_single_selection, etc.)
 // are rewritten to direct method calls on the appropriate operation
 // struct ref. The four hit_test_* lambdas are now free functions taking
 // (app, audio, ...) explicit args. The handle_wheel lambda is now a
@@ -1479,11 +1479,11 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             return;
         }
         if (button != 1) return;
-        // Brief F Section 3: in transient sub-view, top-strip clicks
-        // are silent no-ops (transients have no flag rects). Bail
+        // Brief F Section 3: in phase reset sub-view, top-strip clicks
+        // are silent no-ops (phase resets have no flag rects). Bail
         // before hit-testing so we don't attempt selection bookkeeping
         // on a non-existent flag pack.
-        if (app.active_mode == 'T' && inside_top) return;
+        if (app.active_mode == 'P' && inside_top) return;
         // Brief six: capture playback / playhead state at press entry
         // so the four playhead-moving gestures below can reseek the
         // audio device to the new position when playback is active,
@@ -1501,11 +1501,11 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         // Brief J.2 Section 3: live selection lives in the global
         // pair regardless of view domain. active_mode tells us
         // which marker list the indices map to.
-        const bool sub_t = (app.active_mode == 'T');
+        const bool sub_t = (app.active_mode == 'P');
         std::set<int>& sel = app.selected_markers;
         int& last_sel      = app.last_selected_marker;
         const int n = sub_t
-            ? static_cast<int>(app.render_view_transients.size())
+            ? static_cast<int>(app.render_view_phase_resets.size())
             : static_cast<int>(app.render_view_markers.size());
         if (hit >= 0 && hit < n) {
             if (shift) {
@@ -1531,7 +1531,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             int64_t sample;
             if (sub_t) {
                 sample = static_cast<int64_t>(std::nearbyint(
-                    app.render_view_transients[hit].time_seconds *
+                    app.render_view_phase_resets[hit].time_seconds *
                     static_cast<double>(sr)));
             } else {
                 sample = static_cast<int64_t>(std::nearbyint(
@@ -1633,7 +1633,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                     return;
                 }
                 const int hit_now = hit_test_flag(app, audio, x, y);
-                if (hit_now >= 0 && app.active_mode != 'T') {
+                if (hit_now >= 0 && app.active_mode != 'P') {
                     flag_editor.enter_top_flag_edit(
                         hit_now, static_cast<double>(x));
                     return;
@@ -1660,8 +1660,8 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
 
         // A double-click in the waveform area creates a new marker at
         // the click position (not the playhead). In warp mode, drops a
-        // warp marker (Shift forces inherit). In transient mode, drops
-        // a transient (Shift is ignored — no inherit concept). The
+        // warp marker (Shift forces inherit). In phase reset mode, drops
+        // a phase reset (Shift is ignored — no inherit concept). The
         // first single-click already moved the playhead via the
         // playhead-drag-press logic below.
         if (is_double && inside_waveform && !ctrl) {
@@ -1673,8 +1673,8 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
             const double t = (sr > 0)
                 ? static_cast<double>(sample) / static_cast<double>(sr)
                 : 0.0;
-            if (app.active_mode == 'T') {
-                transients.drop_transient_at_position(t);
+            if (app.active_mode == 'P') {
+                phase_resets.drop_phase_reset_at_position(t);
             } else {
                 warpops.drop_marker(t, /*inherit=*/shift);
             }
@@ -1743,10 +1743,10 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         // Non-Ctrl: plain or Shift press. In the waveform area this
         // starts a playhead-drag gesture. In the top strip (flag click)
         // a warp-mode flag click enters the V.A1 text editor; in
-        // transient mode we keep the legacy select-on-click behavior.
+        // phase reset mode we keep the legacy select-on-click behavior.
         if (inside_top) {
             if (hit >= 0) {
-                if (app.active_mode != 'T' && !shift) {
+                if (app.active_mode != 'P' && !shift) {
                     // V.A1: plain click on a warp flag enters edit
                     // mode. enter_top_flag_edit owns the selection +
                     // playhead update on its target-switching path,
@@ -1760,9 +1760,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 else       selection.set_single_selection(hit);
                 const int sr = audio.sample_rate();
                 int64_t sample;
-                if (app.active_mode == 'T') {
+                if (app.active_mode == 'P') {
                     sample = static_cast<int64_t>(std::nearbyint(
-                        app.transientmarkers.markers()[hit].time_seconds *
+                        app.phase_reset_markers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
                     sample = static_cast<int64_t>(std::nearbyint(
@@ -1788,9 +1788,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                     selection.toggle_selection_membership(hit);
                 }
                 int64_t sample;
-                if (app.active_mode == 'T') {
+                if (app.active_mode == 'P') {
                     sample = static_cast<int64_t>(std::nearbyint(
-                        app.transientmarkers.markers()[hit].time_seconds *
+                        app.phase_reset_markers.markers()[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
                     sample = static_cast<int64_t>(std::nearbyint(
@@ -1857,8 +1857,8 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
         if (sr > 0) {
             const int64_t ph = app.playhead_sample;
             if (app.render_view_enabled) {
-                if (app.active_mode == 'T') {
-                    const auto& mv = app.render_view_transients;
+                if (app.active_mode == 'P') {
+                    const auto& mv = app.render_view_phase_resets;
                     for (size_t i = 0; i < mv.size(); ++i) {
                         const int64_t s = static_cast<int64_t>(
                             std::nearbyint(mv[i].time_seconds *
@@ -1880,8 +1880,8 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
                         }
                     }
                 }
-            } else if (app.active_mode == 'T') {
-                const auto& mv = app.transientmarkers.markers();
+            } else if (app.active_mode == 'P') {
+                const auto& mv = app.phase_reset_markers.markers();
                 for (size_t i = 0; i < mv.size(); ++i) {
                     const int64_t s = static_cast<int64_t>(
                         std::nearbyint(mv[i].time_seconds *
@@ -1967,7 +1967,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     // playhead-drag snap support: when a drag is in flight, snap the
     // playhead to the visible sub-view's markers (3px epsilon),
     // matching source-view's gesture. Otherwise run hover popup
-    // detection against render_view_markers (suppressed in transient
+    // detection against render_view_markers (suppressed in phase reset
     // sub-view because hit_test_flag short-circuits to -1).
     if (app.render_view_enabled) {
         if (app.playhead_drag.active) {
@@ -1995,9 +1995,9 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
             const int hit = hit_test_marker_line(app, audio, mouse_x);
             int64_t new_playhead;
             if (hit >= 0) {
-                if (app.active_mode == 'T') {
+                if (app.active_mode == 'P') {
                     new_playhead = static_cast<int64_t>(std::nearbyint(
-                        app.render_view_transients[hit].time_seconds *
+                        app.render_view_phase_resets[hit].time_seconds *
                         static_cast<double>(sr)));
                 } else {
                     new_playhead = static_cast<int64_t>(std::nearbyint(
@@ -2060,9 +2060,9 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
         const int hit = hit_test_marker_line(app, audio, mouse_x);
         int64_t new_playhead;
         if (hit >= 0) {
-            if (app.active_mode == 'T') {
+            if (app.active_mode == 'P') {
                 new_playhead = static_cast<int64_t>(std::nearbyint(
-                    app.transientmarkers.markers()[hit].time_seconds *
+                    app.phase_reset_markers.markers()[hit].time_seconds *
                     static_cast<double>(sr)));
             } else {
                 new_playhead = static_cast<int64_t>(std::nearbyint(
@@ -2137,15 +2137,15 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     // deliberately not followed — the user can pan manually if the
     // drag runs past the edge.
     const int hit_idx = app.drag.hit_marker;
-    const bool transient_drag = (app.drag.drag_mode == 'T');
-    const int n = transient_drag
-        ? static_cast<int>(app.transientmarkers.markers().size())
+    const bool phase_reset_drag = (app.drag.drag_mode == 'P');
+    const int n = phase_reset_drag
+        ? static_cast<int>(app.phase_reset_markers.markers().size())
         : static_cast<int>(app.warpmarkers.markers().size());
     if (hit_idx >= 0 && hit_idx < n) {
         int64_t ph;
-        if (transient_drag) {
+        if (phase_reset_drag) {
             ph = static_cast<int64_t>(std::nearbyint(
-                app.transientmarkers.markers()[hit_idx].time_seconds * sr_d));
+                app.phase_reset_markers.markers()[hit_idx].time_seconds * sr_d));
         } else {
             ph = static_cast<int64_t>(std::nearbyint(
                 app.warpmarkers.markers()[hit_idx].time_seconds * sr_d));
