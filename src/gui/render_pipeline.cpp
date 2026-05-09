@@ -412,7 +412,25 @@ bool do_render(const RenderRequest& req) {
         // 24-bit PCM only when the engine's write is the final file AND
         // its internal limiter ran. Trimmed path writes intermediate float.
         ep.output_24bit_pcm       = !tmres.trimmed && user_limiter_en;
-        ep.transient_frames       = req.transient_frames;
+        // Trim-relative source-frame domain. The engine receives a trimmed
+        // wav and a trim-shifted timemap, so transient_frames must live in
+        // the same trimmed-source domain as the rest of the engine input.
+        // Drop predicates and domain match the .rendertransientmarkers
+        // writer below so the on-disk visualization and the engine-applied
+        // placement agree on which transients are in scope.
+        if (tmres.trimmed) {
+            const int64_t trim_begin =
+                static_cast<int64_t>(tmres.trim_begin_frame);
+            const int64_t trim_end =
+                static_cast<int64_t>(tmres.trim_end_frame);
+            ep.transient_frames.reserve(req.transient_frames.size());
+            for (int64_t F : req.transient_frames) {
+                if (F < trim_begin || F > trim_end) continue;
+                ep.transient_frames.push_back(F - trim_begin);
+            }
+        } else {
+            ep.transient_frames = req.transient_frames;
+        }
 
         if (!run_warptempo_engine(ep, &engine_frame_map, &engine_R_s)) {
             std::fprintf(stderr, "warptempo_gui: render error: engine failed\n");
