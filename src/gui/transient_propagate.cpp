@@ -163,16 +163,6 @@ void TransientPropagate::paste_apply() {
         }
     }
 
-    // Preserve the frame-0 anchor invariant: if any transients remain
-    // and the leading entry isn't at time 0, drop a silent companion.
-    // Mirrors drop_transient_at_position.
-    if (!app.transientmarkers.markers().empty() &&
-        app.transientmarkers.markers().front().time_seconds != 0.0) {
-        GuiTransientMarker zero;
-        zero.time_seconds = 0.0;
-        app.transientmarkers.insert_marker(std::move(zero));
-    }
-
     undo.push_undo_transient(std::move(pre_state), OpKind::Other, hint_last);
     undo.recompute_dirty();
     viewport.invalidate_waveform_area();

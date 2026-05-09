@@ -166,15 +166,6 @@ bool GuiTransientMarkers::load(const std::string& path) {
         markers_.clear();
         return false;
     }
-    // Time-0 invariant: a non-empty transient list always carries an
-    // entry at time_seconds 0.0. Phase reset at render start is always
-    // correct, so silently materialize the head if the on-disk file
-    // omitted it. An empty file stays empty until the user authors.
-    if (!markers_.empty() && markers_.front().time_seconds > 0.0) {
-        GuiTransientMarker zero;
-        zero.time_seconds = 0.0;
-        markers_.insert(markers_.begin(), zero);
-    }
     return true;
 }
 

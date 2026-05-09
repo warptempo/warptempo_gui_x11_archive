@@ -520,8 +520,12 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
     // Compute scalar delta_min / delta_max from per-marker neighbor
     // bounds. Correct for both contiguous and non-contiguous drag sets.
     // eps enforces a 3-pixel visual gap at the current zoom — markers
-    // never stack even at the tightest clamp.
+    // never stack even at the tightest clamp. When a selected marker
+    // has no neighbor on a side, clamp to [eps, total_duration - eps]
+    // so the drag can't leave the audio range.
     const double eps = 3.0 * spp / sr_d;
+    const double total_duration =
+        static_cast<double>(audio.total_frames()) / sr_d;
 
     d.delta_min = -std::numeric_limits<double>::infinity();
     d.delta_max =  std::numeric_limits<double>::infinity();
@@ -536,6 +540,9 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
         if (prev >= 0) {
             const double lb = (t_of(prev) + eps) - orig_t;
             if (lb > d.delta_min) d.delta_min = lb;
+        } else {
+            const double lb = eps - orig_t;
+            if (lb > d.delta_min) d.delta_min = lb;
         }
 
         // Nearest non-dragged neighbor to the right.
@@ -543,6 +550,9 @@ bool GuiWarpMarkersOps::begin_drag(int hit, int mouse_x) {
         while (next < n && drag_set.count(next)) ++next;
         if (next < n) {
             const double ub = (t_of(next) - eps) - orig_t;
+            if (ub < d.delta_max) d.delta_max = ub;
+        } else {
+            const double ub = (total_duration - eps) - orig_t;
             if (ub < d.delta_max) d.delta_max = ub;
         }
     }
@@ -680,6 +690,8 @@ std::pair<double, double> GuiWarpMarkersOps::compute_selection_delta_bounds(bool
     const double sr_d = static_cast<double>(sr);
     const double spp  = current_samples_per_pixel(app, audio);
     const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
+    const double total_duration =
+        static_cast<double>(audio.total_frames()) / sr_d;
 
     double d_min = -std::numeric_limits<double>::infinity();
     double d_max =  std::numeric_limits<double>::infinity();
@@ -690,12 +702,18 @@ std::pair<double, double> GuiWarpMarkersOps::compute_selection_delta_bounds(bool
         if (prev >= 0) {
             const double lb = (mv[prev].time_seconds + eps) - orig_t;
             if (lb > d_min) d_min = lb;
+        } else {
+            const double lb = eps - orig_t;
+            if (lb > d_min) d_min = lb;
         }
         int next = idx + 1;
         while (next < static_cast<int>(mv.size()) &&
                app.selected_markers.count(next)) ++next;
         if (next < static_cast<int>(mv.size())) {
             const double ub = (mv[next].time_seconds - eps) - orig_t;
+            if (ub < d_max) d_max = ub;
+        } else {
+            const double ub = (total_duration - eps) - orig_t;
             if (ub < d_max) d_max = ub;
         }
     }

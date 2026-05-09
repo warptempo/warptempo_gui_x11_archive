@@ -29,10 +29,8 @@
 
 // Drop a transient marker at `time_seconds`. Rejects creation within
 // 3 pixels at current zoom of an existing transient marker. Selection
-// collapses to the freshly-inserted index. If the transient list does
-// not yet carry a frame-0 entry after insertion, a silent companion
-// at frame 0 is inserted alongside (frame-0 invariant: phase reset at
-// render start is always correct).
+// collapses to the freshly-inserted index. Frame-0 phase alignment is
+// implicit by definition and needs no marker to assert it.
 void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int sr = audio.sample_rate();
     if (sr <= 0) return;
@@ -52,16 +50,7 @@ void GuiTransientMarkersOps::drop_transient_at_position(double time_seconds) {
     const int                 hint_last = app.last_selected_marker;
     GuiTransientMarker nm;
     nm.time_seconds = time_seconds;
-    int new_idx = app.transientmarkers.insert_marker(std::move(nm));
-    // Time-0 companion. If the post-insert list's head isn't at
-    // time 0.0, insert one. The companion always lands at index 0,
-    // so the user's marker shifts up by one.
-    if (app.transientmarkers.markers().front().time_seconds != 0.0) {
-        GuiTransientMarker zero;
-        zero.time_seconds = 0.0;
-        app.transientmarkers.insert_marker(std::move(zero));
-        new_idx += 1;
-    }
+    const int new_idx = app.transientmarkers.insert_marker(std::move(nm));
     app.selected_markers.clear();
     app.selected_markers.insert(new_idx);
     app.last_selected_marker = new_idx;
@@ -84,9 +73,9 @@ void GuiTransientMarkersOps::drop_transient_at_playhead() {
 }
 
 // Delete every selected transient. No label/cascade rules — transients
-// don't have labels. Mirrors warp's time-0 protection: the frame-0
-// entry is the transient list's anchor (phase-reset invariant) and
-// cannot be removed.
+// don't have labels. Any selected transient is deletable, including one
+// that happens to sit at time 0 — frame-0 phase alignment is implicit
+// and needs no marker to assert it.
 void GuiTransientMarkersOps::delete_selected_transient() {
     if (app.selected_markers.empty()) return;
     const auto& tv = app.transientmarkers.markers();
@@ -94,11 +83,6 @@ void GuiTransientMarkersOps::delete_selected_transient() {
         if (idx < 0 || idx >= static_cast<int>(tv.size())) {
             std::fprintf(stderr,
                 "warptempo_gui: transient delete rejected: stale selection index\n");
-            return;
-        }
-        if (idx == 0 || tv[idx].time_seconds == 0.0) {
-            std::fprintf(stderr,
-                "warptempo_gui: cannot delete first transient marker (time 0)\n");
             return;
         }
     }
@@ -149,11 +133,12 @@ std::pair<double, double> GuiTransientMarkersOps::compute_transient_delta_bounds
     if (sr <= 0) return {0.0, 0.0};
     for (int idx : app.selected_markers) {
         if (idx < 0 || idx >= static_cast<int>(tv.size())) return {0.0, 0.0};
-        if (idx == 0 || tv[idx].time_seconds == 0.0) return {0.0, 0.0};
     }
     const double sr_d = static_cast<double>(sr);
     const double spp  = current_samples_per_pixel(app, audio);
     const double eps  = 3.0 * spp / sr_d;  // 3 pixels at current zoom
+    const double total_duration =
+        static_cast<double>(audio.total_frames()) / sr_d;
 
     double d_min = -std::numeric_limits<double>::infinity();
     double d_max =  std::numeric_limits<double>::infinity();
@@ -164,12 +149,18 @@ std::pair<double, double> GuiTransientMarkersOps::compute_transient_delta_bounds
         if (prev >= 0) {
             const double lb = (tv[prev].time_seconds + eps) - orig_t;
             if (lb > d_min) d_min = lb;
+        } else {
+            const double lb = eps - orig_t;
+            if (lb > d_min) d_min = lb;
         }
         int next = idx + 1;
         while (next < static_cast<int>(tv.size()) &&
                app.selected_markers.count(next)) ++next;
         if (next < static_cast<int>(tv.size())) {
             const double ub = (tv[next].time_seconds - eps) - orig_t;
+            if (ub < d_max) d_max = ub;
+        } else {
+            const double ub = (total_duration - eps) - orig_t;
             if (ub < d_max) d_max = ub;
         }
     }
