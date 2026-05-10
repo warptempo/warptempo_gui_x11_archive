@@ -30,6 +30,12 @@ namespace perf_counters {
 // kMarkerConnectorRows should track it.
 constexpr double kMarkerConnectorRows  = 11.0;
 
+// Half-width of the inverted-triangle playhead asset (17×9, tip at column 8).
+// Mirrors the same-named constant in main.cpp's invalidation logic — both
+// describe the same asset, but each TU holds its own copy because main.cpp's
+// version is in an anonymous namespace.
+constexpr int kPlayheadHalfPx = 8;
+
 namespace {
 
 // Flag text mirrors the canonical line's PAYLOAD (post-pipe). All
@@ -319,18 +325,27 @@ void render_playhead(cairo_t* cr,
                      GuiColor color,
                      cairo_surface_t* triangle_surface) {
     if (area.w <= 0 || area.h <= 0) return;
-    if (playhead_pixel_x < 0.0) return;
-    if (playhead_pixel_x > static_cast<double>(area.w - 1)) return;
+    // Allow partial render at file start / end: the triangle's nearer
+    // half stays onscreen even when the tip column itself has clipped
+    // past the area edge. The 1px line is column-gated below so it
+    // doesn't leak into adjacent regions; the triangle stamp is clipped
+    // to the area's horizontal span. This keeps the playhead's visual
+    // center aligned with its true frame position rather than snapping
+    // it inward at the rightmost samples.
+    if (playhead_pixel_x < -static_cast<double>(kPlayheadHalfPx)) return;
+    if (playhead_pixel_x > static_cast<double>(area.w - 1 + kPlayheadHalfPx)) return;
 
     const double col  = std::floor(playhead_pixel_x + 0.5);
     const double x_px = area.x + col + 0.5;
 
     cairo_save(cr);
-    cairo_set_source_rgb(cr, color.r, color.g, color.b);
-    cairo_set_line_width(cr, 1.0);
-    cairo_move_to(cr, x_px, area.y);
-    cairo_line_to(cr, x_px, area.y + area.h);
-    cairo_stroke(cr);
+    if (col >= 0.0 && col < static_cast<double>(area.w)) {
+        cairo_set_source_rgb(cr, color.r, color.g, color.b);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, x_px, area.y);
+        cairo_line_to(cr, x_px, area.y + area.h);
+        cairo_stroke(cr);
+    }
 
     // Inverted-triangle indicator: stamped from a hand-authored PNG mask so
     // every pixel is explicit (no rasterizer ambiguity). Asset is 17×9 with
@@ -342,6 +357,12 @@ void render_playhead(cairo_t* cr,
         const int img_h = cairo_image_surface_get_height(triangle_surface);
         const double dst_x = static_cast<double>(area.x + col - img_w / 2);
         const double dst_y = static_cast<double>(area.y - img_h);
+        cairo_rectangle(cr,
+                        static_cast<double>(area.x),
+                        dst_y,
+                        static_cast<double>(area.w),
+                        static_cast<double>(img_h));
+        cairo_clip(cr);
         cairo_set_source_rgb(cr, color.r, color.g, color.b);
         cairo_mask_surface(cr, triangle_surface, dst_x, dst_y);
     }

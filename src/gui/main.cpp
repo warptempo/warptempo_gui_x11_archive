@@ -86,8 +86,9 @@ constexpr int kTimestampRegionH           = 30;
 constexpr double kDirtyGapPx              = 8.0;
 
 // Half-width of the column invalidated around a playhead position. Wide
-// enough to cover the playhead line, the 12px-wide triangle indicator
-// (±6 px of playhead_x), and subpixel rounding margin.
+// enough to cover the playhead line, the 17px-wide triangle indicator
+// (±8 px of playhead_x including the tip column), and subpixel
+// rounding margin.
 constexpr int kPlayheadHalfPx = 8;
 
 // X.7.8b-1: Brief X.3 BPM-sweep math primitive (BaseTempoScale +
