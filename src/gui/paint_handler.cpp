@@ -1090,7 +1090,7 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
 
     // Force any pending Cairo ops out to the X server so the flush cost
     // is captured here rather than attributed elsewhere. The subsequent
-    // flush in GuiX11::dispatch_event is a cheap no-op.
+    // flush in GuiPlatform::dispatch_event is a cheap no-op.
     {
         const auto fl0 = clock::now();
         cairo_surface_flush(cairo_get_target(cr));

@@ -9,7 +9,7 @@
 #include <utility>
 
 class GuiAudio;
-class GuiX11;
+class GuiPlatform;
 
 // X.7.5a: warp-authoring cluster, extracted from main.cpp's inline
 // lambdas. Covers the basic authoring lambdas (drop / delete / toggle /
@@ -24,12 +24,12 @@ class GuiX11;
 // The drag methods stay mode-aware: warp drag is the dominant case and
 // phase reset drag was bolted on later. apply_drag_motion's phase reset
 // branch reaches the free-function apply_phase_reset_position_delta
-// (declared in phase_reset_markers_ops.h). The GuiX11 reference is for
+// (declared in phase_reset_markers_ops.h). The GuiPlatform reference is for
 // apply_drag_motion's gui.invalidate_region calls during drag.
 struct GuiWarpMarkersOps {
     AppState&                                     app;
     const GuiAudio&                               audio;
-    GuiX11&                                       gui;
+    GuiPlatform&                                       gui;
     Viewport&                                     viewport;
     Selection&                                    selection;
     Undo&                                         undo;
@@ -39,7 +39,7 @@ struct GuiWarpMarkersOps {
 
     GuiWarpMarkersOps(AppState&                                     app_,
                       const GuiAudio&                               audio_,
-                      GuiX11&                                       gui_,
+                      GuiPlatform&                                       gui_,
                       Viewport&                                     viewport_,
                       Selection&                                    selection_,
                       Undo&                                         undo_,

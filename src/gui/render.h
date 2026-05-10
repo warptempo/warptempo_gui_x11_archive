@@ -171,7 +171,7 @@ void render_waveform(cairo_t* cr,
 // Draws a thin 1px vertical line across `area` at column `playhead_pixel_x`
 // (offset from area.x, float for subpixel centering). No-op if outside.
 // `triangle_surface` is the pre-loaded playhead-triangle indicator (loaded by
-// GuiX11); it's stamped above the stem via cairo_mask_surface, tinted with
+// GuiPlatform); it's stamped above the stem via cairo_mask_surface, tinted with
 // `color`. May be nullptr — in that case the indicator is skipped.
 void render_playhead(cairo_t* cr,
                      GuiRect area,

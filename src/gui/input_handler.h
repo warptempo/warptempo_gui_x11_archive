@@ -14,7 +14,7 @@
 #include "viewport.h"
 #include "warpmarkers_ops.h"
 #include "gui_input.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <cmath>
 #include <functional>
@@ -108,7 +108,7 @@ inline std::optional<BaseTempoScale> compute_base_tempo_scale(
 struct GuiInputHandler {
     AppState&                  app;
     const GuiAudio&            audio;
-    GuiX11&                    gui;
+    GuiPlatform&                    gui;
     GuiPlayback&               playback;
     Viewport&                  viewport;
     Selection&                 selection;
@@ -129,7 +129,7 @@ struct GuiInputHandler {
 
     GuiInputHandler(AppState&                  app_,
                     const GuiAudio&            audio_,
-                    GuiX11&                    gui_,
+                    GuiPlatform&                    gui_,
                     GuiPlayback&               playback_,
                     Viewport&                  viewport_,
                     Selection&                 selection_,

@@ -20,7 +20,7 @@ pkg_check_modules(JACK REQUIRED jack)
 add_executable(warptempo_gui
     src/gui/main.cpp
     src/gui/app_state.cpp
-    src/gui/x11.cpp
+    src/gui/platform_x11.cpp
     src/gui/audio.cpp
     src/gui/render.cpp
     src/gui/warpmarkers.cpp

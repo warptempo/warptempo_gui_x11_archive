@@ -1,4 +1,4 @@
-#include "x11.h"
+#include "platform_x11.h"
 
 #include "playhead_cursor_data.h"
 
@@ -110,7 +110,7 @@ GuiInputState translate_state(unsigned int x11_mods, bool motion) {
 
 } // namespace
 
-bool GuiX11::init(int width, int height, const char* title) {
+bool GuiPlatform::init(int width, int height, const char* title) {
     XSetErrorHandler(x_error_handler);
 
     dpy_ = XOpenDisplay(nullptr);
@@ -285,7 +285,7 @@ bool GuiX11::init(int width, int height, const char* title) {
     return true;
 }
 
-void GuiX11::shutdown() {
+void GuiPlatform::shutdown() {
     destroy_buffer();
     if (playhead_triangle_surface_) {
         cairo_surface_destroy(playhead_triangle_surface_);
@@ -305,11 +305,11 @@ void GuiX11::shutdown() {
     }
 }
 
-void GuiX11::request_exit() {
+void GuiPlatform::request_exit() {
     should_exit_ = true;
 }
 
-void GuiX11::recreate_buffer(int w, int h) {
+void GuiPlatform::recreate_buffer(int w, int h) {
     destroy_buffer();
     if (w < 1) w = 1;
     if (h < 1) h = 1;
@@ -327,7 +327,7 @@ void GuiX11::recreate_buffer(int w, int h) {
         cairo_image_surface_get_stride(surface_));
 }
 
-void GuiX11::destroy_buffer() {
+void GuiPlatform::destroy_buffer() {
     if (cr_) {
         cairo_destroy(cr_);
         cr_ = nullptr;
@@ -345,12 +345,12 @@ void GuiX11::destroy_buffer() {
     }
 }
 
-void GuiX11::blit(int x, int y, int w, int h) {
+void GuiPlatform::blit(int x, int y, int w, int h) {
     if (!image_ || !dpy_) return;
     XPutImage(dpy_, win_, gc_, image_, x, y, x, y, w, h);
 }
 
-void GuiX11::invalidate_region(int x, int y, int w, int h) {
+void GuiPlatform::invalidate_region(int x, int y, int w, int h) {
     if (!dpy_ || !win_) return;
     XEvent ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -367,7 +367,7 @@ void GuiX11::invalidate_region(int x, int y, int w, int h) {
     XFlush(dpy_);
 }
 
-void GuiX11::init_xdnd() {
+void GuiPlatform::init_xdnd() {
     xdnd_aware_       = XInternAtom(dpy_, "XdndAware",       False);
     xdnd_selection_   = XInternAtom(dpy_, "XdndSelection",   False);
     xdnd_enter_       = XInternAtom(dpy_, "XdndEnter",       False);
@@ -389,7 +389,7 @@ void GuiX11::init_xdnd() {
                     reinterpret_cast<const unsigned char*>(&version), 1);
 }
 
-bool GuiX11::accept_at_root(int root_x, int root_y) {
+bool GuiPlatform::accept_at_root(int root_x, int root_y) {
     if (!drop_accept_) return false;
     int wx = 0, wy = 0;
     Window child = 0;
@@ -398,7 +398,7 @@ bool GuiX11::accept_at_root(int root_x, int root_y) {
     return drop_accept_(wx, wy);
 }
 
-void GuiX11::send_xdnd_status(Window source, bool accept) {
+void GuiPlatform::send_xdnd_status(Window source, bool accept) {
     XEvent ev;
     std::memset(&ev, 0, sizeof(ev));
     ev.xclient.type         = ClientMessage;
@@ -417,7 +417,7 @@ void GuiX11::send_xdnd_status(Window source, bool accept) {
     XFlush(dpy_);
 }
 
-void GuiX11::send_xdnd_finished(Window source, bool accepted) {
+void GuiPlatform::send_xdnd_finished(Window source, bool accepted) {
     XEvent ev;
     std::memset(&ev, 0, sizeof(ev));
     ev.xclient.type         = ClientMessage;
@@ -432,7 +432,7 @@ void GuiX11::send_xdnd_finished(Window source, bool accepted) {
     XFlush(dpy_);
 }
 
-void GuiX11::handle_client_message(XClientMessageEvent& ev) {
+void GuiPlatform::handle_client_message(XClientMessageEvent& ev) {
     const Atom mt = ev.message_type;
 
     if (mt == xdnd_enter_) {
@@ -514,7 +514,7 @@ void GuiX11::handle_client_message(XClientMessageEvent& ev) {
     }
 }
 
-void GuiX11::handle_selection_notify(XSelectionEvent& ev) {
+void GuiPlatform::handle_selection_notify(XSelectionEvent& ev) {
     if (ev.property == None || ev.selection != xdnd_selection_) {
         // Source declined to provide data; tell it we're done.
         if (xdnd_source_) send_xdnd_finished(xdnd_source_, false);
@@ -586,7 +586,7 @@ void GuiX11::handle_selection_notify(XSelectionEvent& ev) {
     if (on_file_drop_) on_file_drop_(paths[0]);
 }
 
-void GuiX11::dispatch_event(XEvent& ev) {
+void GuiPlatform::dispatch_event(XEvent& ev) {
     switch (ev.type) {
     case Expose: {
         const int x = ev.xexpose.x;
@@ -658,7 +658,7 @@ void GuiX11::dispatch_event(XEvent& ev) {
     }
 }
 
-void GuiX11::run() {
+void GuiPlatform::run() {
     XEvent ev;
     const int xfd = ConnectionNumber(dpy_);
     while (!should_exit_) {
@@ -682,7 +682,7 @@ void GuiX11::run() {
     }
 }
 
-void GuiX11::drain_events() {
+void GuiPlatform::drain_events() {
     if (!dpy_) return;
     // Force a round-trip so any synthesized Expose events sent via
     // invalidate_region (which uses XSendEvent and only XFlush) have

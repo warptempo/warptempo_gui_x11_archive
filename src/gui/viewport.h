@@ -7,7 +7,7 @@
 #include <utility>
 
 class GuiAudio;
-class GuiX11;
+class GuiPlatform;
 class GuiPlayback;
 
 // X.7.1: viewport mutators and invalidation helpers, extracted from main.cpp's
@@ -17,13 +17,13 @@ class GuiPlayback;
 struct Viewport {
     AppState&                       app;
     const GuiAudio&                 audio;
-    GuiX11&                         gui;
+    GuiPlatform&                         gui;
     GuiPlayback&                    playback;
     std::function<void()>&          recompute_hover_at_cursor;
 
     Viewport(AppState&                       app_,
              const GuiAudio&                 audio_,
-             GuiX11&                         gui_,
+             GuiPlatform&                         gui_,
              GuiPlayback&                    playback_,
              std::function<void()>&          recompute_hover_at_cursor_)
         : app(app_),

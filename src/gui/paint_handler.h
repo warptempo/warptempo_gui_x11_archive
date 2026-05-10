@@ -5,7 +5,7 @@
 #include "playback.h"
 #include "render.h"
 #include "warpmarkers.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <cairo/cairo.h>
 #include <string>
@@ -17,7 +17,7 @@
 // only behavior change is the indirection.
 //
 // Construction site: main.cpp, after AppState / GuiAudio / GuiPlayback /
-// GuiX11 / WaveformCache exist. Lifetime is the same scope as the other
+// GuiPlatform / WaveformCache exist. Lifetime is the same scope as the other
 // operation structs (Undo, Selection, GuiTabMode, etc.).
 //
 // Reference list deviates from the original brief:
@@ -28,7 +28,7 @@
 //     declared in app_state.h) and never calls popup_eligible_marker (the
 //     eligibility check is inlined as `tempo_inherits || !label_ref.empty()`
 //     at each hover-popup paint site). Both omitted to avoid dead weight.
-//   - GuiX11& is added because paint calls gui.playhead_triangle_surface()
+//   - GuiPlatform& is added because paint calls gui.playhead_triangle_surface()
 //     for the playhead's triangle indicator.
 //   - GuiPlayback& is non-const because on_resize calls
 //     playback.resync_predictor(), which mutates atomic predictor state.
@@ -160,13 +160,13 @@ struct GuiPaintHandler {
     const GuiAudio&    audio;
     GuiPlayback&       playback;
     WaveformCache&     wf_cache;
-    const GuiX11&      gui;
+    const GuiPlatform&      gui;
 
     GuiPaintHandler(AppState&          app_,
                     const GuiAudio&    audio_,
                     GuiPlayback&       playback_,
                     WaveformCache&     wf_cache_,
-                    const GuiX11&      gui_)
+                    const GuiPlatform&      gui_)
         : app(app_),
           audio(audio_),
           playback(playback_),

@@ -3,7 +3,7 @@
 #include "audio.h"
 #include "playback.h"
 #include "render.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <algorithm>
 #include <cmath>

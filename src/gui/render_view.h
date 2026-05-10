@@ -4,7 +4,7 @@
 #include "audio.h"
 #include "playback.h"
 #include "selection.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +30,7 @@ struct GuiRenderView {
     AppState&              app;
     GuiAudio&              audio;
     GuiPlayback&           playback;
-    GuiX11&                gui;
+    GuiPlatform&                gui;
     Selection&             selection;
     std::function<void()>& clear_hover_popup;
     std::function<void()>& refresh_active_tab_from_app;
@@ -45,7 +45,7 @@ struct GuiRenderView {
     GuiRenderView(AppState&              app_,
                   GuiAudio&              audio_,
                   GuiPlayback&           playback_,
-                  GuiX11&                gui_,
+                  GuiPlatform&                gui_,
                   Selection&             selection_,
                   std::function<void()>& clear_hover_popup_,
                   std::function<void()>& refresh_active_tab_from_app_)

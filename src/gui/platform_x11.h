@@ -5,11 +5,16 @@
 #include <functional>
 #include <string>
 
+// GuiPlatform: the GUI's platform abstraction layer. This file is the
+// X11 implementation; a Wayland implementation will live in a sibling
+// platform_wayland.{h,cpp} pair when that backend lands. Builds pick
+// exactly one implementation file at compile time via CMakeLists.
+//
 // X11 + Cairo window/event-loop plumbing. Owns the display connection, the
 // window, a client-side Cairo image surface for double-buffering, and an
 // XImage view of that surface used to push painted regions to the server
 // via XPutImage. Turns X11 events into application-level callbacks.
-class GuiX11 {
+class GuiPlatform {
 public:
     using RedrawCallback       = std::function<void(cairo_t*, int x, int y, int w, int h)>;
     using ResizeCallback       = std::function<void(int w, int h)>;

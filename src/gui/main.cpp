@@ -17,7 +17,7 @@
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers_ops.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <cairo/cairo.h>
 #include <sndfile.h>
@@ -548,7 +548,7 @@ int main(int argc, char** argv) {
     AppState     app;
     GuiAudio     audio;
     GuiPlayback  playback;
-    GuiX11       gui;
+    GuiPlatform  gui;
     WaveformCache wf_cache;
     if (!gui.init(app.width, app.height, "Warptempo")) {
         return 1;

@@ -3,7 +3,7 @@
 #include "audio.h"
 #include "render.h"
 #include "phase_reset_markers_ops.h"
-#include "x11.h"
+#include "platform_x11.h"
 
 #include <algorithm>
 #include <cmath>
