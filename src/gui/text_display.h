@@ -16,19 +16,9 @@
 
 namespace text_display {
 
-// Note: not named Above/Below because X11's Xlib.h pollutes the global
-// namespace with `#define Above` / `#define Below` (stack-mode constants),
-// which mangle the enum name at preprocessor time in any TU that includes
-// both this header and Xlib.h.
-enum class Position {
-    Top,
-    Bottom,
-};
-
 struct State {
-    // Anchor rectangle in screen coordinates. Popup is positioned relative
-    // to this rect's top edge (Position::Top) or bottom edge
-    // (Position::Bottom).
+    // Anchor rectangle in screen coordinates. Popup is positioned above
+    // this rect's top edge.
     GuiRect     anchor          = {0, 0, 0, 0};
 
     // Content string. Typically short (a tempo display in V.A3b's case).
@@ -40,9 +30,6 @@ struct State {
     // Tint applied to the content text. Caller picks something visually
     // distinct from the surrounding rect's normal text color.
     GuiColor    color           = {1.0, 1.0, 1.0};
-
-    // Where to place the popup relative to the anchor.
-    Position    position        = Position::Top;
 };
 
 // Draw the popup. No-op if `s.visible` is false, the anchor has zero area,

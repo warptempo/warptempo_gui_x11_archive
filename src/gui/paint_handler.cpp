@@ -422,8 +422,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             td.content  = app.hover_popup.cached_text;
                             td.visible  = true;
                             td.color    = oot ? dim(kText) : kText;
-                            td.position =
-                                text_display::Position::Top;
                             text_display::render(cr, td,
                                                      kFlagFontSize);
                         }
@@ -541,8 +539,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             td.content  = app.hover_popup.cached_text;
                             td.visible  = true;
                             td.color    = oot ? dim(kText) : kText;
-                            td.position =
-                                text_display::Position::Top;
                             text_display::render(cr, td,
                                                      kFlagFontSize);
                         }
@@ -748,8 +744,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             td.content  = h.text;
                             td.visible  = true;
                             td.color    = oot ? dim(kText) : kText;
-                            td.position =
-                                text_display::Position::Top;
                             text_display::render(cr, td,
                                                      kFlagFontSize);
                         }
@@ -919,8 +913,6 @@ void GuiPaintHandler::on_redraw(cairo_t* cr, int x, int y, int w, int h) {
                             td.content  = h.text;
                             td.visible  = true;
                             td.color    = oot ? dim(kText) : kText;
-                            td.position =
-                                text_display::Position::Top;
                             text_display::render(cr, td,
                                                      kFlagFontSize);
                         }
