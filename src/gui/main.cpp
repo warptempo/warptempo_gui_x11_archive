@@ -1058,12 +1058,12 @@ int main(int argc, char** argv) {
         request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
     });
 
-    gui.set_on_button_press([&](unsigned int button, int x, int y,
+    gui.set_on_button_press([&](GuiMouseButton button, int x, int y,
                                 GuiInputState mods) {
         input_handler.on_button_press(button, x, y, mods);
     });
 
-    gui.set_on_button_release([&](unsigned int button, int x, int y,
+    gui.set_on_button_release([&](GuiMouseButton button, int x, int y,
                                   GuiInputState mods) {
         input_handler.on_button_release(button, x, y, mods);
     });

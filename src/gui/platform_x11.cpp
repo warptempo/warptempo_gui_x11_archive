@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,17 @@ GuiInputState translate_state(unsigned int x11_mods, bool motion) {
     s.alt   = (x11_mods & Mod1Mask)    != 0;
     s.primary_button_held = motion && ((x11_mods & Button1Mask) != 0);
     return s;
+}
+
+std::optional<GuiMouseButton> translate_button(unsigned int x11_button) {
+    switch (x11_button) {
+        case 1: return GuiMouseButton::Left;
+        case 2: return GuiMouseButton::Middle;
+        case 3: return GuiMouseButton::Right;
+        case 4: return GuiMouseButton::WheelUp;
+        case 5: return GuiMouseButton::WheelDown;
+        default: return std::nullopt;
+    }
 }
 
 } // namespace
@@ -622,19 +634,23 @@ void GuiPlatform::dispatch_event(XEvent& ev) {
     }
     case ButtonPress: {
         if (on_button_press_) {
-            on_button_press_(ev.xbutton.button,
-                             ev.xbutton.x, ev.xbutton.y,
-                             translate_state(ev.xbutton.state,
-                                             /*motion=*/false));
+            if (auto btn = translate_button(ev.xbutton.button)) {
+                on_button_press_(*btn,
+                                 ev.xbutton.x, ev.xbutton.y,
+                                 translate_state(ev.xbutton.state,
+                                                 /*motion=*/false));
+            }
         }
         break;
     }
     case ButtonRelease: {
         if (on_button_release_) {
-            on_button_release_(ev.xbutton.button,
-                               ev.xbutton.x, ev.xbutton.y,
-                               translate_state(ev.xbutton.state,
-                                               /*motion=*/false));
+            if (auto btn = translate_button(ev.xbutton.button)) {
+                on_button_release_(*btn,
+                                   ev.xbutton.x, ev.xbutton.y,
+                                   translate_state(ev.xbutton.state,
+                                                   /*motion=*/false));
+            }
         }
         break;
     }

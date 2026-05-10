@@ -68,3 +68,11 @@ struct GuiInputState {
     bool alt                  = false;
     bool primary_button_held  = false;
 };
+
+enum class GuiMouseButton {
+    Left,
+    Middle,
+    Right,
+    WheelUp,
+    WheelDown
+};

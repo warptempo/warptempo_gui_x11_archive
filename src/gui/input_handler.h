@@ -169,8 +169,8 @@ struct GuiInputHandler {
           set_playback_speed(set_playback_speed_) {}
 
     void on_key(GuiKey key, GuiInputState mods);
-    void on_button_press(unsigned int button, int x, int y, GuiInputState mods);
-    void on_button_release(unsigned int button, int x, int y,
+    void on_button_press(GuiMouseButton button, int x, int y, GuiInputState mods);
+    void on_button_release(GuiMouseButton button, int x, int y,
                            GuiInputState mods);
     void on_motion(int mouse_x, int mouse_y, GuiInputState mods);
 
@@ -192,6 +192,6 @@ private:
     // its only caller. Ctrl+Alt = fine-pan (2% of viewport), Alt = coarse-
     // pan (10%), plain = zoom; Ctrl+wheel moves the playhead by one pixel
     // (and stops playback), matching the bare Left/Right keyboard binding.
-    void handle_wheel(unsigned int button, bool ctrl, bool alt,
+    void handle_wheel(GuiMouseButton button, bool ctrl, bool alt,
                       bool inside_waveform, bool inside_top);
 };

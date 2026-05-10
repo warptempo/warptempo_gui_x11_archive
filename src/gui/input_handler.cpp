@@ -1407,29 +1407,29 @@ void GuiInputHandler::on_key(GuiKey key, GuiInputState mods) {
 // X.7.8b-2: shared wheel handler. Verbatim from the lambda at the original
 // main.cpp:1444 — only difference is the captured viewport / playhead
 // helpers now resolve through this struct's reference members.
-void GuiInputHandler::handle_wheel(unsigned int button,
+void GuiInputHandler::handle_wheel(GuiMouseButton button,
                                    bool ctrl, bool alt,
                                    bool inside_waveform, bool inside_top) {
     if (!inside_waveform && !inside_top) return;
     if (ctrl && alt) {
         const int64_t step = std::max<int64_t>(
             1, samples_visible(app, audio) / 50);
-        viewport.scroll_viewport(button == 4 ? -step : +step);
+        viewport.scroll_viewport(button == GuiMouseButton::WheelUp ? -step : +step);
         return;
     }
     if (ctrl) {
         stop_playback_if_playing();
-        viewport.move_playhead_pixels(button == 4 ? -1 : +1);
+        viewport.move_playhead_pixels(button == GuiMouseButton::WheelUp ? -1 : +1);
         return;
     }
     if (alt) {
         const int64_t step = std::max<int64_t>(
             1, samples_visible(app, audio) / 10);
-        viewport.scroll_viewport(button == 4 ? -step : +step);
+        viewport.scroll_viewport(button == GuiMouseButton::WheelUp ? -step : +step);
         return;
     }
-    if (button == 4) viewport.zoom_out();
-    else             viewport.zoom_in();
+    if (button == GuiMouseButton::WheelUp) viewport.zoom_out();
+    else                                   viewport.zoom_in();
 }
 
 // X.7.8b-2: button-press handler. Verbatim from the lambda at the original
@@ -1439,7 +1439,7 @@ void GuiInputHandler::handle_wheel(unsigned int button,
 // struct ref. The four hit_test_* lambdas are now free functions taking
 // (app, audio, ...) explicit args. The handle_wheel lambda is now a
 // private method on this struct.
-void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
+void GuiInputHandler::on_button_press(GuiMouseButton button, int x, int y,
                                       GuiInputState mods) {
     if constexpr (kDebugPerf) {
         app.last_input_event_time = std::chrono::steady_clock::now();
@@ -1477,12 +1477,12 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
     // marker state is preserved. Hover-popup motion still runs in
     // the motion handler against render_view_markers.
     if (app.render_view_enabled) {
-        if (button == 4 || button == 5) {
+        if (button == GuiMouseButton::WheelUp || button == GuiMouseButton::WheelDown) {
             handle_wheel(button, ctrl, alt,
                          inside_waveform, inside_top);
             return;
         }
-        if (button != 1) return;
+        if (button != GuiMouseButton::Left) return;
         // Brief F Section 3: in phase reset sub-view, top-strip clicks
         // are silent no-ops (phase resets have no flag rects). Bail
         // before hit-testing so we don't attempt selection bookkeeping
@@ -1591,7 +1591,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
         return;
     }
 
-    if (button == 1) {
+    if (button == GuiMouseButton::Left) {
         // Brief six: the chunk-P-patch-1 unconditional stop is now
         // overridden for waveform clicks. A click in the waveform area
         // that reseats the playhead keeps playback alive — the press
@@ -1836,7 +1836,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
                 app.playhead_drag.press_marker_idx = -1;
             }
         }
-    } else if (button == 4 || button == 5) {
+    } else if (button == GuiMouseButton::WheelUp || button == GuiMouseButton::WheelDown) {
         handle_wheel(button, ctrl, alt,
                      inside_waveform, inside_top);
     }
@@ -1845,10 +1845,10 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
 // X.7.8b-2: button-release handler. Verbatim from the lambda at the
 // original main.cpp:1835; commit_drag and set_single_selection are
 // rewritten to direct method calls on warpops / selection respectively.
-void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
+void GuiInputHandler::on_button_release(GuiMouseButton button, int /*x*/,
                                         int /*y*/, GuiInputState mods) {
     if (app.prompt.active) return;
-    if (button != 1) return;
+    if (button != GuiMouseButton::Left) return;
     if (app.playhead_drag.active) {
         // Brief F Section 1: if the playhead snapped onto a marker
         // during the drag, commit selection on release. Plain release

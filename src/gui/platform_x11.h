@@ -19,10 +19,7 @@ public:
     using RedrawCallback       = std::function<void(cairo_t*, int x, int y, int w, int h)>;
     using ResizeCallback       = std::function<void(int w, int h)>;
     using KeyCallback          = std::function<void(GuiKey key, GuiInputState mods)>;
-    // TODO: button parameter is still raw X11 numbering (1=left, 2=middle,
-    // 3=right, 4/5=wheel). Wayland will need a neutral button enum; that's a
-    // separate brief.
-    using ButtonCallback       = std::function<void(unsigned int button, int x, int y, GuiInputState mods)>;
+    using ButtonCallback       = std::function<void(GuiMouseButton button, int x, int y, GuiInputState mods)>;
     using MotionCallback       = std::function<void(int x, int y, GuiInputState mods)>;
     using CloseCallback        = std::function<void()>;
     using FileDropCallback     = std::function<void(const std::string& path)>;
