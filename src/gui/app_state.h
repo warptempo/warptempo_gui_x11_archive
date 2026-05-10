@@ -234,7 +234,7 @@ struct PromptState {
 // what the user sees and where playback would start. Not in the undo domain.
 //
 // Chunk S.2.2: each tab also carries per-mode selection slots so switching
-// tabs (Ctrl+Tab) and switching modes (`t`) both restore the right
+// tabs (Ctrl+Tab) and switching modes (`p`) both restore the right
 // selection set for the destination cell. The active selection lives in
 // AppState; these slots are the persistent snapshots.
 //
@@ -312,7 +312,7 @@ struct AppState {
     int           last_selected_marker = -1;
 
     // Active editing mode: 'W' = warp markers, 'P' = phase reset markers
-    // (chunk S.2.2). Toggled by `t`. Determines which list is visible /
+    // (chunk S.2.2). Toggled by `p`. Determines which list is visible /
     // edited / hit-tested and which color set is used for the playhead
     // and selected indicators.
     char active_mode = 'W';
@@ -440,7 +440,7 @@ struct AppState {
     };
     std::vector<QueuedRender> queued_renders;
 
-    // Phase reset propagate (W-mode Ctrl+T / Ctrl+Alt+T). Single-slot
+    // Phase reset propagate (W-mode Ctrl+P / Ctrl+Alt+P). Single-slot
     // session-only clipboard cleared on app exit. `pending_paste_anchor`
     // is the destination warp-marker index captured when the paste
     // confirmation prompt opens; consumed by the prompt response.
@@ -535,7 +535,7 @@ GuiRect union_rect(GuiRect a, GuiRect b);
 
 // X.7.7: promoted from a lambda in main(). Looks up `key` in
 // app.settings_passthrough and returns its value, or `dflt` if the key
-// is not present. Used by the `t`-mode entry path in GuiTabMode to gate
+// is not present. Used by the `p`-mode entry path in GuiTabMode to gate
 // on engine= without a typed parser.
 std::string settings_get(const AppState& app, const std::string& key,
                          const std::string& dflt);

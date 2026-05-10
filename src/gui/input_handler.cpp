@@ -218,7 +218,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
              !ctrl && !shift && !alt);
         const bool is_esc = (keysym == XK_Escape);
         const bool is_sub_view_toggle =
-            (keysym == XK_t && !ctrl && !shift && !alt);
+            (keysym == XK_p && !ctrl && !shift && !alt);
         const bool is_ctrl_q =
             (ctrl && !shift && !alt && keysym == XK_q);
         const bool is_ctrl_w =
@@ -1041,11 +1041,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // Ctrl+T: copy phase reset placements from a two-warp-marker
-    // selection into the session clipboard. W-mode only; T-mode is a
-    // silent no-op. Off-count selection in W-mode emits a one-line
-    // stderr nudge.
-    if (keysym == XK_t && ctrl && !shift && !alt) {
+    // Ctrl+P: copy phase reset placements from a two-warp-marker
+    // selection into the session clipboard. W-mode only; phase reset
+    // mode is a silent no-op. Off-count selection in W-mode emits a
+    // one-line stderr nudge.
+    if (keysym == XK_p && ctrl && !shift && !alt) {
         if (app.active_mode != 'W') return;
         if (app.selected_markers.size() != 2) {
             std::fprintf(stderr,
@@ -1057,11 +1057,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // Ctrl+Alt+T: paste clipboard phase resets onto the destination
-    // anchored at the single selected warp marker. W-mode only;
-    // T-mode is a silent no-op. Empty clipboard is a silent no-op.
+    // Ctrl+Alt+P: paste clipboard phase resets onto the destination
+    // anchored at the single selected warp marker. W-mode only; phase
+    // reset mode is a silent no-op. Empty clipboard is a silent no-op.
     // Opens a confirmation prompt before any mutation.
-    if (keysym == XK_t && ctrl && !shift && alt) {
+    if (keysym == XK_p && ctrl && !shift && alt) {
         if (app.active_mode != 'W') return;
         if (app.phase_reset_clipboard.empty()) return;
         if (app.selected_markers.size() != 1) {
@@ -1074,11 +1074,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // `t` (no modifiers) toggles phase reset mode globally. Brief
+    // `p` (no modifiers) toggles phase reset mode globally. Brief
     // J.2: render-view shares the global active_mode flag, so a
     // single handler serves both views. Render-view inherits the
     // engine precondition check from toggle_active_mode.
-    if (keysym == XK_t && !ctrl && !shift && !alt) {
+    if (keysym == XK_p && !ctrl && !shift && !alt) {
         tab_mode.toggle_active_mode();
         return;
     }
@@ -1250,7 +1250,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         else                               warpops.drop_marker_at_playhead();
         return;
     }
-    // Shift+P: toggle inherit (warp only). Plain `p` is unbound.
+    // Shift+P: toggle inherit (warp only).
     if (keysym == XK_p && !ctrl && !alt && shift) {
         if (app.active_mode == 'P') return;
         warpops.toggle_inherits();

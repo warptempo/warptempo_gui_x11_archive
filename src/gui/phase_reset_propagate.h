@@ -18,7 +18,7 @@ struct PhaseResetPropagate {
     PhaseResetPropagate(AppState& app_, Viewport& viewport_, Undo& undo_)
         : app(app_), viewport(viewport_), undo(undo_) {}
 
-    // Ctrl+T copy. Caller has already verified W-mode + exactly two
+    // Ctrl+P copy. Caller has already verified W-mode + exactly two
     // warp markers selected. Replaces the clipboard with the named
     // blocks and fractional placements derived from the half-open
     // [first, last) source range. Non-mutating beyond clipboard

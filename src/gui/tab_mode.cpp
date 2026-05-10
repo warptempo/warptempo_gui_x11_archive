@@ -103,7 +103,7 @@ void GuiTabMode::switch_active_tab_to(char target_tab) {
     // Restore the active selection from the destination tab's
     // current-mode slot. Mode itself is per-AppState (not per-tab),
     // so the destination tab's other-mode slot stays warm for any
-    // future `t` flip back inside that tab.
+    // future `p` flip back inside that tab.
     if (app.active_mode == 'P') {
         app.selected_markers     = target.phase_reset_selected;
         app.last_selected_marker = target.phase_reset_last_selected;
@@ -119,9 +119,9 @@ void GuiTabMode::switch_active_tab_to(char target_tab) {
     viewport.invalidate_timestamp_area();
 }
 
-// `t` key: toggle into/out of phase reset mode. Entry preconditions
-// (only when going W → T): engine setting must be `warptempo`. Exit
-// (T → W) is unconditional.
+// `p` key: toggle into/out of phase reset mode. Entry preconditions
+// (only when going W → P): engine setting must be `warptempo`. Exit
+// (P → W) is unconditional.
 void GuiTabMode::toggle_active_mode() {
     if (app.active_mode == 'P') {
         this->switch_active_mode_to('W');
