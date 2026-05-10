@@ -65,6 +65,8 @@ struct GuiWarpMarkersOps {
     void toggle_disabled();
     void toggle_begin_time();
     void toggle_end_time();
+    void set_begin_from_phase_reset_selection();
+    void set_end_from_phase_reset_selection();
     void adjust_tempo(double delta);
     void clear_trim();
     bool begin_drag(int hit, int mouse_x);
@@ -74,4 +76,8 @@ struct GuiWarpMarkersOps {
     bool apply_selection_shift(double raw_delta);
     void nudge_selected_markers(int direction);
     void jump_selection_to_playhead();
+
+private:
+    void set_begin_time_on(int idx, char op_mode);
+    void set_end_time_on(int idx, char op_mode);
 };

@@ -285,12 +285,16 @@ void GuiWarpMarkersOps::toggle_disabled() {
 // would invert the trim region. Equal-frame swap is refused (would
 // collapse trim to zero width). Trim flags live exclusively on warp
 // markers — phase reset markers cannot carry them.
-void GuiWarpMarkersOps::toggle_begin_time() {
-    if (app.selected_markers.size() != 1) return;
-    const int idx = app.last_selected_marker;
-    if (idx < 0) return;
+// Shared "set the b= flag on warp marker idx" worker. Idempotent if
+// idx already carries b=. Auto-clears any other b= on the list and
+// auto-swaps with an existing e= when m_frame >= e_loc.frame; refuses
+// (no mutation, no undo entry) on equal-frame collision. `op_mode` is
+// the active mode to record on the undo entry so undo restores the
+// caller's mode (W-side passes 'W', P-side passes 'P').
+void GuiWarpMarkersOps::set_begin_time_on(int idx, char op_mode) {
     const auto& mv = app.warpmarkers.markers();
-    if (idx >= static_cast<int>(mv.size())) return;
+    // Idempotent: target already carries the flag, nothing to do.
+    if (mv[idx].is_begin_time) return;
 
     const int sr = audio.sample_rate();
     const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
@@ -299,16 +303,6 @@ void GuiWarpMarkersOps::toggle_begin_time() {
     std::vector<GuiWarpMarker>    warp_pre  = mv;
     std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
     const int                 hint_last = app.last_selected_marker;
-
-    if (mv[idx].is_begin_time) {
-        app.warpmarkers.marker_mut(idx)->is_begin_time = false;
-        undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'W', OpKind::Other, hint_last);
-        undo.recompute_dirty();
-        viewport.invalidate_waveform_area();
-        viewport.invalidate_timestamp_area();
-        return;
-    }
 
     // Find the existing e= and OTHER b= on the warp list.
     const FlagLoc e_loc   = find_flag(/*want_begin=*/false, -1);
@@ -336,18 +330,15 @@ void GuiWarpMarkersOps::toggle_begin_time() {
     }
 
     undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                   'W', OpKind::Other, hint_last);
+                   op_mode, OpKind::Other, hint_last);
     undo.recompute_dirty();
     viewport.invalidate_waveform_area();
     viewport.invalidate_timestamp_area();
 }
 
-void GuiWarpMarkersOps::toggle_end_time() {
-    if (app.selected_markers.size() != 1) return;
-    const int idx = app.last_selected_marker;
-    if (idx < 0) return;
+void GuiWarpMarkersOps::set_end_time_on(int idx, char op_mode) {
     const auto& mv = app.warpmarkers.markers();
-    if (idx >= static_cast<int>(mv.size())) return;
+    if (mv[idx].is_end_time) return;
 
     const int sr = audio.sample_rate();
     const int64_t m_frame = static_cast<int64_t>(std::nearbyint(
@@ -356,16 +347,6 @@ void GuiWarpMarkersOps::toggle_end_time() {
     std::vector<GuiWarpMarker>    warp_pre  = mv;
     std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
     const int                 hint_last = app.last_selected_marker;
-
-    if (mv[idx].is_end_time) {
-        app.warpmarkers.marker_mut(idx)->is_end_time = false;
-        undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                       'W', OpKind::Other, hint_last);
-        undo.recompute_dirty();
-        viewport.invalidate_waveform_area();
-        viewport.invalidate_timestamp_area();
-        return;
-    }
 
     const FlagLoc b_loc   = find_flag(/*want_begin=*/true,  -1);
     const FlagLoc e_other = find_flag(/*want_begin=*/false, idx);
@@ -390,10 +371,117 @@ void GuiWarpMarkersOps::toggle_end_time() {
     }
 
     undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
-                   'W', OpKind::Other, hint_last);
+                   op_mode, OpKind::Other, hint_last);
     undo.recompute_dirty();
     viewport.invalidate_waveform_area();
     viewport.invalidate_timestamp_area();
+}
+
+// `b` / `e` are single-marker operations. With 2+ selected they silent
+// no-op; with exactly 1, they use last_selected_marker as the target.
+// Re-press toggles off. Otherwise auto-replaces any existing flag and
+// auto-swaps with the opposite flag if the resulting frame ordering
+// would invert the trim region. Equal-frame swap is refused (would
+// collapse trim to zero width). Trim flags live exclusively on warp
+// markers — phase reset markers cannot carry them.
+void GuiWarpMarkersOps::toggle_begin_time() {
+    if (app.selected_markers.size() != 1) return;
+    const int idx = app.last_selected_marker;
+    if (idx < 0) return;
+    const auto& mv = app.warpmarkers.markers();
+    if (idx >= static_cast<int>(mv.size())) return;
+
+    if (mv[idx].is_begin_time) {
+        std::vector<GuiWarpMarker>    warp_pre  = mv;
+        std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
+        const int                 hint_last = app.last_selected_marker;
+        app.warpmarkers.marker_mut(idx)->is_begin_time = false;
+        undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
+                       'W', OpKind::Other, hint_last);
+        undo.recompute_dirty();
+        viewport.invalidate_waveform_area();
+        viewport.invalidate_timestamp_area();
+        return;
+    }
+
+    set_begin_time_on(idx, 'W');
+}
+
+void GuiWarpMarkersOps::toggle_end_time() {
+    if (app.selected_markers.size() != 1) return;
+    const int idx = app.last_selected_marker;
+    if (idx < 0) return;
+    const auto& mv = app.warpmarkers.markers();
+    if (idx >= static_cast<int>(mv.size())) return;
+
+    if (mv[idx].is_end_time) {
+        std::vector<GuiWarpMarker>    warp_pre  = mv;
+        std::vector<GuiPhaseResetMarker> trans_pre = app.phase_reset_markers.markers();
+        const int                 hint_last = app.last_selected_marker;
+        app.warpmarkers.marker_mut(idx)->is_end_time = false;
+        undo.push_undo_both(std::move(warp_pre), std::move(trans_pre),
+                       'W', OpKind::Other, hint_last);
+        undo.recompute_dirty();
+        viewport.invalidate_waveform_area();
+        viewport.invalidate_timestamp_area();
+        return;
+    }
+
+    set_end_time_on(idx, 'W');
+}
+
+// P-mode `b` / `e`: with exactly one phase reset selected, set the
+// warp-side trim begin / end flag on the nearest warp marker at or
+// before / at or after the selected phase reset's time. The phase
+// reset selection is left untouched, the playhead does not move, and
+// no scrolling occurs — a one-keystroke "ensure trim contains this
+// phase reset" gesture. Re-press is idempotent (the underlying helper
+// short-circuits if the resolved warp marker already carries the
+// flag), so this code path never toggles off.
+void GuiWarpMarkersOps::set_begin_from_phase_reset_selection() {
+    if (app.active_mode != 'P') return;
+    if (app.selected_markers.size() != 1) return;
+    const int pr_idx = app.last_selected_marker;
+    if (pr_idx < 0) return;
+    const auto& pr_mv = app.phase_reset_markers.markers();
+    if (pr_idx >= static_cast<int>(pr_mv.size())) return;
+    const double t_pr = pr_mv[pr_idx].time_seconds;
+
+    const auto& mv = app.warpmarkers.markers();
+    int    target_idx = -1;
+    double best_t     = -std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < mv.size(); ++i) {
+        const double t = mv[i].time_seconds;
+        if (t <= t_pr && t > best_t) {
+            best_t     = t;
+            target_idx = static_cast<int>(i);
+        }
+    }
+    if (target_idx < 0) return;
+    set_begin_time_on(target_idx, 'P');
+}
+
+void GuiWarpMarkersOps::set_end_from_phase_reset_selection() {
+    if (app.active_mode != 'P') return;
+    if (app.selected_markers.size() != 1) return;
+    const int pr_idx = app.last_selected_marker;
+    if (pr_idx < 0) return;
+    const auto& pr_mv = app.phase_reset_markers.markers();
+    if (pr_idx >= static_cast<int>(pr_mv.size())) return;
+    const double t_pr = pr_mv[pr_idx].time_seconds;
+
+    const auto& mv = app.warpmarkers.markers();
+    int    target_idx = -1;
+    double best_t     = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < mv.size(); ++i) {
+        const double t = mv[i].time_seconds;
+        if (t >= t_pr && t < best_t) {
+            best_t     = t;
+            target_idx = static_cast<int>(i);
+        }
+    }
+    if (target_idx < 0) return;
+    set_end_time_on(target_idx, 'P');
 }
 
 // Nudge every selected marker by `delta`. Label refs are silently

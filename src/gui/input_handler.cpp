@@ -1388,12 +1388,21 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
                         viewport.move_playhead_to(viewport.trim_begin_sample()); break;
         case XK_End:    stop_playback_if_playing();
                         viewport.move_playhead_to(viewport.trim_end_sample() - 1); break;
-        // b / e are warp-only: trim is a warp concern, so these keys are
-        // silent no-ops in phase reset mode.
-        case XK_b:      if (app.active_mode != 'P') warpops.toggle_begin_time();
-                        break;
-        case XK_e:      if (app.active_mode != 'P') warpops.toggle_end_time();
-                        break;
+        // b / e set the warp trim begin / end flags. In W-mode they target
+        // the selected warp marker (toggle-off on re-press, auto-replace,
+        // auto-swap on cross, refuse equal-frame). In P-mode they target
+        // the nearest warp marker at or before / at or after the selected
+        // phase reset's time, leaving the phase reset selection untouched —
+        // a one-keystroke "ensure trim contains this phase reset" gesture.
+        // Both modes require exactly one selection.
+        case XK_b:
+            if (app.active_mode == 'P') warpops.set_begin_from_phase_reset_selection();
+            else                        warpops.toggle_begin_time();
+            break;
+        case XK_e:
+            if (app.active_mode == 'P') warpops.set_end_from_phase_reset_selection();
+            else                        warpops.toggle_end_time();
+            break;
         // TODO: growing binding set will want an in-GUI help overlay.
         default: break;
         }
