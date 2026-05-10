@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gui_input.h"
+
 #include <algorithm>
 #include <chrono>
 #include <functional>
@@ -114,7 +116,8 @@ void enter(State& s, int target,
 // Pure printable characters and motion keys are handled internally and
 // reported as plain `consumed`.
 //
-// Keysyms are X11 KeySym values; mods uses Xlib's modifier mask layout.
+// Keys are platform-neutral GuiKey values; mods is the GuiInputState
+// populated by the platform boundary (see gui_input.h).
 enum class KeyAction {
     NotConsumed,
     Consumed,
@@ -122,7 +125,7 @@ enum class KeyAction {
     CancelRequested,
 };
 
-KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods);
+KeyAction handle_key(State& s, GuiKey key, GuiInputState mods);
 
 // Render-side helper: returns true if the cursor should be drawn this
 // frame. Period is 1000ms (~500ms on, ~500ms off) and resets at every

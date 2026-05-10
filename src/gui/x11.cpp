@@ -84,6 +84,30 @@ cairo_status_t png_mem_read(void* closure, unsigned char* out, unsigned int n) {
     return CAIRO_STATUS_SUCCESS;
 }
 
+// Translate a raw X11 KeySym to the platform-neutral GuiKey numbering.
+// X11 and xkbcommon assign the same numeric value to the same key, so the
+// translation is a near-zero-cost cast plus an ASCII-letter case fold (the
+// rest of the GUI assumes lowercase letter constants in GuiKeys).
+GuiKey translate_keysym(KeySym ks) {
+    if (ks >= XK_A && ks <= XK_Z) {
+        return static_cast<GuiKey>(ks - XK_A + XK_a);
+    }
+    return static_cast<GuiKey>(ks);
+}
+
+// Translate an X11 modifier mask into a GuiInputState. primary_button_held
+// is only populated for motion events: the bit's meaning ("you're in a
+// drag") stays crisp instead of leaking into key/button events where Button1
+// would fire on stray keystrokes during a held button.
+GuiInputState translate_state(unsigned int x11_mods, bool motion) {
+    GuiInputState s;
+    s.ctrl  = (x11_mods & ControlMask) != 0;
+    s.shift = (x11_mods & ShiftMask)   != 0;
+    s.alt   = (x11_mods & Mod1Mask)    != 0;
+    s.primary_button_held = motion && ((x11_mods & Button1Mask) != 0);
+    return s;
+}
+
 } // namespace
 
 bool GuiX11::init(int width, int height, const char* title) {
@@ -589,15 +613,19 @@ void GuiX11::dispatch_event(XEvent& ev) {
         break;
     }
     case KeyPress: {
-        KeySym keysym = XLookupKeysym(&ev.xkey, 0);
-        if (on_key_) on_key_(keysym, ev.xkey.state);
+        const KeySym ks = XLookupKeysym(&ev.xkey, 0);
+        if (on_key_) {
+            on_key_(translate_keysym(ks),
+                    translate_state(ev.xkey.state, /*motion=*/false));
+        }
         break;
     }
     case ButtonPress: {
         if (on_button_press_) {
             on_button_press_(ev.xbutton.button,
                              ev.xbutton.x, ev.xbutton.y,
-                             ev.xbutton.state);
+                             translate_state(ev.xbutton.state,
+                                             /*motion=*/false));
         }
         break;
     }
@@ -605,13 +633,15 @@ void GuiX11::dispatch_event(XEvent& ev) {
         if (on_button_release_) {
             on_button_release_(ev.xbutton.button,
                                ev.xbutton.x, ev.xbutton.y,
-                               ev.xbutton.state);
+                               translate_state(ev.xbutton.state,
+                                               /*motion=*/false));
         }
         break;
     }
     case MotionNotify: {
         if (on_motion_) {
-            on_motion_(ev.xmotion.x, ev.xmotion.y, ev.xmotion.state);
+            on_motion_(ev.xmotion.x, ev.xmotion.y,
+                       translate_state(ev.xmotion.state, /*motion=*/true));
         }
         break;
     }

@@ -1,8 +1,5 @@
 #include "text_editor.h"
 
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-
 #include <algorithm>
 
 namespace text_editor {
@@ -10,60 +7,61 @@ namespace text_editor {
 namespace {
 
 // Vocabulary closed set, no whitespace, no pipe (pipe is in the locked
-// prefix). Letters lowercase only — uppercase swallowed. Map an X11
-// keysym (paired with mods) to the literal char to insert; returns 0
+// prefix). Letters lowercase only — uppercase swallowed (the platform
+// boundary already case-folds, so only the lowercase form arrives). Map
+// a GuiKey (paired with mods) to the literal char to insert; returns 0
 // for "not a printable in this vocabulary". `kind` selects between the
 // flag-payload, iteration-bracket, and BPM-bracket alphabets.
-char keysym_to_char(unsigned long keysym, unsigned int mods, Kind kind) {
-    const bool shift = (mods & ShiftMask) != 0;
+char keysym_to_char(GuiKey key, GuiInputState mods, Kind kind) {
+    const bool shift = mods.shift;
 
     // Digits are common to all kinds.
-    if (keysym >= XK_0 && keysym <= XK_9 && !shift) {
+    if (key >= GuiKeys::Digit0 && key <= GuiKeys::Digit9 && !shift) {
         // Brief X.2: Shift+2 → '@' for BpmBracket only; the digit branch
         // already filters out shift, so the BpmBracket-specific block
         // below is what handles the shifted form.
-        return static_cast<char>('0' + (keysym - XK_0));
+        return static_cast<char>('0' + (key - GuiKeys::Digit0));
     }
     // Decimal point is accepted by FlagPayload and IterationBracket but
     // NOT BpmBracket (strict integer-only).
-    if (keysym == XK_period && !shift && kind != Kind::BpmBracket) return '.';
+    if (key == GuiKeys::Period && !shift && kind != Kind::BpmBracket) return '.';
 
     if (kind == Kind::IterationBracket) {
         // Brackets, comma, signed-number prefixes. No letters, no `*`,
         // no `:` — those would be syntactically invalid in the
         // iteration popup payload.
-        if (keysym == XK_bracketleft  && !shift) return '[';
-        if (keysym == XK_bracketright && !shift) return ']';
-        if (keysym == XK_comma        && !shift) return ',';
-        if (keysym == XK_minus        && !shift) return '-';
-        if (keysym == XK_plus)                   return '+';
+        if (key == GuiKeys::BracketLeft  && !shift) return '[';
+        if (key == GuiKeys::BracketRight && !shift) return ']';
+        if (key == GuiKeys::Comma        && !shift) return ',';
+        if (key == GuiKeys::Minus        && !shift) return '-';
+        if (key == GuiKeys::Plus)                   return '+';
         // US layout: Shift+= produces +.
-        if (keysym == XK_equal && shift)         return '+';
+        if (key == GuiKeys::Equal && shift)         return '+';
         return 0;
     }
 
     if (kind == Kind::BpmBracket) {
         // Brief X.2: digits, `@`, `,`, `[`, `]`. No letters, no signs,
         // no decimals.
-        if (keysym == XK_bracketleft  && !shift) return '[';
-        if (keysym == XK_bracketright && !shift) return ']';
-        if (keysym == XK_comma        && !shift) return ',';
-        if (keysym == XK_at)                     return '@';
+        if (key == GuiKeys::BracketLeft  && !shift) return '[';
+        if (key == GuiKeys::BracketRight && !shift) return ']';
+        if (key == GuiKeys::Comma        && !shift) return ',';
+        if (key == GuiKeys::At)                     return '@';
         // US layout: Shift+2 produces @.
-        if (keysym == XK_2 && shift)             return '@';
+        if (key == GuiKeys::Digit2 && shift)        return '@';
         return 0;
     }
 
     // FlagPayload kind.
-    if (keysym >= XK_a && keysym <= XK_z && !shift) {
-        return static_cast<char>('a' + (keysym - XK_a));
+    if (key >= GuiKeys::A && key <= GuiKeys::Z && !shift) {
+        return static_cast<char>('a' + (key - GuiKeys::A));
     }
-    if (keysym == XK_asterisk)            return '*';
-    if (keysym == XK_colon)               return ':';
+    if (key == GuiKeys::Asterisk)            return '*';
+    if (key == GuiKeys::Colon)               return ':';
     // US layout: Shift+; gives :. Treat as colon.
-    if (keysym == XK_semicolon && shift)  return ':';
+    if (key == GuiKeys::Semicolon && shift)  return ':';
     // Shift+8 also produces asterisk on US layouts. Let it through.
-    if (keysym == XK_8 && shift)          return '*';
+    if (key == GuiKeys::Digit8 && shift)     return '*';
     return 0;
 }
 
@@ -109,22 +107,22 @@ void enter(State& s, int target,
     touch_blink(s);
 }
 
-KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
+KeyAction handle_key(State& s, GuiKey key, GuiInputState mods) {
     if (!is_active(s)) return KeyAction::NotConsumed;
 
-    const bool ctrl  = (mods & ControlMask) != 0;
-    const bool shift = (mods & ShiftMask) != 0;
+    const bool ctrl  = mods.ctrl;
+    const bool shift = mods.shift;
 
-    if (keysym == XK_Escape) {
+    if (key == GuiKeys::Escape) {
         return KeyAction::CancelRequested;
     }
-    if (keysym == XK_Return || keysym == XK_KP_Enter) {
+    if (key == GuiKeys::Return || key == GuiKeys::KpEnter) {
         return KeyAction::CommitRequested;
     }
 
     // Ctrl+A: select-all. Sits above the printable-detect path so the
-    // `a` keysym doesn't fall through and insert a literal 'a'.
-    if (ctrl && (keysym == XK_a || keysym == XK_A)) {
+    // `a` key doesn't fall through and insert a literal 'a'.
+    if (ctrl && key == GuiKeys::A) {
         if (!s.pending.empty()) {
             s.selection_anchor = 0;
             s.cursor_pos = static_cast<int>(s.pending.size());
@@ -135,7 +133,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
 
     // Cursor motion. Shift extends a selection from an anchor; bare
     // motion collapses any existing selection to the corresponding edge.
-    if (keysym == XK_Left) {
+    if (key == GuiKeys::Left) {
         if (shift) {
             if (s.selection_anchor < 0) s.selection_anchor = s.cursor_pos;
             if (s.cursor_pos > 0) s.cursor_pos--;
@@ -150,7 +148,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
         touch_blink(s);
         return KeyAction::Consumed;
     }
-    if (keysym == XK_Right) {
+    if (key == GuiKeys::Right) {
         if (shift) {
             if (s.selection_anchor < 0) s.selection_anchor = s.cursor_pos;
             if (s.cursor_pos < static_cast<int>(s.pending.size())) {
@@ -168,7 +166,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
         touch_blink(s);
         return KeyAction::Consumed;
     }
-    if (keysym == XK_Home) {
+    if (key == GuiKeys::Home) {
         if (shift) {
             if (s.selection_anchor < 0) s.selection_anchor = s.cursor_pos;
         } else {
@@ -178,7 +176,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
         touch_blink(s);
         return KeyAction::Consumed;
     }
-    if (keysym == XK_End) {
+    if (key == GuiKeys::End) {
         if (shift) {
             if (s.selection_anchor < 0) s.selection_anchor = s.cursor_pos;
         } else {
@@ -190,7 +188,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
     }
 
     // Editing.
-    if (keysym == XK_BackSpace) {
+    if (key == GuiKeys::BackSpace) {
         if (has_selection(s)) {
             erase_selection(s);
             s.red = false;
@@ -202,7 +200,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
         touch_blink(s);
         return KeyAction::Consumed;
     }
-    if (keysym == XK_Delete) {
+    if (key == GuiKeys::Delete) {
         if (has_selection(s)) {
             erase_selection(s);
             s.red = false;
@@ -217,7 +215,7 @@ KeyAction handle_key(State& s, unsigned long keysym, unsigned int mods) {
     // Printable insertion (length-capped). BpmBracket gets a tighter cap
     // than the default (brief X.2): the strict format `<beats>@[<lo>,<hi>]`
     // tops out at 12 chars, so 13 leaves one char of typo slack.
-    const char ch = keysym_to_char(keysym, mods, s.kind);
+    const char ch = keysym_to_char(key, mods, s.kind);
     if (ch != 0) {
         const int cap = (s.kind == Kind::BpmBracket)
             ? kMaxPendingCharsBpm : kMaxPendingChars;

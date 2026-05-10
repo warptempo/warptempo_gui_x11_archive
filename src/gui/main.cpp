@@ -20,8 +20,6 @@
 #include "x11.h"
 
 #include <cairo/cairo.h>
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
 #include <sndfile.h>
 
 #include <algorithm>
@@ -873,9 +871,9 @@ int main(int argc, char** argv) {
         app.prompt.active          = true;
         app.prompt.text            = "Save unsaved changes?";
         // Sentinel chars for non-letter keys: 0x7F = Delete, 0x1B = Escape.
-        // The keysym → char mapping in input_handler.cpp's prompt dispatch
-        // produces these for XK_Delete / XK_Escape; the prompt machinery
-        // remains a vector<char> match.
+        // The GuiKey → char mapping in input_handler.cpp's prompt dispatch
+        // produces these for GuiKeys::Delete / GuiKeys::Escape; the prompt
+        // machinery remains a vector<char> match.
         app.prompt.response_keys   = {'s', '\x7f', '\x1b'};
         app.prompt.response_labels = {"[S]ave", "[Delete]", "[Esc]"};
         app.prompt.trigger         = t;
@@ -1050,8 +1048,8 @@ int main(int argc, char** argv) {
     // RenderBatchResult) had no callers outside the on_key body. It moved
     // to GuiInputHandler as a private helper method (see input_handler.h).
 
-    gui.set_on_key([&](KeySym keysym, unsigned int mods) {
-        input_handler.on_key(keysym, mods);
+    gui.set_on_key([&](GuiKey key, GuiInputState mods) {
+        input_handler.on_key(key, mods);
     });
 
     gui.set_on_close([&]() {
@@ -1061,16 +1059,16 @@ int main(int argc, char** argv) {
     });
 
     gui.set_on_button_press([&](unsigned int button, int x, int y,
-                                unsigned int mods) {
+                                GuiInputState mods) {
         input_handler.on_button_press(button, x, y, mods);
     });
 
     gui.set_on_button_release([&](unsigned int button, int x, int y,
-                                  unsigned int mods) {
+                                  GuiInputState mods) {
         input_handler.on_button_release(button, x, y, mods);
     });
 
-    gui.set_on_motion([&](int mouse_x, int mouse_y, unsigned int mods) {
+    gui.set_on_motion([&](int mouse_x, int mouse_y, GuiInputState mods) {
         input_handler.on_motion(mouse_x, mouse_y, mods);
     });
 

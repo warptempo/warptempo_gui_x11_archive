@@ -13,10 +13,8 @@
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers_ops.h"
+#include "gui_input.h"
 #include "x11.h"
-
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
 
 #include <cmath>
 #include <functional>
@@ -170,11 +168,11 @@ struct GuiInputHandler {
           toggle_playback(toggle_playback_),
           set_playback_speed(set_playback_speed_) {}
 
-    void on_key(KeySym keysym, unsigned int mods);
-    void on_button_press(unsigned int button, int x, int y, unsigned int mods);
+    void on_key(GuiKey key, GuiInputState mods);
+    void on_button_press(unsigned int button, int x, int y, GuiInputState mods);
     void on_button_release(unsigned int button, int x, int y,
-                           unsigned int mods);
-    void on_motion(int mouse_x, int mouse_y, unsigned int mods);
+                           GuiInputState mods);
+    void on_motion(int mouse_x, int mouse_y, GuiInputState mods);
 
 private:
     struct RenderBatchResult {

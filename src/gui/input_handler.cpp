@@ -5,9 +5,6 @@
 #include "text_editor.h"
 #include "warpmarkers.h"
 
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -104,13 +101,13 @@ GuiInputHandler::run_render_batch(const std::vector<RenderRequest>& reqs,
     return result;
 }
 
-void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
+void GuiInputHandler::on_key(GuiKey key, GuiInputState mods) {
     if constexpr (kDebugPerf) {
         app.last_input_event_time = std::chrono::steady_clock::now();
     }
-    const bool ctrl  = (mods & ControlMask) != 0;
-    const bool shift = (mods & ShiftMask)   != 0;
-    const bool alt   = (mods & Mod1Mask)    != 0;
+    const bool ctrl  = mods.ctrl;
+    const bool shift = mods.shift;
+    const bool alt   = mods.alt;
 
     // Bottom-strip prompt owns input while active. Only the prompt's
     // own response keys do anything; everything else is swallowed so
@@ -120,13 +117,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // in the same vector<char> match as letter responses.
     if (app.prompt.active) {
         char k = 0;
-        if (keysym >= XK_a && keysym <= XK_z) {
-            k = static_cast<char>('a' + (keysym - XK_a));
-        } else if (keysym >= XK_A && keysym <= XK_Z) {
-            k = static_cast<char>('a' + (keysym - XK_A));
-        } else if (keysym == XK_Delete) {
+        if (key >= GuiKeys::A && key <= GuiKeys::Z) {
+            k = static_cast<char>('a' + (key - GuiKeys::A));
+        } else if (key == GuiKeys::Delete) {
             k = '\x7f';
-        } else if (keysym == XK_Escape) {
+        } else if (key == GuiKeys::Escape) {
             k = '\x1b';
         }
         if (k != 0) {
@@ -144,7 +139,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // everything else no-ops. Dialog can't fire here because dirty is
     // always false in blank state (history is reset on revert).
     if (app.loading || audio.total_frames() <= 0) {
-        if (ctrl && !shift && !alt && keysym == XK_q) {
+        if (ctrl && !shift && !alt && key == GuiKeys::Q) {
             request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
         }
         return;
@@ -156,7 +151,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     if (text_editor::is_active(app.top_flag_editor)) {
         (void)ctrl; (void)alt; // Modifiers swallowed except Shift→colon.
         const auto action = text_editor::handle_key(
-            app.top_flag_editor, keysym, mods);
+            app.top_flag_editor, key, mods);
         if (action == text_editor::KeyAction::CommitRequested) {
             if (app.top_flag_editor.kind ==
                     text_editor::Kind::IterationBracket) {
@@ -202,35 +197,35 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     //   - f (no mods)          → follow mode toggle
     if (app.render_view_enabled) {
         const bool is_r =
-            (keysym == XK_r && !ctrl && !shift && !alt);
+            (key == GuiKeys::R && !ctrl && !shift && !alt);
         const bool is_nav =
-            ((keysym == XK_Left || keysym == XK_Right) &&
+            ((key == GuiKeys::Left || key == GuiKeys::Right) &&
              shift && !ctrl && !alt);
         const bool is_commit =
             (ctrl && alt && !shift &&
-             (keysym == XK_c || keysym == XK_C));
-        const bool is_playback = (keysym == XK_space);
+             key == GuiKeys::C);
+        const bool is_playback = (key == GuiKeys::Space);
         const bool is_scrub =
-            ((keysym == XK_Left || keysym == XK_Right) &&
+            ((key == GuiKeys::Left || key == GuiKeys::Right) &&
              !ctrl && !shift && !alt);
         const bool is_jump =
-            ((keysym == XK_Home || keysym == XK_End) &&
+            ((key == GuiKeys::Home || key == GuiKeys::End) &&
              !ctrl && !shift && !alt);
-        const bool is_esc = (keysym == XK_Escape);
+        const bool is_esc = (key == GuiKeys::Escape);
         const bool is_sub_view_toggle =
-            (keysym == XK_p && !ctrl && !shift && !alt);
+            (key == GuiKeys::P && !ctrl && !shift && !alt);
         const bool is_ctrl_q =
-            (ctrl && !shift && !alt && keysym == XK_q);
+            (ctrl && !shift && !alt && key == GuiKeys::Q);
         const bool is_ctrl_w =
-            (ctrl && !shift && !alt && keysym == XK_w);
+            (ctrl && !shift && !alt && key == GuiKeys::W);
         const bool is_zoom =
-            ((keysym == XK_Up || keysym == XK_Down) &&
+            ((key == GuiKeys::Up || key == GuiKeys::Down) &&
              !ctrl && !shift && !alt);
         const bool is_zoom_symbol =
-            ((keysym == XK_equal || keysym == XK_minus) &&
+            ((key == GuiKeys::Equal || key == GuiKeys::Minus) &&
              !ctrl && !shift && !alt);
         const bool is_follow =
-            (keysym == XK_f && !ctrl && !shift && !alt);
+            (key == GuiKeys::F && !ctrl && !shift && !alt);
         if (!(is_r || is_nav || is_commit || is_playback ||
               is_scrub || is_jump || is_esc ||
               is_sub_view_toggle || is_ctrl_q || is_ctrl_w ||
@@ -245,7 +240,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // Mid-engine Esc presses are queued by X and surface here on the
     // next gui.drain_events() — they take effect after the in-flight
     // entry completes (chunk U does not implement mid-engine cancel).
-    if (keysym == XK_Escape && app.queue_running) {
+    if (key == GuiKeys::Escape && app.queue_running) {
         app.queue_cancel_requested = true;
         return;
     }
@@ -253,19 +248,19 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // Escape during a playhead drag ends the gesture at its current
     // position (no restore — the drag already committed its visible
     // progress per motion event, so there's nothing to revert).
-    if (keysym == XK_Escape && app.playhead_drag.active) {
+    if (key == GuiKeys::Escape && app.playhead_drag.active) {
         app.playhead_drag = PlayheadDragState{};
         return;
     }
 
     // Ctrl+Q: quit (via unsaved-work dialog when dirty).
-    if (ctrl && !shift && !alt && keysym == XK_q) {
+    if (ctrl && !shift && !alt && key == GuiKeys::Q) {
         request_close_or_revert(DialogTrigger::CLOSE_WINDOW);
         return;
     }
 
     // Ctrl+W: revert to blank state (via unsaved-work dialog when dirty).
-    if (ctrl && !shift && !alt && keysym == XK_w) {
+    if (ctrl && !shift && !alt && key == GuiKeys::W) {
         request_close_or_revert(DialogTrigger::REVERT_TO_BLANK);
         return;
     }
@@ -276,7 +271,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // the live settings_passthrough at execution time, mirroring the
     // chunk-U convention. (Chunk W: snapshots moved from disk to memory.)
     if (ctrl && !alt && !shift &&
-        (keysym == XK_e || keysym == XK_E)) {
+        key == GuiKeys::E) {
         if (app.source_audio_path.empty()) return;
         AppState::QueuedRender q;
         q.source_audio_path = app.source_audio_path;
@@ -297,7 +292,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // does not write any sidecars beyond the .peaks pyramid that
     // do_render already deposits.
     if (ctrl && alt && !shift &&
-        (keysym == XK_r || keysym == XK_R)) {
+        key == GuiKeys::R) {
         if (app.source_audio_path.empty()) return;
 
         RenderRequest req;
@@ -337,7 +332,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // The in-memory queue is cleared after execution whether all
     // entries ran or Esc cut it short.
     if (ctrl && alt && !shift &&
-        (keysym == XK_e || keysym == XK_E)) {
+        key == GuiKeys::E) {
         if (app.source_audio_path.empty()) return;
         if (app.queued_renders.empty()) return;
 
@@ -446,7 +441,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // the product. Per-cell progress and Esc cancellation are handled
     // by run_render_batch. Silent no-op outside iteration mode.
     if (ctrl && alt && !shift &&
-        (keysym == XK_i || keysym == XK_I)) {
+        key == GuiKeys::I) {
         if (app.source_audio_path.empty()) return;
         if (!app.iteration_mode_enabled) return;
 
@@ -652,7 +647,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // addition to per-cell marker mutation. Silent no-op outside
     // BPM mode / warp / loaded audio / committed popup.
     if (ctrl && alt && !shift &&
-        (keysym == XK_m || keysym == XK_M)) {
+        key == GuiKeys::M) {
         if (app.active_mode != 'W') return;
         if (!app.bpm_mode_enabled) return;
         if (app.source_audio_path.empty()) return;
@@ -843,7 +838,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // outputs are stale and shouldn't accumulate. Silent no-op
     // outside render-view.
     if (ctrl && alt && !shift &&
-        (keysym == XK_c || keysym == XK_C)) {
+        key == GuiKeys::C) {
         if (!app.render_view_enabled) return;
         if (app.render_view_index < 0) return;
 
@@ -1010,32 +1005,32 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     }
 
     // Space-bar is modifier-independent.
-    if (keysym == XK_space) { toggle_playback(); return; }
+    if (key == GuiKeys::Space) { toggle_playback(); return; }
 
     // Shift+<digit> selects a playback speed. Shift+0 is 1.00, Shift+1
     // is 0.10, Shift+9 is 0.90. Applies immediately whether or not
     // playback is active — the audio callback picks up the new atomic
     // on the next buffer.
     if (shift && !ctrl) {
-        switch (keysym) {
-        case XK_0: set_playback_speed(1.0f); return;
-        case XK_1: set_playback_speed(0.1f); return;
-        case XK_2: set_playback_speed(0.2f); return;
-        case XK_3: set_playback_speed(0.3f); return;
-        case XK_4: set_playback_speed(0.4f); return;
-        case XK_5: set_playback_speed(0.5f); return;
-        case XK_6: set_playback_speed(0.6f); return;
-        case XK_7: set_playback_speed(0.7f); return;
-        case XK_8: set_playback_speed(0.8f); return;
-        case XK_9: set_playback_speed(0.9f); return;
+        switch (key) {
+        case GuiKeys::Digit0: set_playback_speed(1.0f); return;
+        case GuiKeys::Digit1: set_playback_speed(0.1f); return;
+        case GuiKeys::Digit2: set_playback_speed(0.2f); return;
+        case GuiKeys::Digit3: set_playback_speed(0.3f); return;
+        case GuiKeys::Digit4: set_playback_speed(0.4f); return;
+        case GuiKeys::Digit5: set_playback_speed(0.5f); return;
+        case GuiKeys::Digit6: set_playback_speed(0.6f); return;
+        case GuiKeys::Digit7: set_playback_speed(0.7f); return;
+        case GuiKeys::Digit8: set_playback_speed(0.8f); return;
+        case GuiKeys::Digit9: set_playback_speed(0.9f); return;
         default: break;
         }
     }
 
-    // Ctrl+Z undo / Ctrl+Shift+Z redo. Placed before the XK_s save
+    // Ctrl+Z undo / Ctrl+Shift+Z redo. Placed before the GuiKeys::S save
     // handling so modifier dispatch reads left-to-right in the source.
     // Both are silent no-ops when their respective stack is empty.
-    if (ctrl && keysym == XK_z) {
+    if (ctrl && key == GuiKeys::Z) {
         if (shift) undo.do_redo();
         else       undo.do_undo();
         return;
@@ -1045,7 +1040,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // selection into the session clipboard. W-mode only; phase reset
     // mode is a silent no-op. Off-count selection in W-mode emits a
     // one-line stderr nudge.
-    if (keysym == XK_p && ctrl && !shift && !alt) {
+    if (key == GuiKeys::P && ctrl && !shift && !alt) {
         if (app.active_mode != 'W') return;
         if (app.selected_markers.size() != 2) {
             std::fprintf(stderr,
@@ -1061,7 +1056,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // anchored at the single selected warp marker. W-mode only; phase
     // reset mode is a silent no-op. Empty clipboard is a silent no-op.
     // Opens a confirmation prompt before any mutation.
-    if (keysym == XK_p && ctrl && !shift && alt) {
+    if (key == GuiKeys::P && ctrl && !shift && alt) {
         if (app.active_mode != 'W') return;
         if (app.phase_reset_clipboard.empty()) return;
         if (app.selected_markers.size() != 1) {
@@ -1078,7 +1073,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // J.2: render-view shares the global active_mode flag, so a
     // single handler serves both views. Render-view inherits the
     // engine precondition check from toggle_active_mode.
-    if (keysym == XK_p && !ctrl && !shift && !alt) {
+    if (key == GuiKeys::P && !ctrl && !shift && !alt) {
         tab_mode.toggle_active_mode();
         return;
     }
@@ -1089,7 +1084,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // keystroke while a popup edit is in flight, so this code only
     // runs with no active editor. Toggling repaints the top strip
     // so iteration popups appear or vanish in one frame.
-    if (keysym == XK_i && !ctrl && !shift && !alt) {
+    if (key == GuiKeys::I && !ctrl && !shift && !alt) {
         if (app.active_mode == 'W') {
             // Brief X.2: mutual exclusion. Toggling iter ON forces
             // BPM mode off; toggling iter OFF leaves BPM untouched.
@@ -1106,7 +1101,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // V.B Shift+I: bulk-clear every marker's iter values AND exit
     // iteration mode in one keystroke ("stop authoring this mode").
     // Only fires while iteration mode is on; otherwise silent no-op.
-    if (keysym == XK_i && !ctrl && shift && !alt) {
+    if (key == GuiKeys::I && !ctrl && shift && !alt) {
         if (app.active_mode == 'W' && app.iteration_mode_enabled) {
             flag_editor.bulk_clear_iter_values();
             app.iteration_mode_enabled = false;
@@ -1118,7 +1113,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // Brief X.2 `m` (no modifiers): toggle BPM mode in warp. Silent
     // no-op in phase reset mode. Mutual exclusion with iter mode is
     // handled inside enter_bpm_mode.
-    if (keysym == XK_m && !ctrl && !shift && !alt) {
+    if (key == GuiKeys::M && !ctrl && !shift && !alt) {
         if (app.active_mode == 'W') {
             if (app.bpm_mode_enabled) {
                 flag_editor.exit_bpm_mode();
@@ -1131,7 +1126,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // Brief X.2 Shift+M: bulk-clear every marker's BPM values AND
     // exit BPM mode in one keystroke ("stop authoring this mode").
     // Only fires while BPM mode is on; otherwise silent no-op.
-    if (keysym == XK_m && !ctrl && shift && !alt) {
+    if (key == GuiKeys::M && !ctrl && shift && !alt) {
         if (app.active_mode == 'W' && app.bpm_mode_enabled) {
             flag_editor.bulk_clear_bpm_values();
             flag_editor.exit_bpm_mode();
@@ -1148,7 +1143,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // disabled on entry per the chunk W brief; the prior value is
     // not restored on toggle-off — the user re-enables it
     // explicitly if desired.
-    if (keysym == XK_r && !ctrl && !shift && !alt) {
+    if (key == GuiKeys::R && !ctrl && !shift && !alt) {
         if (app.source_audio_path.empty()) return;
         if (app.loading) return;
         if (!app.render_view_enabled) {
@@ -1240,10 +1235,10 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
 
-    // XLookupKeysym with index 0 returns the unshifted keysym, so a
-    // Shift+letter press arrives as the lowercase XK_* with ShiftMask in
-    // mods — disambiguate via the `shift` bool, not uppercase keysyms.
-    if (keysym == XK_s) {
+    // The platform boundary case-folds letters and delivers the
+    // unshifted GuiKey, so a Shift+letter press arrives as the lowercase
+    // GuiKeys::* with mods.shift set — disambiguate via the `shift` bool.
+    if (key == GuiKeys::S) {
         if (ctrl)                          save_markers();
         else if (app.active_mode == 'P')   phase_resets.drop_phase_reset_at_playhead();
         else if (shift)                    warpops.drop_inherit_marker_at_playhead();
@@ -1251,18 +1246,18 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         return;
     }
     // Shift+P: toggle inherit (warp only).
-    if (keysym == XK_p && !ctrl && !alt && shift) {
+    if (key == GuiKeys::P && !ctrl && !alt && shift) {
         if (app.active_mode == 'P') return;
         warpops.toggle_inherits();
         return;
     }
     // Ctrl+D: toggle disabled (warp + phase reset). Plain `d` and Shift+D are unbound.
-    if (keysym == XK_d && ctrl && !alt && !shift) {
+    if (key == GuiKeys::D && ctrl && !alt && !shift) {
         if (app.active_mode == 'P') phase_resets.toggle_phase_reset_disabled();
         else                        warpops.toggle_disabled();
         return;
     }
-    if (keysym == XK_Delete && !ctrl) {
+    if (key == GuiKeys::Delete && !ctrl) {
         if (app.active_mode == 'P') {
             phase_resets.delete_selected_phase_reset();
             return;
@@ -1275,34 +1270,34 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // Ctrl+Tab toggles A/B navigational tabs. Stops playback, saves
     // current viewport/zoom/playhead to the leaving tab, restores the
     // target tab. Does not mark the document dirty.
-    if (ctrl && !shift && keysym == XK_Tab) {
+    if (ctrl && !shift && key == GuiKeys::Tab) {
         tab_mode.switch_active_tab_to(app.active_tab == 'A' ? 'B' : 'A');
         return;
     }
 
-    if (keysym == XK_Tab && !shift) { selection.select_next_marker(); return; }
-    if (keysym == XK_Tab && shift)  { selection.select_prev_marker(); return; }
-    if (keysym == XK_ISO_Left_Tab)  { selection.select_prev_marker(); return; }
+    if (key == GuiKeys::Tab && !shift) { selection.select_next_marker(); return; }
+    if (key == GuiKeys::Tab && shift)  { selection.select_prev_marker(); return; }
+    if (key == GuiKeys::IsoLeftTab)  { selection.select_prev_marker(); return; }
 
     // Tempo nudge. Ctrl+Up / Ctrl+Down only. Bare `=` / `-` were the
     // previous binding; they now zoom (see below) so the keyboard has
     // a symbol-key alias for the bare Up/Down zoom chord.
-    if (ctrl && !shift && !alt && keysym == XK_Up) {
+    if (ctrl && !shift && !alt && key == GuiKeys::Up) {
         warpops.adjust_tempo(+0.01); return;
     }
-    if (ctrl && !shift && !alt && keysym == XK_Down) {
+    if (ctrl && !shift && !alt && key == GuiKeys::Down) {
         warpops.adjust_tempo(-0.01); return;
     }
-    if (keysym == XK_equal && !shift && !ctrl && !alt) {
+    if (key == GuiKeys::Equal && !shift && !ctrl && !alt) {
         viewport.zoom_in(); return;
     }
-    if (keysym == XK_minus && !shift && !ctrl && !alt) {
+    if (key == GuiKeys::Minus && !shift && !ctrl && !alt) {
         viewport.zoom_out(); return;
     }
 
     // `l` (no modifier) clears any b= / e= flags. `Shift+L` clears the
     // selection set (UI-only — no dirty, no playhead move).
-    if (keysym == XK_l && !ctrl) {
+    if (key == GuiKeys::L && !ctrl) {
         if (shift) selection.clear_selection();
         else       warpops.clear_trim();
         return;
@@ -1310,7 +1305,7 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
 
     // `j` jumps the selected set to the playhead, anchored on
     // last_selected_marker. All-or-nothing clamp check.
-    if (keysym == XK_j && !shift && !ctrl) {
+    if (key == GuiKeys::J && !shift && !ctrl) {
         if (app.active_mode == 'P') phase_resets.jump_phase_reset_selection_to_playhead();
         else                        warpops.jump_selection_to_playhead();
         return;
@@ -1323,11 +1318,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // mirrors the brief: Shift+Right past the end loops to index 0,
     // Shift+Left before index 0 loops to the last entry.
     if (app.render_view_enabled && shift && !ctrl && !alt &&
-        (keysym == XK_Left || keysym == XK_Right)) {
+        (key == GuiKeys::Left || key == GuiKeys::Right)) {
         const int n = static_cast<int>(app.render_view_list.size());
         if (n <= 0) return;
         int next = app.render_view_index;
-        if (keysym == XK_Left)  next = (next - 1 + n) % n;
+        if (key == GuiKeys::Left)  next = (next - 1 + n) % n;
         else                    next = (next + 1) % n;
         // Capture the outgoing render's live zoom/viewport/playhead
         // before swapping.
@@ -1348,12 +1343,12 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     }
 
     // Ctrl+Left / Ctrl+Right: nudge selected markers by one pixel.
-    if (ctrl && !shift && keysym == XK_Left) {
+    if (ctrl && !shift && key == GuiKeys::Left) {
         if (app.active_mode == 'P') phase_resets.nudge_selected_phase_resets(-1);
         else                        warpops.nudge_selected_markers(-1);
         return;
     }
-    if (ctrl && !shift && keysym == XK_Right) {
+    if (ctrl && !shift && key == GuiKeys::Right) {
         if (app.active_mode == 'P') phase_resets.nudge_selected_phase_resets(+1);
         else                        warpops.nudge_selected_markers(+1);
         return;
@@ -1363,17 +1358,17 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
     // returns on match, so by the time we reach here, any modifier being
     // held means the chord had no binding and should be a silent no-op
     // — never fall through into a bare binding (e.g. Ctrl+Shift+Alt+E
-    // must not toggle end-time via XK_e).
+    // must not toggle end-time via GuiKeys::E).
     if (!ctrl && !shift && !alt) {
-        switch (keysym) {
-        case XK_Escape: /* top-level Escape is a no-op (chunk Q) */ break;
-        case XK_Left:   stop_playback_if_playing();
+        switch (key) {
+        case GuiKeys::Escape: /* top-level Escape is a no-op (chunk Q) */ break;
+        case GuiKeys::Left:   stop_playback_if_playing();
                         viewport.move_playhead_pixels(-1);         break;
-        case XK_Right:  stop_playback_if_playing();
+        case GuiKeys::Right:  stop_playback_if_playing();
                         viewport.move_playhead_pixels(+1);         break;
-        case XK_Up:     viewport.zoom_in();                        break;
-        case XK_Down:   viewport.zoom_out();                       break;
-        case XK_f: {
+        case GuiKeys::Up:     viewport.zoom_in();                        break;
+        case GuiKeys::Down:   viewport.zoom_out();                       break;
+        case GuiKeys::F: {
             const bool was_off = !app.follow_mode;
             app.follow_mode = !app.follow_mode;
             if (was_off && app.follow_mode &&
@@ -1382,11 +1377,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
             }
             break;
         }
-        case XK_c:      viewport.apply_zoom_change(0);
+        case GuiKeys::C:      viewport.apply_zoom_change(0);
                         viewport.center_viewport_on_playhead();    break;
-        case XK_Home:   stop_playback_if_playing();
+        case GuiKeys::Home:   stop_playback_if_playing();
                         viewport.move_playhead_to(viewport.trim_begin_sample()); break;
-        case XK_End:    stop_playback_if_playing();
+        case GuiKeys::End:    stop_playback_if_playing();
                         viewport.move_playhead_to(viewport.trim_end_sample() - 1); break;
         // b / e set the warp trim begin / end flags. In W-mode they target
         // the selected warp marker (toggle-off on re-press, auto-replace,
@@ -1395,11 +1390,11 @@ void GuiInputHandler::on_key(KeySym keysym, unsigned int mods) {
         // phase reset's time, leaving the phase reset selection untouched —
         // a one-keystroke "ensure trim contains this phase reset" gesture.
         // Both modes require exactly one selection.
-        case XK_b:
+        case GuiKeys::B:
             if (app.active_mode == 'P') warpops.set_begin_from_phase_reset_selection();
             else                        warpops.toggle_begin_time();
             break;
-        case XK_e:
+        case GuiKeys::E:
             if (app.active_mode == 'P') warpops.set_end_from_phase_reset_selection();
             else                        warpops.toggle_end_time();
             break;
@@ -1445,7 +1440,7 @@ void GuiInputHandler::handle_wheel(unsigned int button,
 // (app, audio, ...) explicit args. The handle_wheel lambda is now a
 // private method on this struct.
 void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
-                                      unsigned int mods) {
+                                      GuiInputState mods) {
     if constexpr (kDebugPerf) {
         app.last_input_event_time = std::chrono::steady_clock::now();
     }
@@ -1462,9 +1457,9 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
     const bool inside_top =
         x >= top.x && x < top.x + top.w &&
         y >= top.y && y < top.y + top.h;
-    const bool ctrl  = (mods & ControlMask) != 0;
-    const bool shift = (mods & ShiftMask)   != 0;
-    const bool alt   = (mods & Mod1Mask) != 0;
+    const bool ctrl  = mods.ctrl;
+    const bool shift = mods.shift;
+    const bool alt   = mods.alt;
 
     // Defensive: a second press during a drag is ignored (left button
     // should still be held down for a drag to exist).
@@ -1851,7 +1846,7 @@ void GuiInputHandler::on_button_press(unsigned int button, int x, int y,
 // original main.cpp:1835; commit_drag and set_single_selection are
 // rewritten to direct method calls on warpops / selection respectively.
 void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
-                                        int /*y*/, unsigned int mods) {
+                                        int /*y*/, GuiInputState mods) {
     if (app.prompt.active) return;
     if (button != 1) return;
     if (app.playhead_drag.active) {
@@ -1860,7 +1855,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
         // sets the snapped marker as the single selection; Shift
         // release adds it to the existing set without removing
         // anything. Off-marker release leaves selection alone.
-        const bool shift = (mods & ShiftMask) != 0;
+        const bool shift = mods.shift;
         const int  sr    = audio.sample_rate();
         int snapped = -1;
         if (sr > 0) {
@@ -1960,7 +1955,7 @@ void GuiInputHandler::on_button_release(unsigned int button, int /*x*/,
 // remaining free function calls (hit_test_marker_line, hit_test_flag,
 // compute_hover_popup_text, waveform_area, current_samples_per_pixel,
 // playhead_pixel_x, text_editor::is_active) keep their original spelling.
-void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
+void GuiInputHandler::on_motion(int mouse_x, int mouse_y, GuiInputState mods) {
     if constexpr (kDebugPerf) {
         app.last_input_event_time = std::chrono::steady_clock::now();
     }
@@ -1981,7 +1976,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     if (app.render_view_enabled) {
         if (app.playhead_drag.active) {
             clear_hover_popup();
-            if ((mods & Button1Mask) == 0) {
+            if (!mods.primary_button_held) {
                 app.playhead_drag = PlayheadDragState{};
                 return;
             }
@@ -2045,7 +2040,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
         clear_hover_popup();
         // Left button must still be held; if not, the release was lost —
         // terminate the drag. Modifier changes mid-drag are ignored.
-        if ((mods & Button1Mask) == 0) {
+        if (!mods.primary_button_held) {
             app.playhead_drag = PlayheadDragState{};
             return;
         }
@@ -2126,7 +2121,7 @@ void GuiInputHandler::on_motion(int mouse_x, int mouse_y, unsigned int mods) {
     // A drag is active — drop any pending popup.
     clear_hover_popup();
     // Left button must still be held down — otherwise release was lost.
-    if ((mods & Button1Mask) == 0) {
+    if (!mods.primary_button_held) {
         warpops.commit_drag();
         return;
     }
