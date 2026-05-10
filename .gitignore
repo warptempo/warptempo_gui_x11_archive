@@ -2,7 +2,7 @@
 *~
 
 # Warptempo Build Artifacts
-build/
+build*/
 
 # Claude Code
 .claude/

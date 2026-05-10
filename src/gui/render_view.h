@@ -4,7 +4,7 @@
 #include "audio.h"
 #include "playback.h"
 #include "selection.h"
-#include "platform_x11.h"
+#include "platform.h"
 
 #include <cstdint>
 #include <filesystem>

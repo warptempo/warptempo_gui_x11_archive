@@ -5,7 +5,7 @@
 #include "playback.h"
 #include "render.h"
 #include "warpmarkers.h"
-#include "platform_x11.h"
+#include "platform.h"
 
 #include <cairo/cairo.h>
 #include <string>

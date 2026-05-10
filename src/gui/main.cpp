@@ -17,7 +17,7 @@
 #include "undo.h"
 #include "viewport.h"
 #include "warpmarkers_ops.h"
-#include "platform_x11.h"
+#include "platform.h"
 
 #include <cairo/cairo.h>
 #include <sndfile.h>
